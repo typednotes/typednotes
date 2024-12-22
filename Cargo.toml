@@ -14,3 +14,15 @@ dioxus = { version = "0.6.0" }
 # workspace
 ui = { path = "ui" }
 server = { path = "server" }
+
+[profile]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"
