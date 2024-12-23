@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "ui",
+    "files",
     "web",
     "desktop",
     "mobile",
@@ -13,6 +14,7 @@ dioxus = { version = "0.6.0" }
 
 # workspace
 ui = { path = "ui" }
+files = { path = "files" }
 server = { path = "server" }
 
 [profile]

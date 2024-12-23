@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use super::files;
+// use files::Files;
 
 const HERO_CSS: Asset = asset!("/assets/styling/hero.css");
 const HEADER_SVG: Asset = asset!("/assets/header.svg");
@@ -9,7 +9,7 @@ pub fn Hero() -> Element {
     rsx! {
         document::Link { rel: "stylesheet", href: HERO_CSS }
 
-        files::Files { name: "ok"}
+        // Files { repo_url: "ok"}
 
         div {
             id: "hero",

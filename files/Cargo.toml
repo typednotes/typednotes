@@ -4,7 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-dioxus = { workspace = true, features = ["router"] }
+dioxus = { workspace = true }
+dioxus-sdk = { version = "0.6", features = [] } # For local storage
+# gix = { version = "0.69", default-features = false, features = [] } # For git access
+
+# https://isomorphic-git.org/ ?
+# gix ?
 
 [features]
 default = []
