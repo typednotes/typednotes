@@ -9,7 +9,7 @@ sqlx = { version = "0.8", features = [
     "macros",
     "migrate",
     "postgres",
-    "tls-rustls",
+    "tls-native-tls",
     "runtime-tokio",
     "bigdecimal",
     "rust_decimal",
@@ -19,8 +19,13 @@ sqlx = { version = "0.8", features = [
     "ipnetwork",
     "mac_address",
     "uuid",
-] }
-
+], optional = true  }
 serde = "1.0.159"
 execute = "0.2.12"
 anyhow = "1.0.71"
+
+[features]
+default = []
+web = ["dioxus/web"]
+desktop = ["dioxus/desktop"]
+server = ["dioxus/server", "dep:sqlx"]
