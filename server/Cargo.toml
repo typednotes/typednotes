@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 dioxus = { workspace = true, features = ["fullstack"] }
+tokio = { version = "1", features = ["full"], optional = true }
 sqlx = { version = "0.8", features = [
     "macros",
     "migrate",
@@ -19,13 +20,13 @@ sqlx = { version = "0.8", features = [
     "ipnetwork",
     "mac_address",
     "uuid",
-], optional = true  }
-serde = "1.0.159"
-execute = "0.2.12"
-anyhow = "1.0.71"
+], optional = true }
+serde = "1"
+execute = "0.2"
+anyhow = "1"
 
 [features]
 default = []
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
-server = ["dioxus/server", "dep:sqlx"]
+server = ["dioxus/server", "dep:tokio", "dep:sqlx"]

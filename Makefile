@@ -1,5 +1,15 @@
 # A simple makefile for running the server and web app
 
+.PHONY: desktop
+desktop: services-up
+	cd desktop &&\
+	dx serve
+
+.PHONY: mobile
+mobile: services-up
+	cd mobile &&\
+	dx serve
+
 .PHONY: web
 web: services-up
 	cd web &&\
@@ -23,3 +33,7 @@ services-restart:
 services-down:
 	cd server/services/compose &&\
 	docker compose down;
+
+.PHONY: update
+update:
+	cargo update
