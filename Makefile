@@ -14,7 +14,7 @@ mobile: services-up
 
 .PHONY: web
 web: services-up
-	source .env;\
+	export $$(grep -v '^#' .env | xargs);\
 	cd web;\
 	dx serve
 
