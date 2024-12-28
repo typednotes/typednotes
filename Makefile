@@ -2,23 +2,26 @@
 
 .PHONY: desktop
 desktop: services-up
-	cd desktop &&\
+	source .env;\
+	cd desktop;\
 	dx serve
 
 .PHONY: mobile
 mobile: services-up
-	cd mobile &&\
+	source .env;\
+	cd mobile;\
 	dx serve
 
 .PHONY: web
 web: services-up
-	cd web &&\
+	source .env;\
+	cd web;\
 	dx serve
 
 .PHONY: services-up
 services-up:
-	cd server/services/compose &&\
-	docker compose up -d;\
+	cd server/services/compose;\
+	docker compose --env-file ../../../.env up -d;\
 	echo "Waiting for PostgreSQL to start...";\
 	until docker exec typednotes_db pg_isready -U user; do\
 		sleep 1;\
@@ -26,12 +29,12 @@ services-up:
 
 .PHONY: services-restart
 services-restart:
-	cd server/services/compose &&\
+	cd server/services/compose;\
 	docker compose restart;
 
 .PHONY: services-down
 services-down:
-	cd server/services/compose &&\
+	cd server/services/compose;\
 	docker compose down;
 
 .PHONY: update
