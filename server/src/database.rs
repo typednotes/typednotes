@@ -1,7 +1,7 @@
+use anyhow::Context as _;
+use sqlx::{Connection, Database, PgPool, Pool};
 use std::env;
 use tokio::{runtime::Runtime, sync::OnceCell};
-use sqlx::{Database, Connection, Pool, PgPool};
-use anyhow::Context as _;
 
 pub static CONNECTION_POOL: OnceCell<PgPool> = OnceCell::const_new();
 
@@ -23,7 +23,10 @@ async fn init_database(pool: &PgPool) -> anyhow::Result<()> {
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL
         );",
-    ).execute(pool).await.context("Failed to create table")?;
+    )
+    .execute(pool)
+    .await
+    .context("Failed to create table")?;
     Ok(())
 }
 
@@ -38,7 +41,7 @@ async fn init_connection_pool() -> anyhow::Result<PgPool> {
 
 /// Get the connection pool
 pub async fn connection_pool() -> anyhow::Result<&'static PgPool> {
-    Ok(CONNECTION_POOL.get_or_try_init(init_connection_pool).await?)
+    Ok(CONNECTION_POOL
+        .get_or_try_init(init_connection_pool)
+        .await?)
 }
-
-
