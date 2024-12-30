@@ -1,7 +1,9 @@
 use dioxus::prelude::*;
 use axum::routing::*;
-use axum_session::{SessionConfig, SessionStore};
-use axum_session_auth::{AuthConfig, SessionSqlitePool};
+use time::Duration;
+use tower_sessions::{Expiry, Session, SessionManagerLayer};
+use tower_sessions_sqlx_store::PostgresStore;
+use super::database::connection_pool;
 
 
 
@@ -9,34 +11,27 @@ pub fn launch(app: fn() -> Element) {
     tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(async move {
-            let pool = connect_to_database().await;
-            //This Defaults as normal Cookies.
-            //To enable Private cookies for integrity, and authenticity please check the next Example.
-            let session_config = SessionConfig::default().with_table_name("test_table");
-            let auth_config = AuthConfig::<i64>::default().with_anonymous_user_id(Some(1));
-            let session_store = SessionStore::<SessionSqlitePool>::new(
-                Some(pool.clone().into()),
-                session_config,
-            )
-            .await
-            .unwrap();
+            // Create the session store
+            let session_store = PostgresStore::new(connection_pool().await?);
+            session_store.migrate().await?;
+            // Remove outdated entries
+            let deletion_task = tokio::task::spawn(
+                session_store
+                    .clone()
+                    .continuously_delete_expired(tokio::time::Duration::from_secs(60)),
+            );
+            // Create a tower layer
+            let session_layer = SessionManagerLayer::new(session_store)
+                .with_secure(false)
+                .with_expiry(Expiry::OnInactivity(Duration::seconds(10)));
 
-            User::create_user_tables(&pool).await;
+            // User::create_user_tables(&pool).await;
 
             // build our application with some routes
             let app = Router::new()
                 // Server side render the application, serve static assets, and register server functions
                 .serve_dioxus_application(ServeConfig::new().unwrap(), app)
-                .layer(
-                    axum_session_auth::AuthSessionLayer::<
-                        crate::auth::User,
-                        i64,
-                        axum_session_auth::SessionSqlitePool,
-                        sqlx::SqlitePool,
-                    >::new(Some(pool))
-                    .with_config(auth_config),
-                )
-                .layer(axum_session::SessionLayer::new(session_store));
+                .layer(session_layer);
 
             // run it
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 3000));

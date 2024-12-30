@@ -7,8 +7,6 @@ edition = "2021"
 dioxus = { workspace = true, features = ["fullstack"] }
 tokio = { version = "1", features = ["full"], optional = true }
 axum = { version = "0.7", optional = true }
-# axum_session_auth = { version = "0.14" }
-# axum_session_sqlx = { version = "0.3", features = [ "postgres", "tls-rustls"] }
 tower_sessions = { version = "0.13", optional = true }
 tower-sessions-sqlx-store = { version = "0.14", features = [ "postgres"], optional = true }
 sqlx = { version = "0.8", features = [
@@ -26,6 +24,7 @@ sqlx = { version = "0.8", features = [
     "mac_address",
     "uuid",
 ], optional = true }
+time = "0.3"
 serde = "1"
 execute = "0.2"
 anyhow = "1"
