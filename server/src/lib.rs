@@ -2,6 +2,10 @@
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
 mod database;
+#[cfg(feature = "server")]
+mod user;
+#[cfg(feature = "server")]
+mod auth;
 
 /// Echo the user input on the server.
 #[server(Echo)]
