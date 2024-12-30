@@ -9,6 +9,9 @@ mod user;
 #[cfg(feature = "server")]
 mod auth;
 
+#[cfg(feature = "server")]
+pub use application::launch;
+
 /// Echo the user input on the server.
 #[server(Echo)]
 pub async fn echo(input: String) -> Result<String, ServerFnError> {
