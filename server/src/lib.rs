@@ -1,6 +1,8 @@
 //! This crate contains all shared fullstack server functions.
 use dioxus::prelude::*;
 #[cfg(feature = "server")]
+mod application;
+#[cfg(feature = "server")]
 mod database;
 #[cfg(feature = "server")]
 mod user;
@@ -22,3 +24,4 @@ pub async fn echo(input: String) -> Result<String, ServerFnError> {
         .await?;
     Ok(format!("Hello world {input}"))
 }
+
