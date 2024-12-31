@@ -1,7 +1,7 @@
 {
     "cSpell.enabled": false,
     "rust-analyzer.cargo.features": [
-        "server"
+        "fullstack", "server"
     ],
     "rust-analyzer.trace.server": "messages",
     "rust-analyzer.cargo.extraEnv": {
