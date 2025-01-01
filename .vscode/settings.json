@@ -1,10 +1,7 @@
 {
     "cSpell.enabled": false,
     "rust-analyzer.cargo.features": [
-        "fullstack", "server"
+        "server", "dioxus/fullstack"
     ],
     "rust-analyzer.trace.server": "messages",
-    "rust-analyzer.cargo.extraEnv": {
-        "RUST_BACKTRACE": "full"
-    },
 }
