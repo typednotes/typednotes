@@ -13,7 +13,7 @@ pub fn launch(app: fn() -> Element) {
         .block_on(async move {
             // Get the address the server should run on. If the CLI is running, the CLI proxies fullstack into the main address
             // and we use the generated address the CLI gives us
-            let address = dioxus_cli_config::fullstack_address_or_localhost();
+            let address = std::net::SocketAddr::from(([127, 0, 0, 1], 8080));
 
             // Set up the axum router
             let router = axum::Router::new()
@@ -27,13 +27,6 @@ pub fn launch(app: fn() -> Element) {
             axum::serve(listener, router).await.unwrap();
         });
 }
-
-// #[allow(unused)]
-// pub fn launch(
-//     app: fn() -> Element
-// ) {
-//     LaunchBuilder::server().launch(app);
-// }
 
 // /// Lanch a server with a session store for authentication
 // pub fn launch(app: fn() -> Element) {
