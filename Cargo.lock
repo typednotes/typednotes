@@ -4709,6 +4709,7 @@ dependencies = [
  "anyhow",
  "axum",
  "dioxus",
+ "dioxus-cli-config",
  "execute",
  "serde",
  "sqlx",

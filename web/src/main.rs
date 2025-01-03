@@ -19,10 +19,11 @@ const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() {
-    #[cfg(feature="web")]
-    dioxus::launch(App);
-    #[cfg(feature="server")]
-    server::launch(App);
+    if cfg!(feature = "server") {
+        server::launch(App);
+    } else {
+        dioxus::launch(App);
+    }
 }
 
 #[component]
