@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 dioxus = { workspace = true, features = ["fullstack"] }
-dioxus-cli-config = "0.6"
+dioxus-cli-config = { vesrion="0.6", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 axum = { version = "0.7", optional = true }
 tower-sessions = { version = "0.13", optional = true }
@@ -34,4 +34,4 @@ anyhow = "1"
 default = []
 web = ["dioxus/web"]
 desktop = ["dioxus/desktop"]
-server = ["dioxus/server", "dep:tokio", "dep:sqlx", "dep:axum", "dep:tower-sessions", "dep:tower-sessions-sqlx-store"]
+server = ["dioxus/server", "dep:dioxus-cli-config", "dep:tokio", "dep:sqlx", "dep:axum", "dep:tower-sessions", "dep:tower-sessions-sqlx-store"]
