@@ -2,13 +2,13 @@
 
 .PHONY: desktop
 desktop: services-up
-	source .env;\
+	export $$(grep -v '^#' .env | xargs);\
 	cd desktop;\
 	dx serve
 
 .PHONY: mobile
 mobile: services-up
-	source .env;\
+	export $$(grep -v '^#' .env | xargs);\
 	cd mobile;\
 	dx serve
 
