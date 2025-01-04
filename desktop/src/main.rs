@@ -18,7 +18,10 @@ enum Route {
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() {
+    #[cfg(not(feature = "server"))]
     dioxus::launch(App);
+    #[cfg(feature = "server")]
+    server::launch(App);
 }
 
 #[component]

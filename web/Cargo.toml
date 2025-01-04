@@ -10,5 +10,5 @@ server = { workspace = true }
 
 [features]
 default = []
-web = ["dioxus/web", "server/web"]
+web = ["dioxus/web"]
 server = ["dioxus/server", "server/server"]

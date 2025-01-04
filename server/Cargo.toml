@@ -32,6 +32,4 @@ anyhow = "1"
 
 [features]
 default = []
-web = ["dioxus/web"]
-desktop = ["dioxus/desktop"]
 server = ["dioxus/server", "dep:dioxus-cli-config", "dep:tokio", "dep:sqlx", "dep:axum", "dep:tower-sessions", "dep:tower-sessions-sqlx-store"]
