@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 dioxus = { workspace = true, features = ["fullstack"] }
-dioxus-cli-config = { vesrion="0.6", optional = true }
+dioxus-cli-config = { version = "0.6", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 axum = { version = "0.7", optional = true }
 tower-sessions = { version = "0.13", optional = true }
