@@ -1,5 +1,7 @@
 # A simple makefile for running the server and web app
 
+## Serve the app
+
 .PHONY: desktop
 desktop: services-up
 	export $$(grep -v '^#' .env | xargs);\
@@ -40,3 +42,23 @@ services-down:
 .PHONY: update
 update:
 	cargo update
+
+## Bundle the app
+
+.PHONY: bundle-desktop
+bundle-desktop: services-up
+	export $$(grep -v '^#' .env | xargs);\
+	cd desktop;\
+	dx bundle
+
+.PHONY: bundle-mobile
+bundle-mobile: services-up
+	export $$(grep -v '^#' .env | xargs);\
+	cd mobile;\
+	dx bundle
+
+.PHONY: bundle-web
+bundle-web: services-up
+	export $$(grep -v '^#' .env | xargs);\
+	cd web;\
+	dx bundle
