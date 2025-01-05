@@ -2,19 +2,9 @@ use anyhow::Context as _;
 use sqlx::{Connection, Database, PgPool, Pool};
 use std::env;
 use tokio::{runtime::Runtime, sync::OnceCell};
+use crate::settings::{self, Settings};
 
 pub static CONNECTION_POOL: OnceCell<PgPool> = OnceCell::const_new();
-
-/// Initialize a connection pool to the database
-fn database_url() -> anyhow::Result<String> {
-    let user = env::var("POSTGRES_USER")?;
-    let password = env::var("POSTGRES_PASSWORD")?;
-    let host = env::var("POSTGRES_HOST")?;
-    let port = env::var("POSTGRES_PORT")?;
-    let database = env::var("POSTGRES_DB")?;
-    let url = format!("postgres://{user}:{password}@{host}:{port}/{database}");
-    Ok(url)
-}
 
 /// Initialize the database with tables if they don't exist
 async fn init_database(pool: &PgPool) -> anyhow::Result<()> {
@@ -32,7 +22,8 @@ async fn init_database(pool: &PgPool) -> anyhow::Result<()> {
 
 /// Initialize a connection pool to the database
 async fn init_connection_pool() -> anyhow::Result<PgPool> {
-    let url = database_url()?;
+    let settings = Settings::new().context("Read config")?;
+    let url = settings.database.url();
     let pool = PgPool::connect(&url).await?;
     // Create the tables if they don't exist
     init_database(&pool).await?;
