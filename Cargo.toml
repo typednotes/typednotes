@@ -11,6 +11,7 @@ members = [
 
 [workspace.dependencies]
 dioxus = { version = "0.6" }
+
 # workspace
 ui = { path = "ui" }
 files = { path = "files" }

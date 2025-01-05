@@ -13,16 +13,13 @@ pub fn launch(app: fn() -> Element) {
     tokio::runtime::Runtime::new()
         .unwrap()
         .block_on(async move {
-            // Get the address the server should run on. If the CLI is running, the CLI proxies fullstack into the main address
-            // and we use the generated address the CLI gives us
+            // Get the address the server should run on.
             let addr = dioxus_cli_config::fullstack_address_or_localhost();
-            println!("Addr = {addr}");
-            // let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 8080));
-            // build our application with some routes
+            // Build our application with some routes
             let router = Router::new()
                 .serve_dioxus_application(ServeConfigBuilder::default(), app)
                 .into_make_service();
-            // run it
+            // Run it
             let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
             axum::serve(listener, router)
                 .await

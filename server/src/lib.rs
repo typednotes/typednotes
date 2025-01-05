@@ -1,5 +1,7 @@
 //! This crate contains all shared fullstack server functions.
 #[cfg(feature = "server")]
+mod settings;
+#[cfg(feature = "server")]
 mod application;
 #[cfg(feature = "server")]
 mod database;
