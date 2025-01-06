@@ -1,4 +1,3 @@
-use std::env;
 use config::{Config, ConfigError, Environment, File, FileFormat};
 use serde::Deserialize;
 
@@ -33,7 +32,6 @@ impl Default for Database {
 #[derive(Debug, Deserialize, Default)]
 #[allow(unused)]
 pub struct Settings {
-    pub other: String,
     pub database: Database,
 }
 
@@ -61,10 +59,9 @@ mod tests {
 
     #[test]
     fn test_settings() {
-        set_var("DATABASE_USER", "modified2");
-        set_var("OTHER", "modified3");
+        set_var("DATABASE_USER", "test_user");
         let settings = Settings::new().unwrap_or_default();
         println!("Settings = {:?}", settings);
-        assert_eq!(settings.database.url(), "postgres://typednotes:password@localhost:5432/typednotes");
+        assert_eq!(settings.database.url(), "postgres://test_user:password@localhost:5432/typednotes");
     }
 }
