@@ -33,6 +33,7 @@ impl Default for Database {
 #[derive(Debug, Deserialize, Default)]
 #[allow(unused)]
 pub struct Settings {
+    pub other: String,
     pub database: Database,
 }
 
@@ -44,7 +45,8 @@ impl Settings {
             .set_default("database.host", "localhost")?
             .set_default("database.port", "5432")?
             .set_default("database.database", "typednotes")?
-            .add_source(File::with_name("config.toml").format(FileFormat::Toml).required(true))
+            .add_source(File::with_name("config.toml").format(FileFormat::Toml).required(false))
+            .add_source(Environment::default().separator("_").ignore_empty(true))
             .build()?;
 
         // You can deserialize (and thus freeze) the entire configuration as
@@ -54,14 +56,15 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
+    use std::env::set_var;
     use super::*;
 
     #[test]
     fn test_settings() {
+        set_var("DATABASE_USER", "modified2");
+        set_var("OTHER", "modified3");
         let settings = Settings::new().unwrap_or_default();
-        
         println!("Settings = {:?}", settings);
-
         assert_eq!(settings.database.url(), "postgres://typednotes:password@localhost:5432/typednotes");
     }
 }
