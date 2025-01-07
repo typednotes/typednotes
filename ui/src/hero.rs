@@ -13,7 +13,8 @@ pub fn Hero() -> Element {
 
         div {
             id: "hero",
-            img { src: HEADER_SVG, id: "header" }
+            // img { src: HEADER_SVG, id: "header" }
+            h1 { "Test" }
             div { id: "links",
                 a { href: "https://dioxuslabs.com/learn/0.6/", "📚 Learn Dioxus" }
                 a { href: "https://dioxuslabs.com/awesome", "🚀 Awesome Dioxus" }

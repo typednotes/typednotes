@@ -24,8 +24,8 @@ pub async fn echo(input: String) -> Result<String, ServerFnError> {
     //     .fetch_all()
     //     .await.unwrap();
     // let mut conn = <impl sqlx::Executor>;
-    let account = sqlx::query("select (1) as id, 'Herp Derpinson' as name")
+    let account = sqlx::query!("select (1) as id, 'Herp Derpinson' as name")
         .fetch_one(connection_pool)
         .await?;
-    Ok(format!("Hello world {input}"))
+    Ok(format!("Hello {account:?} world {input}"))
 }
