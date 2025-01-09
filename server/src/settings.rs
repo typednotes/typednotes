@@ -31,18 +31,28 @@ impl Default for Database {
 
 #[derive(Debug, Deserialize, Default)]
 #[allow(unused)]
+pub struct Auth {
+    pub redirect_url: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[allow(unused)]
+pub struct GitHub {
+    pub client_id: String,
+    pub client_secret: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[allow(unused)]
 pub struct Settings {
     pub database: Database,
+    pub auth: Auth,
+    pub github: GitHub,
 }
 
 impl Settings {
     pub(crate) fn new() -> Result<Self, ConfigError> {
         let config = Config::builder()
-            .set_default("database.user", "typednotes")?
-            .set_default("database.password", "password")?
-            .set_default("database.host", "localhost")?
-            .set_default("database.port", "5432")?
-            .set_default("database.database", "typednotes")?
             .add_source(File::with_name("config.toml").format(FileFormat::Toml).required(false))
             .add_source(Environment::default().separator("_").ignore_empty(true))
             .build()?;

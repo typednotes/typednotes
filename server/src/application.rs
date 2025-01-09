@@ -1,11 +1,30 @@
-use std::any::Any;
 use dioxus::prelude::*;
 use dioxus_cli_config;
-use axum::Router;
-use time::Duration;
-use tower_sessions::{Expiry, Session, SessionManagerLayer};
-use tower_sessions_sqlx_store::PostgresStore;
-use super::database::connection_pool;
+use axum::{
+    extract::Query,
+    response::Redirect,
+    routing::{get, post},
+    Router,
+};
+use openidconnect::{
+    core::{CoreClient, CoreProviderMetadata},
+    reqwest::async_http_client,
+    IssuerUrl, TokenResponse,
+};
+use serde::Deserialize;
+use std::sync::Arc;
+use tower::ServiceBuilder;
+use tower_sessions::{Session, SessionManagerLayer};
+use tower_sessions_sqlx_store::{sqlx::PgPool, PostgresStore};
+use tokio::sync::Mutex;
+
+
+#[derive(Deserialize)]
+struct AuthCallback {
+    code: String,
+    state: String,
+}
+
 
 /// Lanch a server with a session store for authentication
 /// see https://crates.io/crates/dioxus-fullstack

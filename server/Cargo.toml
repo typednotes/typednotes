@@ -8,6 +8,7 @@ dioxus = { workspace = true, features = ["fullstack"] }
 dioxus-cli-config = { version = "0.6", optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 axum = { version = "0.7", optional = true }
+tower = { version = "0.5", optional = true }
 tower-sessions = { version = "0.14", optional = true }
 tower-sessions-sqlx-store = { version = "0.15", features = [ "postgres"], optional = true }
 sqlx = { version = "0.8", features = [
@@ -30,7 +31,9 @@ serde = { version = "1", features = ["derive"] }
 time = "0.3"
 execute = "0.2"
 anyhow = "1"
+openidconnect = "3.5"
+oauth2 = "4.4.2"
 
 [features]
 default = []
-server = ["dioxus/server", "dep:dioxus-cli-config", "dep:tokio", "dep:sqlx", "dep:axum", "dep:tower-sessions", "dep:tower-sessions-sqlx-store"]
+server = ["dioxus/server", "dep:dioxus-cli-config", "dep:tokio", "dep:sqlx", "dep:axum", "dep:tower", "dep:tower-sessions", "dep:tower-sessions-sqlx-store"]
