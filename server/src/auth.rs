@@ -12,15 +12,14 @@ pub struct SqlPermissionTokens {
 }
 
 /// Initialize the OAuth client
-pub fn oauth_client() -> BasicClient {
-    let settings = Settings::new().unwrap_or_default();
-    let client_id = ClientId::new(settings.github.client_id);
-    let client_secret = ClientSecret::new(settings.github.client_secret);
+pub fn oauth_client(settings: & Settings) -> BasicClient {
+    let client_id = ClientId::new(settings.github.client_id.clone());
+    let client_secret = ClientSecret::new(settings.github.client_secret.clone());
     let auth_url = AuthUrl::new("https://github.com/login/oauth/authorize".to_string())
         .expect("Invalid authorization endpoint URL");
     let token_url = TokenUrl::new("https://github.com/login/oauth/access_token".to_string())
         .expect("Invalid token endpoint URL");
-    let redirect_url = RedirectUrl::new(settings.auth.redirect_url)
+    let redirect_url = RedirectUrl::new(settings.auth.redirect_url.clone())
         .expect("Invalid redirect URL");
 
     BasicClient::new(

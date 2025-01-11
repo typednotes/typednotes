@@ -45,14 +45,15 @@ pub fn launch(app: fn() -> Element) {
             // Get the settings
             let settings = Settings::new().expect("Read config");
             // Get the DB connection
-            let pool = connection_pool(settings).await.expect("Connect to the DB");
+            let pool = connection_pool(&settings).await.expect("Connect to the DB");
             // Initialize OAuth client
-            let oauth_client = Arc::new(oauth_client());
+            let oauth_client = Arc::new(oauth_client(&settings));
             // Create session layer
-            let session_store = tower_sessions_sqlx_store::PostgresStore::new(pool.clone());
+            let session_store = tower_sessions_sqlx_store::PostgresStore::new(pool);
             let session_layer = SessionManagerLayer::new(session_store)
                 .with_secure(false)  // Set to true in production
                 .with_name("session");
+            let pool = connection_pool(&settings).await.expect("Connect to the DB");
             // Create app state
             let state = AppState {
                 pool,
@@ -68,7 +69,7 @@ pub fn launch(app: fn() -> Element) {
                 .into_make_service();
             
             // Run it
-            let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+            let listener = tokio::net::TcpListener::bind(&addr).await.expect("Listener failure");
             axum::serve(listener, router)
                 .await
                 .unwrap();
