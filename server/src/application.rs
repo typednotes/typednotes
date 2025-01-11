@@ -48,21 +48,22 @@ pub fn launch(app: fn() -> Element) {
             let pool = connection_pool(settings).await.expect("Connect to the DB");
             // Initialize OAuth client
             let oauth_client = Arc::new(oauth_client());
+            // Create session layer
+            let session_store = tower_sessions_sqlx_store::PostgresStore::new(pool.clone());
+            let session_layer = SessionManagerLayer::new(session_store)
+                .with_secure(false)  // Set to true in production
+                .with_name("session");
             // Create app state
             let state = AppState {
                 pool,
                 oauth_client,
             };
-            // Create session layer
-            let session_store = tower_sessions_sqlx_store::PostgresStore::new(pool);
-            let session_layer = SessionManagerLayer::new(session_store)
-                .with_secure(false)  // Set to true in production
-                .with_name("session");
             // Get the address the server should run on.
             let addr = dioxus_cli_config::fullstack_address_or_localhost();
             // Build our application with some routes
             let router = Router::new()
-                .with_state(state)
+                // .with_state(state)
+                // .layer(session_layer)
                 .serve_dioxus_application(ServeConfigBuilder::default(), app)
                 .into_make_service();
             
