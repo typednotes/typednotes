@@ -32,7 +32,7 @@ time = "0.3"
 execute = "0.2"
 anyhow = "1"
 openidconnect = "3.5"
-oauth2 = "4.4.2"
+oauth2 = "4.4"
 
 [features]
 default = []

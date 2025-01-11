@@ -22,7 +22,7 @@ impl Default for Database {
         Self {
             user: "typednotes".into(),
             password: "password".into(),
-            host: "localhost".into(),
+            host: "typednotes.org".into(),
             port: "5432".into(),
             database: "typednotes".into(),
         }
@@ -53,8 +53,16 @@ pub struct Settings {
 impl Settings {
     pub(crate) fn new() -> Result<Self, ConfigError> {
         let config = Config::builder()
+            .set_default("database.user", "typednotes")?
+            .set_default("database.password", "password")?
+            .set_default("database.host", "localhost")?
+            .set_default("database.port", "5432")?
+            .set_default("database.database", "typednotes")?
+            .set_default("auth.redirect_url", "typednotes.org/auth/redirect")?
+            .set_default("github.client_id", "1234")?
+            .set_default("github.client_secret", "5678")?
             .add_source(File::with_name("config.toml").format(FileFormat::Toml).required(false))
-            .add_source(Environment::default().separator("_").ignore_empty(true))
+            .add_source(Environment::default().separator("_"))
             .build()?;
 
         // You can deserialize (and thus freeze) the entire configuration as
@@ -69,7 +77,9 @@ mod tests {
 
     #[test]
     fn test_settings() {
-        set_var("DATABASE_USER", "test_user");
+        set_var("DATABASE_USER", "test_user_2");
+        set_var("AUTH_REDIRECT_URL", "test_2");
+        set_var("GITHUB_CLIENT_ID", "test_2");
         let settings = Settings::new().unwrap_or_default();
         println!("Settings = {:?}", settings);
         assert_eq!(settings.database.url(), "postgres://test_user:password@localhost:5432/typednotes");
