@@ -14,7 +14,6 @@ use oauth2::{
     basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, RedirectUrl, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{Pool, Postgres};
 use tower_sessions::{Session, SessionManager, SessionManagerLayer};
 
 use super::{
@@ -50,7 +49,7 @@ pub fn launch(app: fn() -> Element) {
             let oauth_client = Arc::new(oauth_client(&settings)); // TODO this fails
             println!("Oauth client: {oauth_client:?}");
             // Create session layer
-            let session_store = tower_sessions_sqlx_store::PostgresStore::new(pool.clone());
+            let session_store = PostgresStore::new(pool.clone());
             let session_layer = SessionManagerLayer::new(session_store)
                 .with_secure(false)  // Set to true in production
                 .with_name("session");
@@ -63,8 +62,8 @@ pub fn launch(app: fn() -> Element) {
             let addr = dioxus_cli_config::fullstack_address_or_localhost();
             // Build our application with some routes
             let router = Router::new()
-                // .with_state(state)
-                // .layer(session_layer)
+                .with_state(state)
+                .layer(session_layer)
                 .serve_dioxus_application(ServeConfigBuilder::default(), app)
                 .into_make_service();
             
@@ -77,52 +76,8 @@ pub fn launch(app: fn() -> Element) {
         });
 }
 
-// /// Lanch a server with a session store for authentication
-// pub fn launch(app: fn() -> Element) {
-//     tokio::runtime::Runtime::new()
-//         .unwrap()
-//         .block_on(async move {
-//             // Create the session store
-//             let session_store = PostgresStore::new(connection_pool().await.unwrap().clone());
-//             session_store.migrate().await.unwrap();
-//             // Create a tower layer
-//             let session_layer = SessionManagerLayer::new(session_store)
-//                 .with_secure(false)
-//                 .with_expiry(Expiry::OnInactivity(Duration::seconds(10)));
-
-//             // User::create_user_tables(&pool).await;
-
-//             // build our application with some routes
-//             let app = Router::new()
-//                 // Server side render the application, serve static assets, and register server functions
-//                 .serve_dioxus_application(ServeConfig::new().unwrap(), app)
-//                 .layer(session_layer);
-
-//             // run it
-//             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 8080));
-//             let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-
-//             axum::serve(listener, app.into_make_service())
-//                 .await
-//                 .unwrap();
-//         });
-// }
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // #[component]
-    // fn App() -> Element {
-    //     // Build cool things ✌️
-
-    //     rsx! {
-    //         h1 { "test" }
-    //     }
-    // }
-
-    // #[test]
-    // fn test_application() {
-    //     launch(App);
-    // }
 }
