@@ -80,10 +80,6 @@ mod tests {
         set_var("DATABASE_USER", "test_user_2");
         set_var("AUTH_REDIRECT", "redirect_2");
         set_var("GITHUB_ID", "test_3");
-        // Print all environment variables.
-        for (key, value) in std::env::vars() {
-            println!("{key}: {value}");
-        }
         let settings = Settings::new().unwrap_or_default();
         println!("Settings = {:?}", settings);
         assert_eq!(settings.database.url(), "postgres://test_user_2:password@localhost:5432/typednotes");
