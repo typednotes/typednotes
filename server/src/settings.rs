@@ -32,14 +32,14 @@ impl Default for Database {
 #[derive(Debug, Deserialize, Default)]
 #[allow(unused)]
 pub struct Auth {
-    pub redirect_url: String,
+    pub redirect: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
 #[allow(unused)]
 pub struct GitHub {
-    pub client_id: String,
-    pub client_secret: String,
+    pub id: String,
+    pub secret: String,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -58,9 +58,9 @@ impl Settings {
             .set_default("database.host", "localhost")?
             .set_default("database.port", "5432")?
             .set_default("database.database", "typednotes")?
-            .set_default("auth.redirect_url", "typednotes.org/auth/redirect")?
-            .set_default("github.client_id", "1234")?
-            .set_default("github.client_secret", "5678")?
+            .set_default("auth.redirect", "https://typednotes.org/auth/redirect")?
+            .set_default("github.id", "github client_id")?
+            .set_default("github.secret", "github client_secret")?
             .add_source(File::with_name("config.toml").format(FileFormat::Toml).required(false))
             .add_source(Environment::default().separator("_"))
             .build()?;
@@ -78,10 +78,15 @@ mod tests {
     #[test]
     fn test_settings() {
         set_var("DATABASE_USER", "test_user_2");
-        set_var("AUTH_REDIRECT_URL", "test_2");
-        set_var("GITHUB_CLIENT_ID", "test_2");
+        set_var("AUTH_REDIRECT", "redirect_2");
+        set_var("GITHUB_ID", "test_3");
+        // Print all environment variables.
+        for (key, value) in std::env::vars() {
+            println!("{key}: {value}");
+        }
         let settings = Settings::new().unwrap_or_default();
         println!("Settings = {:?}", settings);
         assert_eq!(settings.database.url(), "postgres://test_user_2:password@localhost:5432/typednotes");
+        assert_eq!(settings.auth.redirect, "redirect_2");
     }
 }

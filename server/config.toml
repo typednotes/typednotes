@@ -2,4 +2,4 @@
 host = "localhost"
 
 [auth]
-redirect_url = "localhost:8080/auth/redirect"
+redirect_url = "http://localhost:8080/auth/redirect"
