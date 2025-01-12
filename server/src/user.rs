@@ -1,23 +1,49 @@
+use anyhow::{Context, Result};
 use axum::{
     extract::State,
     response::{IntoResponse, Redirect},
     routing::{get, post},
     Router,
 };
+use axum_session_auth::{AuthSession, AuthSessionLayer, Authentication, AuthConfig, HasPermission};
 use serde::{Deserialize, Serialize};
-use sqlx::{Pool, Postgres};
-use tower_sessions::{Session, SessionManager};
+use sqlx::PgPool;
 use std::env;
 use std::sync::Arc;
+use async_trait::async_trait;
 
 /// User structure to store in database
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
-struct User {
-    id: i32,
+#[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct User {
+    id: i64,
     username: String,
     active: bool,
     email: Option<String>,
     avatar_url: Option<String>,
+}
+
+#[async_trait]
+impl Authentication<User, i64, PgPool> for User {
+    // This is run when the user has logged in and has not yet been Cached in the system.
+    // Once ran it will load and cache the user.
+    async fn load_user(id: i64, pool: Option<&PgPool>) -> Result<User> {
+        let pool = pool.context("No pool")?;
+        let user = sqlx::query_as("SELECT * FROM users WHERE id = %1").bind(id).fetch_one(pool).await?;
+        Ok(user)
+    }
+
+    // This function is used internally to determine if they are logged in or not.
+    fn is_authenticated(&self) -> bool {
+        self.active
+    }
+
+    fn is_active(&self) -> bool {
+        self.active
+    }
+
+    fn is_anonymous(&self) -> bool {
+        !self.active
+    }
 }
 
 // // Initialize router with authentication routes
