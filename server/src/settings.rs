@@ -22,7 +22,7 @@ impl Default for Database {
         Self {
             user: "typednotes".into(),
             password: "password".into(),
-            host: "typednotes.org".into(),
+            host: "localhost".into(),
             port: "5432".into(),
             database: "typednotes".into(),
         }
@@ -82,6 +82,6 @@ mod tests {
         set_var("GITHUB_CLIENT_ID", "test_2");
         let settings = Settings::new().unwrap_or_default();
         println!("Settings = {:?}", settings);
-        assert_eq!(settings.database.url(), "postgres://test_user:password@localhost:5432/typednotes");
+        assert_eq!(settings.database.url(), "postgres://test_user_2:password@localhost:5432/typednotes");
     }
 }

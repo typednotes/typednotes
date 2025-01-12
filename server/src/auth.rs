@@ -29,3 +29,16 @@ pub fn oauth_client(settings: & Settings) -> BasicClient {
         Some(token_url),
     ).set_redirect_uri(redirect_url)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_oauth_client() {
+        let settings = Settings::new().unwrap_or_default();
+        println!("Settings: {settings:?}");
+        let client = oauth_client(&settings);
+        println!("Oauth client: {client:?}");
+    }
+}

@@ -44,21 +44,23 @@ pub fn launch(app: fn() -> Element) {
         .block_on(async move {
             // Get the settings
             let settings = Settings::new().expect("Read config");
+            println!("DEBUG settings: {settings:?}");
             // Get the DB connection
             let pool = connection_pool(&settings).await.expect("Connect to the DB");
             // Initialize OAuth client
-            let oauth_client = Arc::new(oauth_client(&settings));
-            // Create session layer
-            let session_store = tower_sessions_sqlx_store::PostgresStore::new(pool);
-            let session_layer = SessionManagerLayer::new(session_store)
-                .with_secure(false)  // Set to true in production
-                .with_name("session");
-            let pool = connection_pool(&settings).await.expect("Connect to the DB");
-            // Create app state
-            let state = AppState {
-                pool,
-                oauth_client,
-            };
+            let oauth_client = Arc::new(oauth_client(&settings)); // TODO this fails
+            println!("Oauth client: {oauth_client:?}");
+            // // Create session layer
+            // let session_store = tower_sessions_sqlx_store::PostgresStore::new(pool);
+            // let session_layer = SessionManagerLayer::new(session_store)
+            //     .with_secure(false)  // Set to true in production
+            //     .with_name("session");
+            // let pool = connection_pool(&settings).await.expect("Connect to the DB");
+            // // Create app state
+            // let state = AppState {
+            //     pool,
+            //     oauth_client,
+            // };
             // Get the address the server should run on.
             let addr = dioxus_cli_config::fullstack_address_or_localhost();
             // Build our application with some routes
@@ -107,3 +109,22 @@ pub fn launch(app: fn() -> Element) {
 //                 .unwrap();
 //         });
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // #[component]
+    // fn App() -> Element {
+    //     // Build cool things ✌️
+
+    //     rsx! {
+    //         h1 { "test" }
+    //     }
+    // }
+
+    // #[test]
+    // fn test_application() {
+    //     launch(App);
+    // }
+}

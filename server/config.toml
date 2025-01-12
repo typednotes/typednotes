@@ -1,9 +1,5 @@
 [database]
-host = "localhost:8080"
+host = "localhost"
 
 [auth]
 redirect_url = "localhost:8080/auth/redirect"
-
-[github]
-client_id = "1234"
-client_secret = "abcd"
