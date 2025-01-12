@@ -22,8 +22,6 @@ pub async fn echo(input: String) -> Result<String, ServerFnError> {
 
 /// Echo the user input on the server.
 #[server(Test)]
-pub async fn test(input: String) -> Result<String, ServerFnError> {
-    let store: tower_sessions::Session = match extract().await;
-    
-    Ok(format!("Hello world {input}"))
+pub async fn test(input: String) -> Result<String, ServerFnError> {    
+    Ok(format!("Test {input}"))
 }

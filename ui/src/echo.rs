@@ -15,7 +15,7 @@ pub fn Echo() -> Element {
             input {
                 placeholder: "Type here to echo...",
                 oninput:  move |event| async move {
-                    let data = server::echo(event.value()).await.unwrap();
+                    let data = server::test(event.value()).await.unwrap();
                     response.set(data);
                 },
             }
