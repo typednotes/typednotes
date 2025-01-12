@@ -17,8 +17,9 @@ use async_trait::async_trait;
 pub struct User {
     id: i64,
     username: String,
-    active: bool,
-    email: Option<String>,
+    email: String,
+    is_active: bool,
+    full_name: Option<String>,
     avatar_url: Option<String>,
 }
 
@@ -34,15 +35,15 @@ impl Authentication<User, i64, PgPool> for User {
 
     // This function is used internally to determine if they are logged in or not.
     fn is_authenticated(&self) -> bool {
-        self.active
+        self.is_active
     }
 
     fn is_active(&self) -> bool {
-        self.active
+        self.is_active
     }
 
     fn is_anonymous(&self) -> bool {
-        !self.active
+        !self.is_active
     }
 }
 
