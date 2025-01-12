@@ -50,8 +50,7 @@ pub fn launch(app: fn() -> Element) {
             // Get the DB connection
             let pool = connection_pool(&settings).await.expect("Connect to the DB");
             // Initialize OAuth client
-            let oauth_client = Arc::new(oauth_client(&settings)); // TODO this fails
-            println!("Oauth client: {oauth_client:?}");
+            let oauth_client = Arc::new(oauth_client(&settings));
             // Create session layer
             let session_config = SessionConfig::default().with_table_name("sessions");
             let session_store = SessionStore::<SessionPgPool>::new(Some(SessionPgPool::from(pool.clone())), session_config).await.expect("Cannot create a session store");
@@ -59,25 +58,16 @@ pub fn launch(app: fn() -> Element) {
             // Create an auth session layer
             let auth_config = AuthConfig::<i64>::default().with_anonymous_user_id(Some(1));
             let auth_session_layer = AuthSessionLayer::<User, i64, SessionPgPool, PgPool>::new(Some(pool)).with_config(auth_config);
-            // // Create app state //TODO remove ?
-            // let state = AppState {
-            //     pool,
-            //     oauth_client,
-            // };
-            let context_providers = Arc::new(vec![]);
             // Get the address the server should run on.
             let addr = dioxus_cli_config::fullstack_address_or_localhost();
             // Build a config
-            let serve_config = ServeConfigBuilder::new()
-                .context_providers(context_providers)
-                .build().unwrap();
+            let serve_config = ServeConfig::new().unwrap();
             // Build our application with some routes
             let router = Router::new()
                 .layer(session_layer)
                 .layer(auth_session_layer)
                 .serve_dioxus_application(serve_config, app)
                 .into_make_service();
-            
             // Run it
             let listener = tokio::net::TcpListener::bind(&addr).await.expect("Listener failure");
             axum::serve(listener, router)
