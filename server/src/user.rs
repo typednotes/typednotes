@@ -12,10 +12,12 @@ use std::env;
 use std::sync::Arc;
 use async_trait::async_trait;
 
-/// User structure to store in database
-#[derive(Clone, Debug, Serialize, Deserialize, sqlx::FromRow)]
+// https://github.com/DioxusLabs/dioxus/blob/v0.6/examples/fullstack-auth/src/auth.rs
+
+/// User
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
-    id: i64,
+    id: i32,
     username: String,
     email: String,
     is_active: bool,
@@ -23,11 +25,75 @@ pub struct User {
     avatar_url: Option<String>,
 }
 
+// #[async_trait]
+// impl Authentication<User, i64, SqlitePool> for User {
+//     async fn load_user(userid: i64, pool: Option<&SqlitePool>) -> Result<User, anyhow::Error> {
+//         let pool = pool.unwrap();
+
+//         User::get_user(userid, pool)
+//             .await
+//             .ok_or_else(|| anyhow::anyhow!("Could not load user"))
+//     }
+
+//     fn is_authenticated(&self) -> bool {
+//         !self.anonymous
+//     }
+
+//     fn is_active(&self) -> bool {
+//         !self.anonymous
+//     }
+
+//     fn is_anonymous(&self) -> bool {
+//         self.anonymous
+//     }
+// }
+
+// #[async_trait]
+// impl HasPermission<SqlitePool> for User {
+//     async fn has(&self, perm: &str, _pool: &Option<&SqlitePool>) -> bool {
+//         self.permissions.contains(perm)
+//     }
+// }
+
+/// Database backed user
+#[derive(sqlx::FromRow, Clone)]
+pub struct SqlUser {
+    id: i32,
+    username: String,
+    email: String,
+    is_active: bool,
+    full_name: Option<String>,
+    avatar_url: Option<String>,
+}
+
+impl SqlUser {
+    pub fn into_user(self, sql_user_perms: Option<Vec<SqlPermissionTokens>>) -> User {
+        User {
+            id: self.id,
+            anonymous: self.anonymous,
+            username: self.username,
+            permissions: if let Some(user_perms) = sql_user_perms {
+                user_perms
+                    .into_iter()
+                    .map(|x| x.token)
+                    .collect::<HashSet<String>>()
+            } else {
+                HashSet::<String>::new()
+            },
+        }
+    }
+}
+
+#[derive(sqlx::FromRow, Clone)]
+pub struct SqlPermissionTokens {
+    pub token: String,
+}
+
 #[async_trait]
-impl Authentication<User, i64, PgPool> for User {
+impl Authentication<User, i32, PgPool> for User {
     // This is run when the user has logged in and has not yet been Cached in the system.
     // Once ran it will load and cache the user.
-    async fn load_user(id: i64, pool: Option<&PgPool>) -> Result<User> {
+    async fn load_user(id: i32, pool: Option<&PgPool>) -> Result<User> {
         let pool = pool.context("No pool")?;
         let user = sqlx::query_as("SELECT * FROM users WHERE id = %1").bind(id).fetch_one(pool).await?;
         Ok(user)
