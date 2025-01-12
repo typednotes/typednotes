@@ -14,7 +14,8 @@ use oauth2::{
     basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, RedirectUrl, TokenUrl,
 };
 use serde::{Deserialize, Serialize};
-use tower_sessions::{Session, SessionManager, SessionManagerLayer};
+use tower_sessions::{Expiry, Session, SessionManager, SessionManagerLayer};
+use time::Duration;
 
 use super::{
     settings::Settings,
@@ -30,7 +31,7 @@ struct AuthCallback {
 
 // App state
 #[derive(Clone)]
-struct AppState {
+pub struct AppState {
     pool: PgPool,
     oauth_client: Arc<BasicClient>,
 }
@@ -52,19 +53,25 @@ pub fn launch(app: fn() -> Element) {
             let session_store = PostgresStore::new(pool.clone());
             let session_layer = SessionManagerLayer::new(session_store)
                 .with_secure(false)  // Set to true in production
+                .with_expiry(Expiry::OnInactivity(Duration::seconds(10)))
                 .with_name("session");
-            // Create app state
+            // Create app state //TODO remove ?
             let state = AppState {
                 pool,
                 oauth_client,
             };
+            let context_providers = Arc::new(vec![]);
             // Get the address the server should run on.
             let addr = dioxus_cli_config::fullstack_address_or_localhost();
+            // Build a config
+            let serve_config = ServeConfigBuilder::new()
+                .context_providers(context_providers)
+                .build().unwrap();
             // Build our application with some routes
             let router = Router::new()
                 .with_state(state)
                 .layer(session_layer)
-                .serve_dioxus_application(ServeConfigBuilder::default(), app)
+                .serve_dioxus_application(serve_config, app)
                 .into_make_service();
             
             // Run it
@@ -72,7 +79,6 @@ pub fn launch(app: fn() -> Element) {
             axum::serve(listener, router)
                 .await
                 .unwrap();
-
         });
 }
 
