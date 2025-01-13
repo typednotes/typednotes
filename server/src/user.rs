@@ -1,3 +1,8 @@
+use std::{
+    env,
+    sync::Arc,
+    collections::HashSet,
+};
 use anyhow::{Context, Result};
 use axum::{
     extract::State,
@@ -8,21 +13,70 @@ use axum::{
 use axum_session_auth::{AuthSession, AuthSessionLayer, Authentication, AuthConfig, HasPermission};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use std::env;
-use std::sync::Arc;
+
 use async_trait::async_trait;
 
 // https://github.com/DioxusLabs/dioxus/blob/v0.6/examples/fullstack-auth/src/auth.rs
 
-/// User
+/// Database backed user
+#[derive(sqlx::FromRow, Clone)]
+pub struct SqlUser {
+    pub id: i32,
+    pub username: String,
+    pub email: String,
+    pub is_active: bool,
+    pub full_name: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+impl SqlUser {
+    /// Build a user from a sql user
+    pub fn into_user(self, sql_user_perms: Option<Vec<SqlPermissionTokens>>) -> User {
+        User {
+            id: self.id,
+            username: self.username,
+            email: self.email,
+            is_active: self.is_active,
+            full_name: self.full_name,
+            avatar_url: self.avatar_url,
+            permissions: if let Some(user_perms) = sql_user_perms {
+                user_perms
+                    .into_iter()
+                    .map(|x| x.token)
+                    .collect::<HashSet<String>>()
+            } else {
+                HashSet::<String>::new()
+            },
+        }
+    }
+
+    pub async fn read(id: i32, pool: &PgPool) -> Result<SqlUser> {
+        Ok(sqlx::query_as("SELECT id, username, email, is_active, full_name, avatar_url FROM users WHERE id = %1").bind(id).fetch_one(pool).await?)
+    }
+}
+
+
+#[derive(sqlx::FromRow, Clone)]
+pub struct SqlPermissionTokens {
+    pub token: String,
+}
+
+impl SqlPermissionTokens {
+    pub async fn read(user_id: i32, pool: &PgPool) -> Result<SqlPermissionTokens> {
+        Ok(sqlx::query_as("SELECT token FROM user_permissions WHERE user_id = %1").bind(user_id).fetch_one(pool).await?)
+    }
+}
+
+/// User with permissions etc.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
-    id: i32,
-    username: String,
-    email: String,
-    is_active: bool,
-    full_name: Option<String>,
-    avatar_url: Option<String>,
+    pub id: i32,
+    pub username: String,
+    pub email: String,
+    pub is_active: bool,
+    pub full_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub permissions: HashSet<String>,
 }
 
 // #[async_trait]
@@ -54,40 +108,6 @@ pub struct User {
 //         self.permissions.contains(perm)
 //     }
 // }
-
-/// Database backed user
-#[derive(sqlx::FromRow, Clone)]
-pub struct SqlUser {
-    id: i32,
-    username: String,
-    email: String,
-    is_active: bool,
-    full_name: Option<String>,
-    avatar_url: Option<String>,
-}
-
-impl SqlUser {
-    pub fn into_user(self, sql_user_perms: Option<Vec<SqlPermissionTokens>>) -> User {
-        User {
-            id: self.id,
-            anonymous: self.anonymous,
-            username: self.username,
-            permissions: if let Some(user_perms) = sql_user_perms {
-                user_perms
-                    .into_iter()
-                    .map(|x| x.token)
-                    .collect::<HashSet<String>>()
-            } else {
-                HashSet::<String>::new()
-            },
-        }
-    }
-}
-
-#[derive(sqlx::FromRow, Clone)]
-pub struct SqlPermissionTokens {
-    pub token: String,
-}
 
 #[async_trait]
 impl Authentication<User, i32, PgPool> for User {
