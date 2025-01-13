@@ -18,8 +18,6 @@ pub async fn connection_pool(settings: &Settings) -> anyhow::Result<PgPool> {
 
 #[cfg(test)]
 mod tests {
-    use crate::settings;
-
     use super::*;
     use tokio::runtime::Runtime;
 
