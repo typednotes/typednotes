@@ -1,9 +1,9 @@
-use std::collections::HashSet;
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use axum_session_auth::{Authentication, HasPermission};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use async_trait::async_trait;
+use std::collections::HashSet;
 
 /// Database backed user
 #[derive(sqlx::FromRow, Clone)]
@@ -38,10 +38,14 @@ impl SqlUser {
     }
 
     pub async fn read(id: i32, pool: &PgPool) -> Result<SqlUser> {
-        Ok(sqlx::query_as("SELECT id, username, email, is_active, full_name, avatar_url FROM users WHERE id = %1").bind(id).fetch_one(pool).await?)
+        Ok(sqlx::query_as(
+            "SELECT id, username, email, is_active, full_name, avatar_url FROM users WHERE id = %1",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await?)
     }
 }
-
 
 #[derive(sqlx::FromRow, Clone)]
 pub struct SqlPermissionTokens {
@@ -50,7 +54,12 @@ pub struct SqlPermissionTokens {
 
 impl SqlPermissionTokens {
     pub async fn read(user_id: i32, pool: &PgPool) -> Result<Vec<SqlPermissionTokens>> {
-        Ok(sqlx::query_as("SELECT token FROM user_permissions WHERE user_id = %1").bind(user_id).fetch_all(pool).await?)
+        Ok(
+            sqlx::query_as("SELECT token FROM user_permissions WHERE user_id = %1")
+                .bind(user_id)
+                .fetch_all(pool)
+                .await?,
+        )
     }
 }
 

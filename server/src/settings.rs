@@ -13,7 +13,10 @@ pub struct Database {
 
 impl Database {
     pub fn url(&self) -> String {
-        format!("postgres://{}:{}@{}:{}/{}", self.user, self.password, self.host, self.port, self.database)
+        format!(
+            "postgres://{}:{}@{}:{}/{}",
+            self.user, self.password, self.host, self.port, self.database
+        )
     }
 }
 
@@ -61,7 +64,11 @@ impl Settings {
             .set_default("auth.redirect", "https://typednotes.org/auth/redirect")?
             .set_default("github.id", "github client_id")?
             .set_default("github.secret", "github client_secret")?
-            .add_source(File::with_name("config.toml").format(FileFormat::Toml).required(false))
+            .add_source(
+                File::with_name("config.toml")
+                    .format(FileFormat::Toml)
+                    .required(false),
+            )
             .add_source(Environment::default().separator("_"))
             .build()?;
 
@@ -72,8 +79,8 @@ impl Settings {
 
 #[cfg(test)]
 mod tests {
-    use std::env::set_var;
     use super::*;
+    use std::env::set_var;
 
     #[test]
     fn test_settings() {
@@ -82,7 +89,10 @@ mod tests {
         set_var("GITHUB_ID", "test_3");
         let settings = Settings::new().unwrap_or_default();
         println!("Settings = {:?}", settings);
-        assert_eq!(settings.database.url(), "postgres://test_user_2:password@localhost:5432/typednotes");
+        assert_eq!(
+            settings.database.url(),
+            "postgres://test_user_2:password@localhost:5432/typednotes"
+        );
         assert_eq!(settings.auth.redirect, "redirect_2");
     }
 }

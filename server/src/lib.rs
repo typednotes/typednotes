@@ -1,18 +1,18 @@
 //! This crate contains all shared fullstack server functions.
 #[cfg(feature = "server")]
-mod settings;
-#[cfg(feature = "server")]
 mod application;
+#[cfg(feature = "server")]
+mod auth;
 #[cfg(feature = "server")]
 mod database;
 #[cfg(feature = "server")]
-mod user;
+mod settings;
 #[cfg(feature = "server")]
-mod auth;
+mod user;
 
-use dioxus::prelude::*;
 #[cfg(feature = "server")]
 pub use application::launch;
+use dioxus::prelude::*;
 
 /// Echo the user input on the server.
 #[server(Echo)]

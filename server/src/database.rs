@@ -1,6 +1,6 @@
+use super::settings::Settings;
 use anyhow::Context as _;
 use sqlx::PgPool;
-use super::settings::Settings;
 
 /// Get the connection pool
 pub async fn connection_pool(settings: &Settings) -> anyhow::Result<PgPool> {
@@ -24,8 +24,8 @@ mod tests {
     #[test]
     fn test_migration() {
         // Create the runtime
-        let rt  = Runtime::new().unwrap();
-        
+        let rt = Runtime::new().unwrap();
+
         rt.block_on(async {
             let settings = Settings::new().unwrap_or_default();
             let url = settings.database.url();
@@ -39,7 +39,6 @@ mod tests {
                 .await
                 .context("Failed to run migrations")
                 .expect("DP migration error");
-            }
-        );
+        });
     }
 }
