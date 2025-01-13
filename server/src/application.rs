@@ -69,9 +69,9 @@ pub fn launch(app: fn() -> Element) {
             let serve_config = ServeConfig::new().unwrap();
             // Build our application with some routes
             let router = Router::new()
-                .layer(session_layer)
-                .layer(auth_session_layer)
                 .serve_dioxus_application(serve_config, app)
+                .layer(auth_session_layer)
+                .layer(session_layer)
                 .into_make_service();
             // Run it
             let listener = tokio::net::TcpListener::bind(&addr)

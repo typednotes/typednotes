@@ -1,17 +1,13 @@
 use super::{settings::Settings, user::User};
 use async_trait::async_trait;
 use axum::{
-    extract::State,
-    http::{request::Parts, status::StatusCode, Method},
+    http::{request::Parts, status::StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
-    Router,
 };
-use axum_session_auth::{AuthConfig, AuthSession, AuthSessionLayer, Authentication, HasPermission};
+use axum_session_auth::AuthSession;
 use axum_session_sqlx::SessionPgPool;
-use dioxus::prelude::server_fn::redirect;
 use oauth2::{
-    basic::BasicClient, AuthUrl, AuthorizationCode, ClientId, ClientSecret, RedirectUrl, TokenUrl,
+    basic::BasicClient, AuthUrl, ClientId, ClientSecret, RedirectUrl, TokenUrl,
 };
 use sqlx::PgPool;
 
