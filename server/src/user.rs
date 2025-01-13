@@ -97,7 +97,7 @@ impl Authentication<User, i32, PgPool> for User {
 
     // This function is used internally to determine if they are logged in or not.
     fn is_authenticated(&self) -> bool {
-        true
+        self.is_active
     }
 
     fn is_active(&self) -> bool {
@@ -105,7 +105,7 @@ impl Authentication<User, i32, PgPool> for User {
     }
 
     fn is_anonymous(&self) -> bool {
-        false
+        !self.is_active
     }
 }
 

@@ -12,7 +12,7 @@ mod user;
 
 #[cfg(feature = "server")]
 pub use application::launch;
-use dioxus::prelude::*;
+use dioxus::{logger::tracing::debug, prelude::*};
 
 /// Echo the user input on the server.
 #[server(Echo)]
@@ -31,13 +31,14 @@ pub async fn test(input: String) -> Result<String, ServerFnError> {
 #[server(GetUserName)]
 pub async fn user_name() -> Result<String, ServerFnError> {
     let session: auth::Session = extract().await?;
+    println!("{:?}", session.0);
     Ok(session.0.current_user.unwrap().username.to_string())
 }
 
 #[server(Login)]
 pub async fn login() -> Result<(), ServerFnError> {
     let auth: auth::Session = extract().await?;
-    auth.login_user(2);
+    auth.login_user(1);
     Ok(())
 }
 
