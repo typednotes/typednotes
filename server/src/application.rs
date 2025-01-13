@@ -56,8 +56,8 @@ pub fn launch(app: fn() -> Element) {
             let session_store = SessionStore::<SessionPgPool>::new(Some(SessionPgPool::from(pool.clone())), session_config).await.expect("Cannot create a session store");
             let session_layer = SessionLayer::new(session_store);
             // Create an auth session layer
-            let auth_config = AuthConfig::<i64>::default().with_anonymous_user_id(Some(1));
-            let auth_session_layer = AuthSessionLayer::<User, i64, SessionPgPool, PgPool>::new(Some(pool)).with_config(auth_config);
+            let auth_config = AuthConfig::<i32>::default().with_anonymous_user_id(Some(1));
+            let auth_session_layer = AuthSessionLayer::<User, i32, SessionPgPool, PgPool>::new(Some(pool)).with_config(auth_config);
             // Get the address the server should run on.
             let addr = dioxus_cli_config::fullstack_address_or_localhost();
             // Build a config

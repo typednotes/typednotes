@@ -62,8 +62,8 @@ pub struct SqlPermissionTokens {
 }
 
 impl SqlPermissionTokens {
-    pub async fn read(user_id: i32, pool: &PgPool) -> Result<SqlPermissionTokens> {
-        Ok(sqlx::query_as("SELECT token FROM user_permissions WHERE user_id = %1").bind(user_id).fetch_one(pool).await?)
+    pub async fn read(user_id: i32, pool: &PgPool) -> Result<Vec<SqlPermissionTokens>> {
+        Ok(sqlx::query_as("SELECT token FROM user_permissions WHERE user_id = %1").bind(user_id).fetch_all(pool).await?)
     }
 }
 
@@ -77,6 +77,15 @@ pub struct User {
     pub full_name: Option<String>,
     pub avatar_url: Option<String>,
     pub permissions: HashSet<String>,
+}
+
+impl User {
+    pub async fn read(id: i32, pool: &PgPool) -> Result<User> {
+        let sql_user = SqlUser::read(id, pool).await?;
+        //lets just get all the tokens the user can use, we will only use the full permissions if modifying them.
+        let sql_user_perms = SqlPermissionTokens::read(id, pool).await?;
+        Ok(sql_user.into_user(Some(sql_user_perms)))
+    }
 }
 
 // #[async_trait]
@@ -115,7 +124,7 @@ impl Authentication<User, i32, PgPool> for User {
     // Once ran it will load and cache the user.
     async fn load_user(id: i32, pool: Option<&PgPool>) -> Result<User> {
         let pool = pool.context("No pool")?;
-        let user = sqlx::query_as("SELECT * FROM users WHERE id = %1").bind(id).fetch_one(pool).await?;
+        let user = User::read(id, pool).await?;
         Ok(user)
     }
 
