@@ -80,8 +80,3 @@ pub fn launch(app: fn() -> Element) {
             axum::serve(listener, router).await.unwrap();
         });
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-}

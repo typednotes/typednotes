@@ -29,7 +29,7 @@ pub async fn test(input: String) -> Result<String, ServerFnError> {
 // Auth related endpoints
 
 #[server(GetUserName)]
-pub async fn get_user_name() -> Result<String, ServerFnError> {
+pub async fn user_name() -> Result<String, ServerFnError> {
     let session: auth::Session = extract().await?;
     Ok(session.0.current_user.unwrap().username.to_string())
 }
@@ -42,10 +42,10 @@ pub async fn login() -> Result<(), ServerFnError> {
 }
 
 #[server(Permissions)]
-pub async fn get_permissions() -> Result<String, ServerFnError> {
+pub async fn permissions() -> Result<String, ServerFnError> {
     let method: axum::http::Method = extract().await?;
     let auth: auth::Session = extract().await?;
-    let current_user = auth.current_user.clone().context("No user")?;
+    let current_user = auth.current_user.clone().ok_or(ServerFnError::new("No user"))?;
 
     // lets check permissions only and not worry about if they are anon or not
     if !axum_session_auth::Auth::<user::User, i32, sqlx::PgPool>::build(
