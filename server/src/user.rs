@@ -39,7 +39,7 @@ impl SqlUser {
 
     pub async fn read(id: i32, pool: &PgPool) -> Result<SqlUser> {
         Ok(sqlx::query_as(
-            "SELECT id, username, email, is_active, full_name, avatar_url FROM users WHERE id = %1",
+            "SELECT id, username, email, is_active, full_name, avatar_url FROM users WHERE id=$1",
         )
         .bind(id)
         .fetch_one(pool)
@@ -55,7 +55,7 @@ pub struct SqlPermissionTokens {
 impl SqlPermissionTokens {
     pub async fn read(user_id: i32, pool: &PgPool) -> Result<Vec<SqlPermissionTokens>> {
         Ok(
-            sqlx::query_as("SELECT token FROM user_permissions WHERE user_id = %1")
+            sqlx::query_as("SELECT token FROM user_permissions WHERE user_id=$1")
                 .bind(user_id)
                 .fetch_all(pool)
                 .await?,
@@ -113,5 +113,28 @@ impl Authentication<User, i32, PgPool> for User {
 impl HasPermission<PgPool> for User {
     async fn has(&self, perm: &str, _pool: &Option<&PgPool>) -> bool {
         self.permissions.contains(perm)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use super::super::settings::Settings;
+    use tokio::runtime::Runtime;
+
+    #[test]
+    fn test_user_retrieval() {
+        // Create the runtime
+        let rt = Runtime::new().unwrap();
+
+        rt.block_on(async {
+            let settings = Settings::new().unwrap_or_default();
+            let url = settings.database.url();
+            // Create a connection pool
+            let pool = PgPool::connect(&url).await.expect("DB connection error");
+            // Make sure migrations were run
+            let user = User::read(1, &pool).await.expect("Cannot pull user");
+            println!("User = {user:?}");
+        });
     }
 }
