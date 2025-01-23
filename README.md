@@ -17,3 +17,14 @@ and serve:
 dx serve
 ```
 
+# Architecture
+
+## Database
+
+### Database Choice
+
+We use PostgreSQL as it is standard, well tested and scalable
+
+### Migrations
+
+We use `dbmate`
