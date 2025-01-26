@@ -56,7 +56,7 @@ END
 $$;
 
 -- Needed so we can do backups.
-GRANT SELECT ON schema_migrations TO bionic_readonly;
+GRANT SELECT ON schema_migrations TO typednotes_readonly;
 
 -- migrate:down
 

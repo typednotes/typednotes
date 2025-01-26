@@ -79,3 +79,8 @@ migration-status: services-up
 migration-up: services-up
 	export $$(grep -v '^#' .env | xargs);\
 	dbmate up
+
+.PHONY: migration-down
+migration-down: services-up
+	export $$(grep -v '^#' .env | xargs);\
+	dbmate down
