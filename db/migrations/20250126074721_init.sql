@@ -55,5 +55,8 @@ BEGIN
 END
 $$;
 
+-- Needed so we can do backups.
+GRANT SELECT ON schema_migrations TO bionic_readonly;
+
 -- migrate:down
 

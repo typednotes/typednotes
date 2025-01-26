@@ -41,6 +41,7 @@ GRANT SELECT ON roles_permissions TO typednotes_application;
 GRANT SELECT ON roles_permissions TO typednotes_readonly;
 
 -- migrate:down
+
 DROP TABLE roles_permissions;
 DROP TYPE role;
 DROP TYPE permission;

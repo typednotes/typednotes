@@ -53,6 +53,7 @@ GRANT SELECT ON invitations, teams, team_users TO typednotes_readonly;
 GRANT SELECT ON invitations_id_seq, teams_id_seq TO typednotes_readonly;
 
 -- migrate:down
+
 DROP TABLE team_users;
 DROP TABLE invitations;
 DROP TABLE teams;
