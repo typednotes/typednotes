@@ -62,3 +62,20 @@ bundle-web: services-up
 	export $$(grep -v '^#' .env | xargs);\
 	cd web;\
 	dx bundle
+
+## Database Management
+
+.PHONY: migration
+migration: services-up
+	export $$(grep -v '^#' .env | xargs);\
+	dbmate new $(name)
+
+.PHONY: migration-status
+migration-status: services-up
+	export $$(grep -v '^#' .env | xargs);\
+	dbmate status
+
+.PHONY: migration-up
+migration-up: services-up
+	export $$(grep -v '^#' .env | xargs);\
+	dbmate up
