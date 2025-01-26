@@ -25,7 +25,13 @@ CREATE TABLE group_users (
     user_id INT NOT NULL, 
     group_id INT NOT NULL,
     roles role ARRAY NOT NULL,
-    PRIMARY KEY (user_id, group_id)
+    PRIMARY KEY (user_id, group_id),
+
+    CONSTRAINT fk_user FOREIGN KEY(user_id)
+        REFERENCES users(id) ON DELETE CASCADE,
+    
+    CONSTRAINT fk_group FOREIGN KEY(group_id)
+        REFERENCES groups(id) ON DELETE CASCADE,
 );
 
 COMMENT ON TABLE group_users IS 'A User can belong to multiple groups.';
