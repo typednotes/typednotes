@@ -1,6 +1,6 @@
 -- migrate:up
 
--- The very simplest RBAC implementation, the roles get added to the team_users table
+-- The very simplest RBAC implementation, the roles get added to the group_users table
 -- as users are added to an org.
 
 CREATE TYPE role AS ENUM (
@@ -10,16 +10,16 @@ CREATE TYPE role AS ENUM (
 COMMENT ON TYPE role IS 'Users have roles, they can be managers or administrators etc.';
 
 CREATE TYPE visibility AS ENUM (
-    'Company', 
-    'Team', 
+    'Organization', 
+    'Group', 
     'Private'
 );
 COMMENT ON TYPE visibility IS 'For some data the user can select the visibility';
 
 CREATE TYPE permission AS ENUM (
-    -- The ManageTeam permission gives the user the ability to invite team members, 
-    -- delete team members and change the team name
-    'ManageTeam'
+    -- The ManageGroup permission gives the user the ability to invite group members, 
+    -- delete group members and change the group name
+    'ManageGroup'
 );
 COMMENT ON TYPE permission IS 'A permission gives the user the ability to do something. i.e. Manage users.';
 
@@ -31,7 +31,7 @@ CREATE TABLE roles_permissions (
 );
 COMMENT ON TABLE roles_permissions IS 'Maps roles to permissions. i.e. a role can have multiple permissions.';
 
-INSERT INTO roles_permissions VALUES('Administrator', 'ManageTeam');
+INSERT INTO roles_permissions VALUES('Administrator', 'ManageGroup');
 
 
 -- Give access to the application user.
