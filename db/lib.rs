@@ -1,6 +1,6 @@
-pub mod authz;
-pub mod customer_keys;
-pub mod vector_search;
+// pub mod authz;
+// pub mod customer_keys;
+// pub mod vector_search;
 
 use std::str::FromStr;
 
