@@ -16,6 +16,7 @@ fn cornucopia() {
     // and include the generated file with a `include_str` statement in your project.
 
     let out_dir = env::var_os("OUT_DIR").unwrap();
+    // let file_path = Path::new(&out_dir).join("cornucopia.rs");
     let file_path = Path::new(&out_dir).join("cornucopia.rs");
     println!("cargo:warning={:?}", file_path);
 

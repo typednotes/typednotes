@@ -28,3 +28,6 @@ We use PostgreSQL as it is standard, well tested and scalable
 ### Migrations
 
 We use `dbmate`
+
+### SQL - Rust mapping
+

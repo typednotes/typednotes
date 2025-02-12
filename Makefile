@@ -1,5 +1,13 @@
 # A simple makefile for running the server and web app
 
+## Build the app
+
+.PHONY: build
+build: services-up
+	export $$(grep -v '^#' .env | xargs);\
+	cd db;\
+	cargo build
+
 ## Serve the app
 
 .PHONY: desktop
