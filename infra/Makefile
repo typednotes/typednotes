@@ -10,11 +10,11 @@ plan:
 
 .PHONY: apply
 apply:
-	tofu apply
+	tofu apply $(ARGS)
 
 .PHONY: destroy
 destroy:
-	tofu destroy
+	tofu destroy $(ARGS)
 
 .PHONY: fmt
 fmt:

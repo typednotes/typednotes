@@ -5,22 +5,26 @@ update:
 	cargo update
 
 # Infrastructure commands
-.PHONY: infra-init
-infra-init:
+
+# Helper to update or add a variable in .env
+# Usage: $(call set_env,VAR_NAME,value)
+define set_env
+	@if grep -q "^$(1)=" .env 2>/dev/null; then \
+		sed -i '' 's|^$(1)=.*|$(1)=$(2)|' .env; \
+	else \
+		echo "$(1)=$(2)" >> .env; \
+	fi
+endef
+
+.PHONY: infra-up
+infra-up:
 	$(MAKE) -C infra init
+	$(MAKE) -C infra apply ARGS="-auto-approve"
+	$(call set_env,SDB_ENDPOINT,$$(cd infra && tofu output -raw sdb_endpoint))
+	$(call set_env,SDB_ID,$$(cd infra && tofu output -raw sdb_id))
+	@echo "Infrastructure deployed. Outputs saved to .env"
 
-.PHONY: infra-plan
-infra-plan:
-	$(MAKE) -C infra plan
-
-.PHONY: infra-apply
-infra-apply:
-	$(MAKE) -C infra apply
-
-.PHONY: infra-destroy
-infra-destroy:
-	$(MAKE) -C infra destroy
-
-.PHONY: infra-output
-infra-output:
-	$(MAKE) -C infra output
+.PHONY: infra-down
+infra-down:
+	$(MAKE) -C infra destroy ARGS="-auto-approve"
+	@echo "Infrastructure destroyed."
