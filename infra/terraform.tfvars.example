@@ -1,0 +1,11 @@
+# Copy this file to terraform.tfvars and fill in your values
+# Do NOT commit terraform.tfvars to version control
+
+scw_access_key = "your-access-key"
+scw_secret_key = "your-secret-key"
+scw_project_id = "your-project-id"
+
+# Optional overrides
+# scw_region    = "fr-par"
+# scw_zone      = "fr-par-1"
+# environment   = "dev"

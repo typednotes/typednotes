@@ -8,6 +8,3 @@ pub use navbar::Navbar;
 
 mod echo;
 pub use echo::Echo;
-
-mod files;
-pub use files::Files;

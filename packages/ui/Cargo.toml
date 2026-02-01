@@ -5,5 +5,7 @@ edition = "2021"
 
 [dependencies]
 dioxus = { workspace = true }
-server = { workspace = true }
-files = { workspace = true }
+api = { workspace = true }
+
+[features]
+server = ["api/server"]
