@@ -1,14 +1,14 @@
 # Output values
 
 # Serverless SQL Database outputs
-output "sdb_endpoint" {
-  description = "Serverless SQL Database endpoint (without credentials)"
-  value       = scaleway_sdb_sql_database.main.endpoint
-}
-
 output "sdb_id" {
   description = "Serverless SQL Database ID"
   value       = scaleway_sdb_sql_database.main.id
+}
+
+output "sdb_endpoint" {
+  description = "Serverless SQL Database endpoint (without credentials)"
+  value       = scaleway_sdb_sql_database.main.endpoint
 }
 
 # Database credentials (from IAM Application)

@@ -14,9 +14,8 @@ infra-up:
 	SDB_ID=$$(cd infra && tofu output -raw sdb_id); \
 	SDB_USERNAME=$$(cd infra && tofu output -raw sdb_username); \
 	SDB_PASSWORD=$$(cd infra && tofu output -raw sdb_password); \
-	SDB_ENDPOINT=$$(echo "$$SDB_ENDPOINT" | sed "s|postgres://|postgres://$$SDB_USERNAME:$$SDB_PASSWORD@|"); \
-	DATABASE_URL=$$SDB_ENDPOINT; \
-	for var in SDB_ENDPOINT SDB_ID DATABASE_URL; do \
+	DATABASE_URL=$$(echo "$$SDB_ENDPOINT" | sed "s|postgres://|postgres://$$SDB_USERNAME:$$SDB_PASSWORD@|"); \
+	for var in SDB_ID SDB_ENDPOINT SDB_USERNAME SDB_PASSWORD DATABASE_URL; do \
 		val=$$(eval echo \$$$$var); \
 		if grep -q "^$$var=" .env 2>/dev/null; then \
 			sed -i '' "s|^$$var=.*|$$var=$$val|" .env; \

@@ -77,8 +77,8 @@ async fn launch_server() {
         // Add session layer to all routes
         .layer(session_layer);
 
-    // Bind to all interfaces
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8080));
+    // Use the address from dx serve or default to localhost:8080
+    let addr = dioxus::cli_config::fullstack_address_or_localhost();
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     tracing::info!("Server listening on {}", addr);
 
