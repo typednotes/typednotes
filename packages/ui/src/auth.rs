@@ -64,7 +64,7 @@ pub fn LoginButton(
     #[props(default = "".to_string())] class: String,
 ) -> Element {
     let provider_clone = provider.clone();
-    let loading = use_signal(|| false);
+    let mut loading = use_signal(|| false);
 
     let onclick = move |_| {
         let provider = provider_clone.clone();

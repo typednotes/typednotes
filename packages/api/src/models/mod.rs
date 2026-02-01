@@ -2,4 +2,6 @@
 
 mod user;
 
-pub use user::{User, UserInfo};
+#[cfg(feature = "server")]
+pub use user::User;
+pub use user::UserInfo;

@@ -16,6 +16,11 @@ variable "scw_project_id" {
   type        = string
 }
 
+variable "scw_organization_id" {
+  description = "Scaleway organization ID"
+  type        = string
+}
+
 # Region and zone configuration
 variable "scw_region" {
   description = "Scaleway region"
@@ -47,4 +52,10 @@ variable "sdb_max_cpu" {
   description = "Maximum CPU units for the serverless database (1-15)"
   type        = number
   default     = 4
+}
+
+# Database credentials - use IAM application ID and secret key
+variable "db_application_id" {
+  description = "IAM Application ID for database access (from Scaleway console)"
+  type        = string
 }

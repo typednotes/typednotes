@@ -2,7 +2,8 @@
 
 use oauth2::basic::BasicClient;
 use oauth2::{
-    AuthorizationCode, CsrfToken, PkceCodeChallenge, PkceCodeVerifier, Scope, TokenResponse,
+    AuthorizationCode, CsrfToken, EndpointNotSet, EndpointSet, PkceCodeChallenge,
+    PkceCodeVerifier, Scope, TokenResponse,
 };
 use reqwest::Client;
 use serde::Deserialize;
@@ -20,6 +21,20 @@ struct GoogleUser {
     picture: Option<String>,
 }
 
+/// OAuth client type with auth URL and token URL set.
+type ConfiguredClient = oauth2::Client<
+    oauth2::basic::BasicErrorResponse,
+    oauth2::basic::BasicTokenResponse,
+    oauth2::basic::BasicTokenIntrospectionResponse,
+    oauth2::StandardRevocableToken,
+    oauth2::basic::BasicRevocationErrorResponse,
+    EndpointSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointNotSet,
+    EndpointSet,
+>;
+
 /// Google OAuth handler.
 pub struct GoogleOAuth {
     config: OAuthConfig,
@@ -32,7 +47,7 @@ impl GoogleOAuth {
         Ok(Self { config })
     }
 
-    fn create_client(&self) -> BasicClient {
+    fn create_client(&self) -> ConfiguredClient {
         BasicClient::new(self.config.client_id.clone())
             .set_client_secret(self.config.client_secret.clone())
             .set_auth_uri(self.config.auth_url.clone())

@@ -1,10 +1,14 @@
 {
     "cSpell.enabled": false,
-    "rust-analyzer.cargo.features": [
-        "server"
-    ],
+    "rust-analyzer.cargo.features": "all",
+    "rust-analyzer.cargo.allTargets": true,
+    "rust-analyzer.check.allTargets": true,
+    "rust-analyzer.check.command": "clippy",
     "rust-analyzer.trace.server": "messages",
     "rust-analyzer.cargo.extraEnv": {
         "RUST_BACKTRACE": "full"
     },
+    "rust-analyzer.linkedProjects": [
+        "Cargo.toml"
+    ]
 }

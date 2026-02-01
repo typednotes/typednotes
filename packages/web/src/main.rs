@@ -36,11 +36,8 @@ fn main() {
 
 #[cfg(feature = "server")]
 async fn launch_server() {
-    use axum::extract::Query;
-    use axum::response::Redirect;
     use axum::routing::get;
-    use axum::Router;
-    use dioxus::fullstack::prelude::*;
+    use dioxus::server::{DioxusRouterExt, ServeConfig};
     use std::time::Duration;
     use tower_sessions::cookie::SameSite;
     use tower_sessions::{Expiry, SessionManagerLayer};
@@ -66,101 +63,108 @@ async fn launch_server() {
     let session_layer = SessionManagerLayer::new(session_store)
         .with_secure(false) // Set to true in production with HTTPS
         .with_same_site(SameSite::Lax)
-        .with_expiry(Expiry::OnInactivity(Duration::from_secs(60 * 60 * 24 * 7).try_into().unwrap())); // 7 days
-
-    // OAuth callback handlers
-    async fn github_callback(
-        Query(params): Query<std::collections::HashMap<String, String>>,
-        session: tower_sessions::Session,
-    ) -> Redirect {
-        let Some(code) = params.get("code") else {
-            tracing::error!("GitHub callback missing code");
-            return Redirect::to("/login?error=missing_code");
-        };
-        let Some(state) = params.get("state") else {
-            tracing::error!("GitHub callback missing state");
-            return Redirect::to("/login?error=missing_state");
-        };
-
-        match api::auth::GitHubOAuth::new() {
-            Ok(oauth) => match oauth.exchange_code(code, state).await {
-                Ok(user) => {
-                    if let Err(e) = session
-                        .insert(api::auth::SESSION_USER_ID_KEY, user.id.to_string())
-                        .await
-                    {
-                        tracing::error!("Failed to set session: {}", e);
-                        return Redirect::to("/login?error=session_error");
-                    }
-                    Redirect::to("/")
-                }
-                Err(e) => {
-                    tracing::error!("GitHub OAuth error: {}", e);
-                    Redirect::to("/login?error=oauth_error")
-                }
-            },
-            Err(e) => {
-                tracing::error!("Failed to create GitHub OAuth: {}", e);
-                Redirect::to("/login?error=config_error")
-            }
-        }
-    }
-
-    async fn google_callback(
-        Query(params): Query<std::collections::HashMap<String, String>>,
-        session: tower_sessions::Session,
-    ) -> Redirect {
-        let Some(code) = params.get("code") else {
-            tracing::error!("Google callback missing code");
-            return Redirect::to("/login?error=missing_code");
-        };
-        let Some(state) = params.get("state") else {
-            tracing::error!("Google callback missing state");
-            return Redirect::to("/login?error=missing_state");
-        };
-
-        match api::auth::GoogleOAuth::new() {
-            Ok(oauth) => match oauth.exchange_code(code, state).await {
-                Ok(user) => {
-                    if let Err(e) = session
-                        .insert(api::auth::SESSION_USER_ID_KEY, user.id.to_string())
-                        .await
-                    {
-                        tracing::error!("Failed to set session: {}", e);
-                        return Redirect::to("/login?error=session_error");
-                    }
-                    Redirect::to("/")
-                }
-                Err(e) => {
-                    tracing::error!("Google OAuth error: {}", e);
-                    Redirect::to("/login?error=oauth_error")
-                }
-            },
-            Err(e) => {
-                tracing::error!("Failed to create Google OAuth: {}", e);
-                Redirect::to("/login?error=config_error")
-            }
-        }
-    }
+        .with_expiry(Expiry::OnInactivity(
+            Duration::from_secs(60 * 60 * 24 * 7).try_into().unwrap(),
+        )); // 7 days
 
     // Build the Dioxus app with custom routes
-    let app = Router::new()
+    let router = axum::Router::new()
+        // Add custom OAuth callback routes first
         .route("/auth/github/callback", get(github_callback))
         .route("/auth/google/callback", get(google_callback))
-        .layer(session_layer.clone())
-        .serve_dioxus_application(ServeConfig::new().unwrap(), || {
-            VirtualDom::new(App)
-        })
-        .await
+        // Then serve the Dioxus application
+        .serve_dioxus_application(ServeConfig::new(), App)
+        // Add session layer to all routes
         .layer(session_layer);
 
+    // Bind to all interfaces
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8080));
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    tracing::info!("Listening on {}", addr);
+    tracing::info!("Server listening on {}", addr);
 
-    axum::serve(listener, app.into_make_service())
+    axum::serve(listener, router.into_make_service())
         .await
         .unwrap();
+}
+
+#[cfg(feature = "server")]
+async fn github_callback(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    session: tower_sessions::Session,
+) -> axum::response::Redirect {
+    use axum::response::Redirect;
+
+    let Some(code) = params.get("code") else {
+        tracing::error!("GitHub callback missing code");
+        return Redirect::to("/login?error=missing_code");
+    };
+    let Some(state) = params.get("state") else {
+        tracing::error!("GitHub callback missing state");
+        return Redirect::to("/login?error=missing_state");
+    };
+
+    match api::auth::GitHubOAuth::new() {
+        Ok(oauth) => match oauth.exchange_code(code, state).await {
+            Ok(user) => {
+                if let Err(e) = session
+                    .insert(api::auth::SESSION_USER_ID_KEY, user.id.to_string())
+                    .await
+                {
+                    tracing::error!("Failed to set session: {}", e);
+                    return Redirect::to("/login?error=session_error");
+                }
+                Redirect::to("/")
+            }
+            Err(e) => {
+                tracing::error!("GitHub OAuth error: {}", e);
+                Redirect::to("/login?error=oauth_error")
+            }
+        },
+        Err(e) => {
+            tracing::error!("Failed to create GitHub OAuth: {}", e);
+            Redirect::to("/login?error=config_error")
+        }
+    }
+}
+
+#[cfg(feature = "server")]
+async fn google_callback(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+    session: tower_sessions::Session,
+) -> axum::response::Redirect {
+    use axum::response::Redirect;
+
+    let Some(code) = params.get("code") else {
+        tracing::error!("Google callback missing code");
+        return Redirect::to("/login?error=missing_code");
+    };
+    let Some(state) = params.get("state") else {
+        tracing::error!("Google callback missing state");
+        return Redirect::to("/login?error=missing_state");
+    };
+
+    match api::auth::GoogleOAuth::new() {
+        Ok(oauth) => match oauth.exchange_code(code, state).await {
+            Ok(user) => {
+                if let Err(e) = session
+                    .insert(api::auth::SESSION_USER_ID_KEY, user.id.to_string())
+                    .await
+                {
+                    tracing::error!("Failed to set session: {}", e);
+                    return Redirect::to("/login?error=session_error");
+                }
+                Redirect::to("/")
+            }
+            Err(e) => {
+                tracing::error!("Google OAuth error: {}", e);
+                Redirect::to("/login?error=oauth_error")
+            }
+        },
+        Err(e) => {
+            tracing::error!("Failed to create Google OAuth: {}", e);
+            Redirect::to("/login?error=config_error")
+        }
+    }
 }
 
 #[component]
