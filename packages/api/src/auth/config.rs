@@ -21,7 +21,7 @@ impl OAuthConfig {
             .map_err(|_| "GITHUB_CLIENT_ID not set")?;
         let client_secret = std::env::var("GITHUB_CLIENT_SECRET")
             .map_err(|_| "GITHUB_CLIENT_SECRET not set")?;
-        let redirect_uri = std::env::var("AUTH_REDIRECT_URI")
+        let redirect_uri = std::env::var("GITHUB_AUTH_REDIRECT_URI")
             .unwrap_or_else(|_| "http://localhost:8080/auth/github/callback".to_string());
 
         Ok(Self {
@@ -31,7 +31,7 @@ impl OAuthConfig {
                 .map_err(|e| e.to_string())?,
             token_url: TokenUrl::new("https://github.com/login/oauth/access_token".to_string())
                 .map_err(|e| e.to_string())?,
-            redirect_url: RedirectUrl::new(redirect_uri.replace("/callback", "/github/callback"))
+            redirect_url: RedirectUrl::new(redirect_uri)
                 .map_err(|e| e.to_string())?,
         })
     }
@@ -44,7 +44,7 @@ impl OAuthConfig {
             .map_err(|_| "GOOGLE_CLIENT_ID not set")?;
         let client_secret = std::env::var("GOOGLE_CLIENT_SECRET")
             .map_err(|_| "GOOGLE_CLIENT_SECRET not set")?;
-        let redirect_uri = std::env::var("AUTH_REDIRECT_URI")
+        let redirect_uri = std::env::var("GOOGLE_AUTH_REDIRECT_URI")
             .unwrap_or_else(|_| "http://localhost:8080/auth/google/callback".to_string());
 
         Ok(Self {
@@ -54,7 +54,7 @@ impl OAuthConfig {
                 .map_err(|e| e.to_string())?,
             token_url: TokenUrl::new("https://oauth2.googleapis.com/token".to_string())
                 .map_err(|e| e.to_string())?,
-            redirect_url: RedirectUrl::new(redirect_uri.replace("/callback", "/google/callback"))
+            redirect_url: RedirectUrl::new(redirect_uri)
                 .map_err(|e| e.to_string())?,
         })
     }

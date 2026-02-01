@@ -134,34 +134,48 @@ async fn google_callback(
 ) -> axum::response::Redirect {
     use axum::response::Redirect;
 
+    eprintln!("=== Google callback started ===");
+
     let Some(code) = params.get("code") else {
-        tracing::error!("Google callback missing code");
+        eprintln!("Google callback missing code");
         return Redirect::to("/login?error=missing_code");
     };
     let Some(state) = params.get("state") else {
-        tracing::error!("Google callback missing state");
+        eprintln!("Google callback missing state");
         return Redirect::to("/login?error=missing_state");
     };
 
+    eprintln!("Got code and state, creating OAuth client...");
+
     match api::auth::GoogleOAuth::new() {
-        Ok(oauth) => match oauth.exchange_code(code, state).await {
-            Ok(user) => {
-                if let Err(e) = session
-                    .insert(api::auth::SESSION_USER_ID_KEY, user.id.to_string())
-                    .await
-                {
-                    tracing::error!("Failed to set session: {}", e);
-                    return Redirect::to("/login?error=session_error");
+        Ok(oauth) => {
+            eprintln!("OAuth client created, exchanging code...");
+            match oauth.exchange_code(code, state).await {
+                Ok(user) => {
+                    eprintln!("Code exchanged successfully, user: {:?}", user.id);
+                    if let Err(e) = session
+                        .insert(api::auth::SESSION_USER_ID_KEY, user.id.to_string())
+                        .await
+                    {
+                        eprintln!("Failed to insert into session: {}", e);
+                        return Redirect::to("/login?error=session_error");
+                    }
+                    eprintln!("Session data inserted, saving session...");
+                    if let Err(e) = session.save().await {
+                        eprintln!("Failed to save session: {}", e);
+                        return Redirect::to("/login?error=session_save_error");
+                    }
+                    eprintln!("Session saved successfully, redirecting to /");
+                    Redirect::to("/")
                 }
-                Redirect::to("/")
+                Err(e) => {
+                    eprintln!("Google OAuth exchange error: {}", e);
+                    Redirect::to("/login?error=oauth_error")
+                }
             }
-            Err(e) => {
-                tracing::error!("Google OAuth error: {}", e);
-                Redirect::to("/login?error=oauth_error")
-            }
-        },
+        }
         Err(e) => {
-            tracing::error!("Failed to create Google OAuth: {}", e);
+            eprintln!("Failed to create Google OAuth: {}", e);
             Redirect::to("/login?error=config_error")
         }
     }
@@ -235,10 +249,11 @@ fn WebNavbar() -> Element {
                 border-radius: 4px;
                 cursor: pointer;
                 font-size: 0.875rem;
+                color: inherit;
             }}
 
             .nav-logout-btn:hover {{
-                background: rgba(0, 0, 0, 0.1);
+                background: rgba(255, 255, 255, 0.1);
             }}
             "#
         }

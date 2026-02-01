@@ -21,3 +21,7 @@ dx serve
 
 To migrate the DB run:
 `make migrate-run`
+
+You need `sqlx` to be installed.
+
+Run: `cargo install sqlx-cli --no-default-features --features postgres,rustls`
