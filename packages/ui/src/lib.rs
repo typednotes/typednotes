@@ -8,3 +8,6 @@ pub use navbar::Navbar;
 
 mod echo;
 pub use echo::Echo;
+
+mod auth;
+pub use auth::{use_auth, AuthProvider, AuthState, LoginButton, LogoutButton};

@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
-use ui::Navbar;
-use views::{Blog, Home};
+use ui::{AuthProvider, LogoutButton, Navbar, use_auth};
+use views::{Blog, Home, Login};
 
 mod views;
 
@@ -13,25 +13,166 @@ enum Route {
     Home {},
     #[route("/blog/:id")]
     Blog { id: i32 },
+    #[route("/login")]
+    Login {},
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() {
-    dioxus::launch(App);
+    #[cfg(feature = "server")]
+    {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(launch_server());
+    }
+
+    #[cfg(not(feature = "server"))]
+    {
+        dioxus::launch(App);
+    }
+}
+
+#[cfg(feature = "server")]
+async fn launch_server() {
+    use axum::extract::Query;
+    use axum::response::Redirect;
+    use axum::routing::get;
+    use axum::Router;
+    use dioxus::fullstack::prelude::*;
+    use std::time::Duration;
+    use tower_sessions::cookie::SameSite;
+    use tower_sessions::{Expiry, SessionManagerLayer};
+    use tower_sessions_sqlx_store::PostgresStore;
+
+    dotenvy::dotenv().ok();
+
+    // Initialize database pool
+    let pool = api::db::get_pool()
+        .await
+        .expect("Failed to connect to database");
+
+    // Run migrations
+    sqlx::migrate!("../api/migrations")
+        .run(pool)
+        .await
+        .expect("Failed to run migrations");
+
+    // Create session store
+    let session_store = PostgresStore::new(pool.clone());
+
+    // Session layer configuration
+    let session_layer = SessionManagerLayer::new(session_store)
+        .with_secure(false) // Set to true in production with HTTPS
+        .with_same_site(SameSite::Lax)
+        .with_expiry(Expiry::OnInactivity(Duration::from_secs(60 * 60 * 24 * 7).try_into().unwrap())); // 7 days
+
+    // OAuth callback handlers
+    async fn github_callback(
+        Query(params): Query<std::collections::HashMap<String, String>>,
+        session: tower_sessions::Session,
+    ) -> Redirect {
+        let Some(code) = params.get("code") else {
+            tracing::error!("GitHub callback missing code");
+            return Redirect::to("/login?error=missing_code");
+        };
+        let Some(state) = params.get("state") else {
+            tracing::error!("GitHub callback missing state");
+            return Redirect::to("/login?error=missing_state");
+        };
+
+        match api::auth::GitHubOAuth::new() {
+            Ok(oauth) => match oauth.exchange_code(code, state).await {
+                Ok(user) => {
+                    if let Err(e) = session
+                        .insert(api::auth::SESSION_USER_ID_KEY, user.id.to_string())
+                        .await
+                    {
+                        tracing::error!("Failed to set session: {}", e);
+                        return Redirect::to("/login?error=session_error");
+                    }
+                    Redirect::to("/")
+                }
+                Err(e) => {
+                    tracing::error!("GitHub OAuth error: {}", e);
+                    Redirect::to("/login?error=oauth_error")
+                }
+            },
+            Err(e) => {
+                tracing::error!("Failed to create GitHub OAuth: {}", e);
+                Redirect::to("/login?error=config_error")
+            }
+        }
+    }
+
+    async fn google_callback(
+        Query(params): Query<std::collections::HashMap<String, String>>,
+        session: tower_sessions::Session,
+    ) -> Redirect {
+        let Some(code) = params.get("code") else {
+            tracing::error!("Google callback missing code");
+            return Redirect::to("/login?error=missing_code");
+        };
+        let Some(state) = params.get("state") else {
+            tracing::error!("Google callback missing state");
+            return Redirect::to("/login?error=missing_state");
+        };
+
+        match api::auth::GoogleOAuth::new() {
+            Ok(oauth) => match oauth.exchange_code(code, state).await {
+                Ok(user) => {
+                    if let Err(e) = session
+                        .insert(api::auth::SESSION_USER_ID_KEY, user.id.to_string())
+                        .await
+                    {
+                        tracing::error!("Failed to set session: {}", e);
+                        return Redirect::to("/login?error=session_error");
+                    }
+                    Redirect::to("/")
+                }
+                Err(e) => {
+                    tracing::error!("Google OAuth error: {}", e);
+                    Redirect::to("/login?error=oauth_error")
+                }
+            },
+            Err(e) => {
+                tracing::error!("Failed to create Google OAuth: {}", e);
+                Redirect::to("/login?error=config_error")
+            }
+        }
+    }
+
+    // Build the Dioxus app with custom routes
+    let app = Router::new()
+        .route("/auth/github/callback", get(github_callback))
+        .route("/auth/google/callback", get(google_callback))
+        .layer(session_layer.clone())
+        .serve_dioxus_application(ServeConfig::new().unwrap(), || {
+            VirtualDom::new(App)
+        })
+        .await
+        .layer(session_layer);
+
+    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], 8080));
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    tracing::info!("Listening on {}", addr);
+
+    axum::serve(listener, app.into_make_service())
+        .await
+        .unwrap();
 }
 
 #[component]
 fn App() -> Element {
-    // Build cool things ✌️
-
     rsx! {
         // Global app resources
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
 
-        Router::<Route> {}
+        AuthProvider {
+            Router::<Route> {}
+        }
     }
 }
 
@@ -39,6 +180,8 @@ fn App() -> Element {
 /// which allows us to use the web-specific `Route` enum.
 #[component]
 fn WebNavbar() -> Element {
+    let auth = use_auth();
+
     rsx! {
         Navbar {
             Link {
@@ -49,8 +192,51 @@ fn WebNavbar() -> Element {
                 to: Route::Blog { id: 1 },
                 "Blog"
             }
+
+            // Show login/logout based on auth state
+            if auth().loading {
+                span { "..." }
+            } else if let Some(user) = auth().user {
+                span {
+                    style: "display: flex; align-items: center; gap: 0.5rem;",
+                    if let Some(avatar) = &user.avatar_url {
+                        img {
+                            src: "{avatar}",
+                            alt: "Avatar",
+                            style: "width: 24px; height: 24px; border-radius: 50%;",
+                        }
+                    }
+                    span { "{user.display_name()}" }
+                    LogoutButton {
+                        label: "Logout",
+                        class: "nav-logout-btn",
+                    }
+                }
+            } else {
+                Link {
+                    to: Route::Login {},
+                    "Login"
+                }
+            }
         }
 
         Outlet::<Route> {}
+
+        style {
+            r#"
+            .nav-logout-btn {{
+                background: transparent;
+                border: 1px solid currentColor;
+                padding: 0.25rem 0.5rem;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 0.875rem;
+            }}
+
+            .nav-logout-btn:hover {{
+                background: rgba(0, 0, 0, 0.1);
+            }}
+            "#
+        }
     }
 }

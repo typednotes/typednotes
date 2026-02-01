@@ -5,6 +5,31 @@ edition = "2021"
 
 [dependencies]
 dioxus = { workspace = true, features = ["fullstack"] }
+serde = { version = "1.0", features = ["derive"] }
+
+# Server-only dependencies
+oauth2 = { version = "5.0", optional = true }
+tower-sessions = { version = "0.14", optional = true }
+tower-sessions-sqlx-store = { version = "0.15", features = ["postgres"], optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono"], optional = true }
+uuid = { version = "1.0", features = ["v4", "serde"], optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+reqwest = { version = "0.12", features = ["json"], optional = true }
+thiserror = { version = "2.0", optional = true }
+dotenvy = { version = "0.15", optional = true }
+tokio = { version = "1", features = ["sync"], optional = true }
 
 [features]
-server = ["dioxus/server"]
+server = [
+    "dioxus/server",
+    "oauth2",
+    "tower-sessions",
+    "tower-sessions-sqlx-store",
+    "sqlx",
+    "uuid",
+    "chrono",
+    "reqwest",
+    "thiserror",
+    "dotenvy",
+    "tokio",
+]
