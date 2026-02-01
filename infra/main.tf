@@ -22,3 +22,11 @@ provider "scaleway" {
 #   name = "typednotes-${var.environment}"
 #   acl  = "private"
 # }
+
+# Serverless SQL Database (PostgreSQL)
+resource "scaleway_sdb_sql_database" "main" {
+  name    = "typednotes-${var.environment}"
+  min_cpu = var.sdb_min_cpu
+  max_cpu = var.sdb_max_cpu
+  region  = var.scw_region
+}

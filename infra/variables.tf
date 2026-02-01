@@ -35,3 +35,16 @@ variable "environment" {
   type        = string
   default     = "dev"
 }
+
+# Serverless SQL Database configuration
+variable "sdb_min_cpu" {
+  description = "Minimum CPU units for the serverless database (0 = scale to zero)"
+  type        = number
+  default     = 0
+}
+
+variable "sdb_max_cpu" {
+  description = "Maximum CPU units for the serverless database (1-15)"
+  type        = number
+  default     = 4
+}

@@ -1,5 +1,15 @@
 # Output values
-# Uncomment when resources are defined
+
+# Serverless SQL Database outputs
+output "sdb_endpoint" {
+  description = "Serverless SQL Database endpoint"
+  value       = scaleway_sdb_sql_database.main.endpoint
+}
+
+output "sdb_id" {
+  description = "Serverless SQL Database ID"
+  value       = scaleway_sdb_sql_database.main.id
+}
 
 # output "container_namespace_id" {
 #   description = "Container namespace ID"
