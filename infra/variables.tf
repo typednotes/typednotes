@@ -1,23 +1,30 @@
-# Scaleway credentials
-variable "scw_access_key" {
-  description = "Scaleway access key"
+# Scaleway IAM Application credentials (service account)
+# These credentials are used for both Scaleway API access and database authentication
+variable "scw_application_id" {
+  description = "Scaleway IAM Application ID (UUID)"
+  type        = string
+}
+
+variable "scw_application_access_key" {
+  description = "Scaleway IAM Application access key"
   type        = string
   sensitive   = true
 }
 
-variable "scw_secret_key" {
-  description = "Scaleway secret key"
+variable "scw_application_secret_key" {
+  description = "Scaleway IAM Application secret key (also used for database authentication)"
   type        = string
   sensitive   = true
+}
+
+# Scaleway organization and project
+variable "scw_organization_id" {
+  description = "Scaleway organization ID"
+  type        = string
 }
 
 variable "scw_project_id" {
   description = "Scaleway project ID"
-  type        = string
-}
-
-variable "scw_organization_id" {
-  description = "Scaleway organization ID"
   type        = string
 }
 
@@ -52,10 +59,4 @@ variable "sdb_max_cpu" {
   description = "Maximum CPU units for the serverless database (1-15)"
   type        = number
   default     = 4
-}
-
-# Database credentials - use IAM application ID and secret key
-variable "db_application_id" {
-  description = "IAM Application ID for database access (from Scaleway console)"
-  type        = string
 }

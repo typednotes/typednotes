@@ -17,3 +17,7 @@ and serve:
 dx serve
 ```
 
+# Migrations
+
+To migrate the DB run:
+`make migrate-run`
