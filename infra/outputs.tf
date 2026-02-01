@@ -22,3 +22,25 @@ output "sdb_password" {
   value       = var.scw_application_secret_key
   sensitive   = true
 }
+
+# Container Registry outputs
+output "registry_endpoint" {
+  description = "Container registry endpoint"
+  value       = scaleway_registry_namespace.main.endpoint
+}
+
+output "registry_namespace" {
+  description = "Container registry namespace name"
+  value       = scaleway_registry_namespace.main.name
+}
+
+# Serverless Container outputs
+output "container_url" {
+  description = "Serverless container URL"
+  value       = scaleway_container.web.domain_name
+}
+
+output "container_id" {
+  description = "Serverless container ID"
+  value       = scaleway_container.web.id
+}

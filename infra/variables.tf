@@ -60,3 +60,79 @@ variable "sdb_max_cpu" {
   type        = number
   default     = 4
 }
+
+# Serverless Container configuration
+variable "container_image" {
+  description = "Container image to deploy (leave empty to use registry)"
+  type        = string
+  default     = ""
+}
+
+variable "container_cpu_limit" {
+  description = "CPU limit for the container in millicores (70-1120)"
+  type        = number
+  default     = 140
+}
+
+variable "container_memory_limit" {
+  description = "Memory limit for the container in MB (128-4096)"
+  type        = number
+  default     = 256
+}
+
+variable "container_min_scale" {
+  description = "Minimum number of container instances (0 = scale to zero)"
+  type        = number
+  default     = 0
+}
+
+variable "container_max_scale" {
+  description = "Maximum number of container instances"
+  type        = number
+  default     = 5
+}
+
+variable "container_deploy" {
+  description = "Whether to deploy the container immediately"
+  type        = bool
+  default     = true
+}
+
+# OAuth configuration
+variable "google_client_id" {
+  description = "Google OAuth Client ID"
+  type        = string
+  default     = ""
+}
+
+variable "google_client_secret" {
+  description = "Google OAuth Client Secret"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "google_auth_redirect_uri" {
+  description = "Google OAuth redirect URI"
+  type        = string
+  default     = ""
+}
+
+variable "github_client_id" {
+  description = "GitHub OAuth Client ID"
+  type        = string
+  default     = ""
+}
+
+variable "github_client_secret" {
+  description = "GitHub OAuth Client Secret"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "github_auth_redirect_uri" {
+  description = "GitHub OAuth redirect URI"
+  type        = string
+  default     = ""
+}
