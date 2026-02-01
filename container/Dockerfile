@@ -6,13 +6,15 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     binaryen \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Add wasm target
 RUN rustup target add wasm32-unknown-unknown
 
-# Install dioxus-cli
-RUN cargo install dioxus-cli --locked
+# Install dioxus-cli using pre-built binary
+RUN curl -fsSL https://github.com/DioxusLabs/dioxus/releases/download/v0.7.1/dx-x86_64-unknown-linux-gnu.tar.gz \
+    | tar -xz -C /usr/local/bin
 
 # Create app directory
 WORKDIR /app
