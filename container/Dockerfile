@@ -12,9 +12,8 @@ RUN apt-get update && apt-get install -y \
 # Add wasm target
 RUN rustup target add wasm32-unknown-unknown
 
-# Install dioxus-cli using cargo-binstall (faster than compiling)
-RUN curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash && \
-    cargo binstall dioxus-cli@0.7.1 --no-confirm && \
+# Install dioxus-cli from source (with limited parallelism to reduce memory)
+RUN CARGO_BUILD_JOBS=2 cargo install dioxus-cli@0.7.1 --locked && \
     dx --version
 
 # Create app directory
