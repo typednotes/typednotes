@@ -1,0 +1,46 @@
+# Output values
+
+# Serverless SQL Database outputs
+output "sdb_id" {
+  description = "Serverless SQL Database ID"
+  value       = scaleway_sdb_sql_database.main.id
+}
+
+output "sdb_endpoint" {
+  description = "Serverless SQL Database endpoint (without credentials)"
+  value       = scaleway_sdb_sql_database.main.endpoint
+}
+
+# Database credentials (from IAM Application)
+output "sdb_username" {
+  description = "Database username (IAM Application ID)"
+  value       = var.scw_application_id
+}
+
+output "sdb_password" {
+  description = "Database password (IAM Application secret key)"
+  value       = var.scw_application_secret_key
+  sensitive   = true
+}
+
+# Container Registry outputs
+output "registry_endpoint" {
+  description = "Container registry endpoint"
+  value       = scaleway_registry_namespace.main.endpoint
+}
+
+output "registry_namespace" {
+  description = "Container registry namespace name"
+  value       = scaleway_registry_namespace.main.name
+}
+
+# Serverless Container outputs
+output "container_url" {
+  description = "Serverless container URL"
+  value       = scaleway_container.web.domain_name
+}
+
+output "container_id" {
+  description = "Serverless container ID"
+  value       = scaleway_container.web.id
+}
