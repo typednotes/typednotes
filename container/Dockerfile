@@ -11,19 +11,19 @@ RUN apt-get update && apt-get install -y \
 # Add wasm target
 RUN rustup target add wasm32-unknown-unknown
 
-# Install wasm-bindgen-cli
-RUN cargo install wasm-bindgen-cli@0.2.100 --locked
+# Install wasm-bindgen-cli (limit jobs to reduce memory usage)
+RUN CARGO_BUILD_JOBS=2 cargo install wasm-bindgen-cli@0.2.100 --locked
 
 WORKDIR /app
 
 # Copy everything
 COPY . .
 
-# Build the server
-RUN cargo build --release -p web --features server
+# Build the server (limit jobs to reduce memory usage)
+RUN CARGO_BUILD_JOBS=2 cargo build --release -p web --features server
 
-# Build the WASM client
-RUN cargo build --release -p web --target wasm32-unknown-unknown --features web
+# Build the WASM client (limit jobs to reduce memory usage)
+RUN CARGO_BUILD_JOBS=2 cargo build --release -p web --target wasm32-unknown-unknown --features web
 
 # Process WASM with wasm-bindgen
 RUN mkdir -p dist/assets && \

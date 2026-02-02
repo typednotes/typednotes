@@ -26,6 +26,11 @@ jobs:
             echo "::warning::Scaleway secrets not configured. Skipping push."
           fi
 
+      - name: Set up swap space
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 10
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
