@@ -13,8 +13,11 @@ RUN apt-get update && apt-get install -y \
 RUN rustup target add wasm32-unknown-unknown
 
 # Install dioxus-cli using pre-built binary
-RUN curl -fsSL https://github.com/DioxusLabs/dioxus/releases/download/v0.7.1/dx-x86_64-unknown-linux-gnu.tar.gz \
-    | tar -xz -C /usr/local/bin
+RUN curl -fsSL https://github.com/DioxusLabs/dioxus/releases/download/v0.7.1/dx-x86_64-unknown-linux-gnu.tar.gz -o /tmp/dx.tar.gz && \
+    tar -xzf /tmp/dx.tar.gz -C /usr/local/bin && \
+    chmod +x /usr/local/bin/dx && \
+    rm /tmp/dx.tar.gz && \
+    dx --version
 
 # Create app directory
 WORKDIR /app
@@ -22,8 +25,8 @@ WORKDIR /app
 # Copy everything (simpler approach for now)
 COPY . .
 
-# Debug: check dx version and project structure
-RUN dx --version && ls -la && ls -la packages/
+# Debug: check project structure
+RUN ls -la && ls -la packages/
 
 # Build the fullstack app
 RUN RUST_BACKTRACE=1 dx bundle --fullstack --release --debug-symbols=false 2>&1 | tee /tmp/build.log; \
