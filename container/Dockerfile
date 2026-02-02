@@ -19,39 +19,20 @@ RUN curl -fsSL https://github.com/DioxusLabs/dioxus/releases/download/v0.7.1/dx-
 # Create app directory
 WORKDIR /app
 
-# Copy manifests first for better caching
-COPY Cargo.toml Cargo.lock ./
-COPY packages/api/Cargo.toml packages/api/Cargo.toml
-COPY packages/ui/Cargo.toml packages/ui/Cargo.toml
-COPY packages/web/Cargo.toml packages/web/Cargo.toml
-COPY packages/desktop/Cargo.toml packages/desktop/Cargo.toml
-COPY packages/mobile/Cargo.toml packages/mobile/Cargo.toml
+# Copy everything (simpler approach for now)
+COPY . .
 
-# Create dummy source files for dependency caching
-RUN mkdir -p packages/api/src packages/ui/src packages/web/src packages/desktop/src packages/mobile/src \
-    && echo "fn main() {}" > packages/web/src/main.rs \
-    && echo "fn main() {}" > packages/desktop/src/main.rs \
-    && echo "fn main() {}" > packages/mobile/src/main.rs \
-    && echo "" > packages/api/src/lib.rs \
-    && echo "" > packages/ui/src/lib.rs
+# Debug: check dx version and project structure
+RUN dx --version && ls -la && ls -la packages/
 
-# Build dependencies (this layer is cached)
-RUN cargo build --release -p web || true
-
-# Copy actual source code and assets
-COPY packages/api/src packages/api/src
-COPY packages/api/migrations packages/api/migrations
-COPY packages/ui/src packages/ui/src
-COPY packages/web/src packages/web/src
-COPY packages/web/assets packages/web/assets
-
-# Touch files to invalidate cache
-RUN touch packages/api/src/lib.rs packages/ui/src/lib.rs packages/web/src/main.rs
-
-# Build the fullstack app with verbose output
-RUN dx bundle --fullstack --release --debug-symbols=false --verbose 2>&1 || \
-    (echo "=== Build failed, showing cargo output ===" && \
-     cargo build --release -p web --features server 2>&1 && false)
+# Build the fullstack app
+RUN RUST_BACKTRACE=1 dx bundle --fullstack --release --debug-symbols=false 2>&1 | tee /tmp/build.log; \
+    exit_code=$?; \
+    if [ $exit_code -ne 0 ]; then \
+        echo "=== Build failed with exit code $exit_code ==="; \
+        cat /tmp/build.log; \
+        exit $exit_code; \
+    fi
 
 # Runtime stage
 FROM debian:bookworm-slim

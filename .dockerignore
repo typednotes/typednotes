@@ -1,0 +1,7 @@
+target/
+.git/
+.env
+*.log
+.DS_Store
+infra/.terraform/
+infra/*.tfstate*
