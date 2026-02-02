@@ -38,16 +38,20 @@ RUN mkdir -p packages/api/src packages/ui/src packages/web/src packages/desktop/
 # Build dependencies (this layer is cached)
 RUN cargo build --release -p web || true
 
-# Copy actual source code
-COPY packages/api packages/api
-COPY packages/ui packages/ui
-COPY packages/web packages/web
+# Copy actual source code and assets
+COPY packages/api/src packages/api/src
+COPY packages/api/migrations packages/api/migrations
+COPY packages/ui/src packages/ui/src
+COPY packages/web/src packages/web/src
+COPY packages/web/assets packages/web/assets
 
 # Touch files to invalidate cache
 RUN touch packages/api/src/lib.rs packages/ui/src/lib.rs packages/web/src/main.rs
 
-# Build the fullstack app
-RUN dx bundle --fullstack --release --debug-symbols=false
+# Build the fullstack app with verbose output
+RUN dx bundle --fullstack --release --debug-symbols=false --verbose 2>&1 || \
+    (echo "=== Build failed, showing cargo output ===" && \
+     cargo build --release -p web --features server 2>&1 && false)
 
 # Runtime stage
 FROM debian:bookworm-slim
