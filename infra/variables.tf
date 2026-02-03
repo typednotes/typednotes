@@ -91,6 +91,13 @@ variable "container_deploy" {
   default     = true
 }
 
+# Domain configuration
+variable "domain_name" {
+  description = "Custom domain name for the application"
+  type        = string
+  default     = "typednotes.org"
+}
+
 # OAuth configuration
 variable "google_client_id" {
   description = "Google OAuth Client ID"
@@ -105,12 +112,6 @@ variable "google_client_secret" {
   default     = ""
 }
 
-variable "google_auth_redirect_uri" {
-  description = "Google OAuth redirect URI"
-  type        = string
-  default     = ""
-}
-
 variable "github_client_id" {
   description = "GitHub OAuth Client ID"
   type        = string
@@ -121,11 +122,5 @@ variable "github_client_secret" {
   description = "GitHub OAuth Client Secret"
   type        = string
   sensitive   = true
-  default     = ""
-}
-
-variable "github_auth_redirect_uri" {
-  description = "GitHub OAuth redirect URI"
-  type        = string
   default     = ""
 }

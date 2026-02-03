@@ -23,7 +23,7 @@ resource "scaleway_container_namespace" "main" {
   region      = var.scw_region
 
   secret_environment_variables = {
-    DATABASE_URL = "postgres://${var.scw_application_id}:${var.scw_application_secret_key}@${scaleway_sdb_sql_database.main.endpoint}"
+    DATABASE_URL = "postgres://${var.scw_application_id}:${var.scw_application_secret_key}@${scaleway_sdb_sql_database.main.endpoint}?sslmode=require"
   }
 }
 
@@ -39,6 +39,7 @@ resource "scaleway_container" "web" {
   max_scale      = var.container_max_scale
   privacy        = "public"
   protocol       = "http1"
+  sandbox        = "v2"
   deploy         = var.container_deploy
   region         = var.scw_region
 
@@ -48,12 +49,42 @@ resource "scaleway_container" "web" {
   }
 
   secret_environment_variables = {
-    DATABASE_URL              = "postgres://${var.scw_application_id}:${var.scw_application_secret_key}@${scaleway_sdb_sql_database.main.endpoint}"
+    DATABASE_URL              = "postgres://${var.scw_application_id}:${var.scw_application_secret_key}@${scaleway_sdb_sql_database.main.endpoint}?sslmode=require"
     GOOGLE_CLIENT_ID          = var.google_client_id
     GOOGLE_CLIENT_SECRET      = var.google_client_secret
-    GOOGLE_AUTH_REDIRECT_URI  = var.google_auth_redirect_uri
+    GOOGLE_AUTH_REDIRECT_URI  = "https://${var.domain_name}/auth/google/callback"
     GITHUB_CLIENT_ID          = var.github_client_id
     GITHUB_CLIENT_SECRET      = var.github_client_secret
-    GITHUB_AUTH_REDIRECT_URI  = var.github_auth_redirect_uri
+    GITHUB_AUTH_REDIRECT_URI  = "https://${var.domain_name}/auth/github/callback"
   }
+}
+
+# Custom domain for the container (apex)
+resource "scaleway_container_domain" "main" {
+  container_id = scaleway_container.web.id
+  hostname     = var.domain_name
+}
+
+# Custom domain for the container (www)
+resource "scaleway_container_domain" "www" {
+  container_id = scaleway_container.web.id
+  hostname     = "www.${var.domain_name}"
+}
+
+# DNS record pointing to the container (ALIAS for apex domain)
+resource "scaleway_domain_record" "container" {
+  dns_zone = var.domain_name
+  name     = ""
+  type     = "ALIAS"
+  data     = "${scaleway_container.web.domain_name}."
+  ttl      = 3600
+}
+
+# WWW subdomain redirect
+resource "scaleway_domain_record" "www" {
+  dns_zone = var.domain_name
+  name     = "www"
+  type     = "CNAME"
+  data     = "${scaleway_container.web.domain_name}."
+  ttl      = 3600
 }

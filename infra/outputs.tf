@@ -33,3 +33,9 @@ output "container_id" {
   description = "Serverless container ID"
   value       = scaleway_container.web.id
 }
+
+# Custom domain
+output "app_url" {
+  description = "Application URL (custom domain)"
+  value       = "https://${var.domain_name}"
+}
