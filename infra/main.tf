@@ -23,7 +23,7 @@ resource "scaleway_container_namespace" "main" {
   region      = var.scw_region
 
   secret_environment_variables = {
-    DATABASE_URL = "postgres://${var.scw_application_id}:${var.scw_application_secret_key}@${scaleway_sdb_sql_database.main.endpoint}?sslmode=require"
+    DATABASE_URL = "postgres://${var.scw_application_id}:${var.scw_application_secret_key}@${replace(scaleway_sdb_sql_database.main.endpoint, "postgres://", "")}"
   }
 }
 
@@ -49,7 +49,7 @@ resource "scaleway_container" "web" {
   }
 
   secret_environment_variables = {
-    DATABASE_URL              = "postgres://${var.scw_application_id}:${var.scw_application_secret_key}@${scaleway_sdb_sql_database.main.endpoint}?sslmode=require"
+    DATABASE_URL              = "postgres://${var.scw_application_id}:${var.scw_application_secret_key}@${replace(scaleway_sdb_sql_database.main.endpoint, "postgres://", "")}"
     GOOGLE_CLIENT_ID          = var.google_client_id
     GOOGLE_CLIENT_SECRET      = var.google_client_secret
     GOOGLE_AUTH_REDIRECT_URI  = "https://${var.domain_name}/auth/google/callback"
