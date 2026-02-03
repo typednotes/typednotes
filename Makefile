@@ -25,15 +25,15 @@ infra-up: tfvars
 	SDB_USERNAME=$$(cd infra && tofu output -raw sdb_username); \
 	SDB_PASSWORD=$$(cd infra && tofu output -raw sdb_password); \
 	DATABASE_URL=$$(echo "$$SDB_ENDPOINT" | sed "s|postgres://|postgres://$$SDB_USERNAME:$$SDB_PASSWORD@|"); \
-	SCW_REGISTRY_ENDPOINT=$$(cd infra && tofu output -raw registry_endpoint); \
 	SCW_CONTAINER_ID=$$(cd infra && tofu output -raw container_id); \
+	SCW_CONTAINER_URL=$$(cd infra && tofu output -raw container_url); \
 	sops --set='["database"]["serverless_db"]["id"] "'"$$SDB_ID"'"' secrets.yaml; \
 	sops --set='["database"]["serverless_db"]["endpoint"] "'"$$SDB_ENDPOINT"'"' secrets.yaml; \
 	sops --set='["database"]["serverless_db"]["username"] "'"$$SDB_USERNAME"'"' secrets.yaml; \
 	sops --set='["database"]["serverless_db"]["password"] "'"$$SDB_PASSWORD"'"' secrets.yaml; \
 	sops --set='["database"]["database_url"] "'"$$DATABASE_URL"'"' secrets.yaml; \
-	sops --set='["cloud"]["scaleway"]["registry_endpoint"] "'"$$SCW_REGISTRY_ENDPOINT"'"' secrets.yaml; \
-	sops --set='["cloud"]["scaleway"]["container_id"] "'"$$SCW_CONTAINER_ID"'"' secrets.yaml
+	sops --set='["cloud"]["scaleway"]["container_id"] "'"$$SCW_CONTAINER_ID"'"' secrets.yaml; \
+	sops --set='["cloud"]["scaleway"]["container_url"] "'"$$SCW_CONTAINER_URL"'"' secrets.yaml
 	@echo "Infrastructure deployed. Secrets updated in secrets.yaml"
 
 .PHONY: infra-down
@@ -46,8 +46,8 @@ env:
 	@sops decrypt secrets.yaml | yq -r '"DATABASE_URL=" + .database.database_url' > .env
 	@sops decrypt secrets.yaml | yq -r '"SDB_ID=" + .database.serverless_db.id' >> .env
 	@sops decrypt secrets.yaml | yq -r '"SDB_ENDPOINT=" + .database.serverless_db.endpoint' >> .env
-	@sops decrypt secrets.yaml | yq -r '"SCW_REGISTRY_ENDPOINT=" + .cloud.scaleway.registry_endpoint' >> .env
 	@sops decrypt secrets.yaml | yq -r '"SCW_CONTAINER_ID=" + .cloud.scaleway.container_id' >> .env
+	@sops decrypt secrets.yaml | yq -r '"SCW_CONTAINER_URL=" + .cloud.scaleway.container_url' >> .env
 	@sops decrypt secrets.yaml | yq -r '"GITHUB_CLIENT_ID=" + .identity.github.dev.client_id' >> .env
 	@sops decrypt secrets.yaml | yq -r '"GITHUB_CLIENT_SECRET=" + .identity.github.dev.client_secret' >> .env
 	@sops decrypt secrets.yaml | yq -r '"GITHUB_REDIRECT_URI=" + .identity.github.dev.redirect_uri' >> .env

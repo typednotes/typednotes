@@ -23,17 +23,6 @@ output "sdb_password" {
   sensitive   = true
 }
 
-# Container Registry outputs
-output "registry_endpoint" {
-  description = "Container registry endpoint"
-  value       = scaleway_registry_namespace.main.endpoint
-}
-
-output "registry_namespace" {
-  description = "Container registry namespace name"
-  value       = scaleway_registry_namespace.main.name
-}
-
 # Serverless Container outputs
 output "container_url" {
   description = "Serverless container URL"

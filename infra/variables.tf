@@ -56,9 +56,9 @@ variable "sdb_max_cpu" {
 
 # Serverless Container configuration
 variable "container_image" {
-  description = "Container image to deploy (leave empty to use registry)"
+  description = "Container image to deploy (must be public)"
   type        = string
-  default     = ""
+  default     = "ghcr.io/typednotes/typednotes:latest"
 }
 
 variable "container_cpu_limit" {

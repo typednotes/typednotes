@@ -16,14 +16,6 @@ resource "scaleway_sdb_sql_database" "main" {
   region  = var.scw_region
 }
 
-# Container Registry Namespace
-resource "scaleway_registry_namespace" "main" {
-  name        = "typednotes"
-  description = "Container registry for TypedNotes"
-  is_public   = false
-  region      = var.scw_region
-}
-
 # Serverless Container Namespace
 resource "scaleway_container_namespace" "main" {
   name        = "typednotes"
@@ -39,7 +31,7 @@ resource "scaleway_container_namespace" "main" {
 resource "scaleway_container" "web" {
   name           = "web"
   namespace_id   = scaleway_container_namespace.main.id
-  registry_image = var.container_image != "" ? var.container_image : "${scaleway_registry_namespace.main.endpoint}/web:latest"
+  registry_image = var.container_image
   port           = 8080
   cpu_limit      = var.container_cpu_limit
   memory_limit   = var.container_memory_limit
@@ -52,6 +44,7 @@ resource "scaleway_container" "web" {
 
   environment_variables = {
     RUST_LOG = "info"
+    IP       = "0.0.0.0"
   }
 
   secret_environment_variables = {
