@@ -2,7 +2,7 @@
 
 .PHONY: init
 init:
-	tofu init
+	tofu init $(ARGS)
 
 .PHONY: plan
 plan:

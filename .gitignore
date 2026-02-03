@@ -16,6 +16,7 @@ infra/*.tfstate
 infra/*.tfstate.*
 infra/terraform.tfvars
 infra/*.auto.tfvars
+infra/backend.hcl
 infra/crash.log
 infra/override.tf
 infra/override.tf.json

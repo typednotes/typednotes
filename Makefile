@@ -14,11 +14,21 @@ tfvars:
 	@sops decrypt secrets.yaml | yq -r '"scw_application_secret_key = \"" + .cloud.scaleway.secret_key + "\""' >> infra/terraform.tfvars
 	@sops decrypt secrets.yaml | yq -r '"scw_organization_id        = \"" + .cloud.scaleway.organization_id + "\""' >> infra/terraform.tfvars
 	@sops decrypt secrets.yaml | yq -r '"scw_project_id             = \"" + .cloud.scaleway.project_id + "\""' >> infra/terraform.tfvars
+	@sops decrypt secrets.yaml | yq -r '"github_client_id           = \"" + .identity.github.prod.client_id + "\""' >> infra/terraform.tfvars
+	@sops decrypt secrets.yaml | yq -r '"github_client_secret       = \"" + .identity.github.prod.client_secret + "\""' >> infra/terraform.tfvars
+	@sops decrypt secrets.yaml | yq -r '"google_client_id           = \"" + .identity.google.client_id + "\""' >> infra/terraform.tfvars
+	@sops decrypt secrets.yaml | yq -r '"google_client_secret       = \"" + .identity.google.client_secret + "\""' >> infra/terraform.tfvars
 	@echo "Generated infra/terraform.tfvars from secrets.yaml"
 
+.PHONY: backend-config
+backend-config:
+	@sops decrypt secrets.yaml | yq -r '"access_key = \"" + .cloud.scaleway.access_key + "\""' > infra/backend.hcl
+	@sops decrypt secrets.yaml | yq -r '"secret_key = \"" + .cloud.scaleway.secret_key + "\""' >> infra/backend.hcl
+	@echo "Generated infra/backend.hcl from secrets.yaml"
+
 .PHONY: infra-up
-infra-up: tfvars
-	$(MAKE) -C infra init
+infra-up: tfvars backend-config
+	$(MAKE) -C infra init ARGS="-backend-config=backend.hcl"
 	$(MAKE) -C infra apply ARGS="-auto-approve"
 	@SDB_ID=$$(cd infra && tofu output -raw sdb_id); \
 	SDB_ENDPOINT=$$(cd infra && tofu output -raw sdb_endpoint); \
@@ -37,7 +47,8 @@ infra-up: tfvars
 	@echo "Infrastructure deployed. Secrets updated in secrets.yaml"
 
 .PHONY: infra-down
-infra-down: tfvars
+infra-down: tfvars backend-config
+	$(MAKE) -C infra init ARGS="-backend-config=backend.hcl"
 	$(MAKE) -C infra destroy ARGS="-auto-approve"
 	@echo "Infrastructure destroyed."
 

@@ -63,12 +63,16 @@ resource "scaleway_container" "web" {
 resource "scaleway_container_domain" "main" {
   container_id = scaleway_container.web.id
   hostname     = var.domain_name
+
+  depends_on = [scaleway_domain_record.container]
 }
 
 # Custom domain for the container (www)
 resource "scaleway_container_domain" "www" {
   container_id = scaleway_container.web.id
   hostname     = "www.${var.domain_name}"
+
+  depends_on = [scaleway_domain_record.www]
 }
 
 # DNS record pointing to the container (ALIAS for apex domain)
