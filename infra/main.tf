@@ -8,9 +8,9 @@ provider "scaleway" {
   zone            = var.scw_zone
 }
 
-# Serverless SQL Database (PostgreSQL)
+# Serverless SQL Database (PostgreSQL) - shared across environments
 resource "scaleway_sdb_sql_database" "main" {
-  name    = "typednotes-${var.environment}"
+  name    = "typednotes"
   min_cpu = var.sdb_min_cpu
   max_cpu = var.sdb_max_cpu
   region  = var.scw_region
@@ -18,7 +18,7 @@ resource "scaleway_sdb_sql_database" "main" {
 
 # Container Registry Namespace
 resource "scaleway_registry_namespace" "main" {
-  name        = "typednotes-${var.environment}"
+  name        = "typednotes"
   description = "Container registry for TypedNotes"
   is_public   = false
   region      = var.scw_region
@@ -26,13 +26,9 @@ resource "scaleway_registry_namespace" "main" {
 
 # Serverless Container Namespace
 resource "scaleway_container_namespace" "main" {
-  name        = "typednotes-${var.environment}"
+  name        = "typednotes"
   description = "Serverless containers for TypedNotes"
   region      = var.scw_region
-
-  environment_variables = {
-    ENVIRONMENT = var.environment
-  }
 
   secret_environment_variables = {
     DATABASE_URL = "postgres://${var.scw_application_id}:${var.scw_application_secret_key}@${scaleway_sdb_sql_database.main.endpoint}"
@@ -55,8 +51,7 @@ resource "scaleway_container" "web" {
   region         = var.scw_region
 
   environment_variables = {
-    ENVIRONMENT = var.environment
-    RUST_LOG    = var.environment == "prod" ? "info" : "debug"
+    RUST_LOG = "info"
   }
 
   secret_environment_variables = {

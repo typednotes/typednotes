@@ -41,13 +41,6 @@ variable "scw_zone" {
   default     = "fr-par-1"
 }
 
-# Environment
-variable "environment" {
-  description = "Environment name (e.g., dev, staging, prod)"
-  type        = string
-  default     = "dev"
-}
-
 # Serverless SQL Database configuration
 variable "sdb_min_cpu" {
   description = "Minimum CPU units for the serverless database (0 = scale to zero)"
