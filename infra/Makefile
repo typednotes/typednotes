@@ -1,4 +1,5 @@
 # Infrastructure management with OpenTofu
+unexport OTEL_TRACES_EXPORTER
 
 .PHONY: init
 init:

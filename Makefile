@@ -1,4 +1,5 @@
 # A simple makefile for running the server and web app
+unexport OTEL_TRACES_EXPORTER
 
 .PHONY: update
 update:
