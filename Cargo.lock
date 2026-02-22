@@ -49,6 +49,7 @@ dependencies = [
  "reqwest",
  "serde",
  "sqlx",
+ "store",
  "thiserror 2.0.18",
  "tokio",
  "tower-sessions",
@@ -2770,6 +2771,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
 
 [[package]]
+name = "idb"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6554f394e990a1af530a528a7fdcad6e01b29cb1b990f89df3ffd62cf15f7828"
+dependencies = [
+ "indexmap",
+ "js-sys",
+ "num-traits",
+ "thiserror 2.0.18",
+ "tokio",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4361,6 +4377,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rexie"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "887466cfa8a12c08ee4b174998135cea8ff0fd84858627cd793e56535a045bc9"
+dependencies = [
+ "idb",
+ "thiserror 1.0.69",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "rfd"
 version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5117,6 +5144,21 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "store"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "rexie",
+ "serde",
+ "serde-wasm-bindgen",
+ "sha1",
+ "tokio",
+ "toml",
+ "wasm-bindgen",
+ "web-sys",
+]
 
 [[package]]
 name = "string_cache"
@@ -5921,6 +5963,7 @@ dependencies = [
  "api",
  "dioxus",
  "serde",
+ "store",
  "tracing",
  "web-sys",
 ]
@@ -6229,6 +6272,7 @@ dependencies = [
  "dioxus",
  "dotenvy",
  "sqlx",
+ "store",
  "tokio",
  "tower",
  "tower-sessions",

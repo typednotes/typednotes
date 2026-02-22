@@ -6,6 +6,7 @@ members = [
     "packages/desktop",
     "packages/mobile",
     "packages/api",
+    "packages/store",
 ]
 default-members = ["packages/web"]
 
@@ -15,3 +16,4 @@ dioxus = { version = "0.7.1" }
 # workspace
 ui = { path = "packages/ui" }
 api = { path = "packages/api" }
+store = { path = "packages/store" }

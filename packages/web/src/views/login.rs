@@ -8,12 +8,12 @@ use ui::{LoginButton, use_auth};
 pub fn Login() -> Element {
     let auth = use_auth();
 
-    // If already logged in, redirect to home
+    // If already logged in, redirect to notes
     if !auth().loading && auth().user.is_some() {
         #[cfg(target_arch = "wasm32")]
         {
             if let Some(window) = web_sys::window() {
-                let _ = window.location().set_href("/");
+                let _ = window.location().set_href("/notes");
             }
         }
     }
@@ -21,21 +21,21 @@ pub fn Login() -> Element {
     rsx! {
         div {
             class: "login-container",
-            style: "display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 60vh; padding: 2rem;",
+            style: "display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem; background: #ffffff;",
 
             h1 {
-                style: "margin-bottom: 2rem;",
-                "Sign in to TypedNotes"
+                style: "margin-bottom: 0.5rem; color: #37352f; font-weight: 700; font-size: 1.75rem;",
+                "TypedNotes"
             }
 
             p {
-                style: "margin-bottom: 2rem; color: #666;",
+                style: "margin-bottom: 2rem; color: #787774; font-size: 0.9375rem;",
                 "Choose your preferred sign-in method:"
             }
 
             div {
                 class: "login-buttons",
-                style: "display: flex; flex-direction: column; gap: 1rem; width: 100%; max-width: 300px;",
+                style: "display: flex; flex-direction: column; gap: 0.75rem; width: 100%; max-width: 320px;",
 
                 LoginButton {
                     provider: "github",
@@ -57,23 +57,23 @@ pub fn Login() -> Element {
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                padding: 0.75rem 1.5rem;
+                padding: 0.625rem 1.25rem;
                 border: none;
-                border-radius: 6px;
-                font-size: 1rem;
+                border-radius: 4px;
+                font-size: 0.9375rem;
                 font-weight: 500;
                 cursor: pointer;
-                transition: background-color 0.2s, transform 0.1s;
+                transition: background-color 0.15s;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
             }}
 
             .login-btn:hover {{
-                transform: translateY(-1px);
+                opacity: 0.9;
             }}
 
             .login-btn:disabled {{
-                opacity: 0.6;
+                opacity: 0.5;
                 cursor: not-allowed;
-                transform: none;
             }}
 
             .github-btn {{

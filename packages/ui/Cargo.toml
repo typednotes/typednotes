@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 dioxus = { workspace = true }
 api = { workspace = true }
+store = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1"
 

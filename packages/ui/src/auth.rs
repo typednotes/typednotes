@@ -120,11 +120,11 @@ pub fn LogoutButton(
                 user: None,
                 loading: false,
             });
-            // Redirect to home
+            // Redirect to login
             #[cfg(target_arch = "wasm32")]
             {
                 if let Some(window) = web_sys::window() {
-                    let _ = window.location().set_href("/");
+                    let _ = window.location().set_href("/login");
                 }
             }
         }

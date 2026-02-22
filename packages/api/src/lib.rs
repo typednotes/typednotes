@@ -7,12 +7,9 @@ pub mod db;
 pub mod models;
 
 pub use models::UserInfo;
+pub use store::{NamespaceInfo, TypedNoteInfo};
 
-/// Echo the user input on the server.
-#[post("/api/echo")]
-pub async fn echo(input: String) -> Result<String, ServerFnError> {
-    Ok(input)
-}
+pub use store::TypedNotesConfig;
 
 /// Get the current authenticated user from the session.
 #[cfg(feature = "server")]

@@ -1,20 +1,23 @@
 use dioxus::prelude::*;
 
-use ui::{AuthProvider, LogoutButton, Navbar, use_auth};
-use views::{Blog, Home, Login};
+use ui::AuthProvider;
+use views::{Login, NoteDetail, Notes, Settings};
 
 mod views;
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
 enum Route {
-    #[layout(WebNavbar)]
     #[route("/")]
-    Home {},
-    #[route("/blog/:id")]
-    Blog { id: i32 },
+    Root {},
     #[route("/login")]
     Login {},
+    #[route("/notes")]
+    Notes {},
+    #[route("/notes/:note_path")]
+    NoteDetail { note_path: String },
+    #[route("/settings")]
+    Settings {},
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
@@ -113,7 +116,7 @@ async fn github_callback(
                     tracing::error!("Failed to set session: {}", e);
                     return Redirect::to("/login?error=session_error");
                 }
-                Redirect::to("/")
+                Redirect::to("/notes")
             }
             Err(e) => {
                 tracing::error!("GitHub OAuth error: {}", e);
@@ -134,48 +137,38 @@ async fn google_callback(
 ) -> axum::response::Redirect {
     use axum::response::Redirect;
 
-    eprintln!("=== Google callback started ===");
-
     let Some(code) = params.get("code") else {
-        eprintln!("Google callback missing code");
+        tracing::error!("Google callback missing code");
         return Redirect::to("/login?error=missing_code");
     };
     let Some(state) = params.get("state") else {
-        eprintln!("Google callback missing state");
+        tracing::error!("Google callback missing state");
         return Redirect::to("/login?error=missing_state");
     };
 
-    eprintln!("Got code and state, creating OAuth client...");
-
     match api::auth::GoogleOAuth::new() {
-        Ok(oauth) => {
-            eprintln!("OAuth client created, exchanging code...");
-            match oauth.exchange_code(code, state).await {
-                Ok(user) => {
-                    eprintln!("Code exchanged successfully, user: {:?}", user.id);
-                    if let Err(e) = session
-                        .insert(api::auth::SESSION_USER_ID_KEY, user.id.to_string())
-                        .await
-                    {
-                        eprintln!("Failed to insert into session: {}", e);
-                        return Redirect::to("/login?error=session_error");
-                    }
-                    eprintln!("Session data inserted, saving session...");
-                    if let Err(e) = session.save().await {
-                        eprintln!("Failed to save session: {}", e);
-                        return Redirect::to("/login?error=session_save_error");
-                    }
-                    eprintln!("Session saved successfully, redirecting to /");
-                    Redirect::to("/")
+        Ok(oauth) => match oauth.exchange_code(code, state).await {
+            Ok(user) => {
+                if let Err(e) = session
+                    .insert(api::auth::SESSION_USER_ID_KEY, user.id.to_string())
+                    .await
+                {
+                    tracing::error!("Failed to set session: {}", e);
+                    return Redirect::to("/login?error=session_error");
                 }
-                Err(e) => {
-                    eprintln!("Google OAuth exchange error: {}", e);
-                    Redirect::to("/login?error=oauth_error")
+                if let Err(e) = session.save().await {
+                    tracing::error!("Failed to save session: {}", e);
+                    return Redirect::to("/login?error=session_save_error");
                 }
+                Redirect::to("/notes")
             }
-        }
+            Err(e) => {
+                tracing::error!("Google OAuth exchange error: {}", e);
+                Redirect::to("/login?error=oauth_error")
+            }
+        },
         Err(e) => {
-            eprintln!("Failed to create Google OAuth: {}", e);
+            tracing::error!("Failed to create Google OAuth: {}", e);
             Redirect::to("/login?error=config_error")
         }
     }
@@ -194,68 +187,10 @@ fn App() -> Element {
     }
 }
 
-/// A web-specific Router around the shared `Navbar` component
-/// which allows us to use the web-specific `Route` enum.
+/// Redirect `/` to `/notes`
 #[component]
-fn WebNavbar() -> Element {
-    let auth = use_auth();
-
-    rsx! {
-        Navbar {
-            Link {
-                to: Route::Home {},
-                "Home"
-            }
-            Link {
-                to: Route::Blog { id: 1 },
-                "Blog"
-            }
-
-            // Show login/logout based on auth state
-            if auth().loading {
-                span { "..." }
-            } else if let Some(user) = auth().user {
-                span {
-                    style: "display: flex; align-items: center; gap: 0.5rem;",
-                    if let Some(avatar) = &user.avatar_url {
-                        img {
-                            src: "{avatar}",
-                            alt: "Avatar",
-                            style: "width: 24px; height: 24px; border-radius: 50%;",
-                        }
-                    }
-                    span { "{user.display_name()}" }
-                    LogoutButton {
-                        label: "Logout",
-                        class: "nav-logout-btn",
-                    }
-                }
-            } else {
-                Link {
-                    to: Route::Login {},
-                    "Login"
-                }
-            }
-        }
-
-        Outlet::<Route> {}
-
-        style {
-            r#"
-            .nav-logout-btn {{
-                background: transparent;
-                border: 1px solid currentColor;
-                padding: 0.25rem 0.5rem;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 0.875rem;
-                color: inherit;
-            }}
-
-            .nav-logout-btn:hover {{
-                background: rgba(255, 255, 255, 0.1);
-            }}
-            "#
-        }
-    }
+fn Root() -> Element {
+    let nav = use_navigator();
+    nav.replace(Route::Notes {});
+    rsx! {}
 }
