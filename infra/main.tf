@@ -56,6 +56,7 @@ resource "scaleway_container" "web" {
     GITHUB_CLIENT_ID          = var.github_client_id
     GITHUB_CLIENT_SECRET      = var.github_client_secret
     GITHUB_AUTH_REDIRECT_URI  = "https://${var.domain_name}/auth/github/callback"
+    ENCRYPTION_KEY            = var.encryption_key
   }
 }
 

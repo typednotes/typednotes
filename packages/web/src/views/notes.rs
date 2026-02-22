@@ -29,11 +29,34 @@ pub fn Notes() -> Element {
     let nav = use_navigator();
     let auth = use_auth();
 
-    // Load notes from store on mount
+    // Load notes from store on mount, then pull from git in background
     let _loader = use_resource(move || async move {
         let repo = make_repo();
         notes.set(repo.list_notes().await);
         namespaces.set(repo.list_namespaces().await);
+
+        // Background git pull — silently ignored if user has no git config
+        spawn(async move {
+            if let Ok(remote_files) = api::pull_notes().await {
+                let repo = make_repo();
+                for file in &remote_files {
+                    // Derive note type from file extension
+                    let ext = file
+                        .path
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or("md");
+                    let note_type = store::models::note_type_from_ext(ext);
+                    // Strip extension for the stem
+                    let stem = file.path.trim_end_matches(&format!(".{ext}"));
+                    repo.write_note(stem, &file.content, note_type).await;
+                }
+                if !remote_files.is_empty() {
+                    notes.set(repo.list_notes().await);
+                    namespaces.set(repo.list_namespaces().await);
+                }
+            }
+        });
     });
 
     let on_select_note = move |path: String| {
@@ -47,6 +70,13 @@ pub fn Notes() -> Element {
         new_note_namespace.set(ns);
         show_new_note.set(true);
         show_new_namespace.set(false);
+    };
+
+    let on_create_namespace = move |parent: Option<String>| {
+        let prefix = parent.map(|p| format!("{p}/")).unwrap_or_default();
+        new_ns_name.set(prefix);
+        show_new_namespace.set(true);
+        show_new_note.set(false);
     };
 
     let on_navigate_settings = move |_| {
@@ -102,6 +132,7 @@ pub fn Notes() -> Element {
                 user: auth().user,
                 on_select_note: on_select_note,
                 on_create_note: on_create_note,
+                on_create_namespace: on_create_namespace,
                 on_navigate_settings: on_navigate_settings,
             }
 

@@ -19,6 +19,7 @@ tfvars:
 	@sops decrypt secrets.yaml | yq -r '"github_client_secret       = \"" + .identity.github.prod.client_secret + "\""' >> infra/terraform.tfvars
 	@sops decrypt secrets.yaml | yq -r '"google_client_id           = \"" + .identity.google.client_id + "\""' >> infra/terraform.tfvars
 	@sops decrypt secrets.yaml | yq -r '"google_client_secret       = \"" + .identity.google.client_secret + "\""' >> infra/terraform.tfvars
+	@sops decrypt secrets.yaml | yq -r '"encryption_key             = \"" + .encryption_key + "\""' >> infra/terraform.tfvars
 	@echo "Generated infra/terraform.tfvars from secrets.yaml"
 
 .PHONY: backend-config
@@ -66,6 +67,7 @@ env:
 	@sops decrypt secrets.yaml | yq -r '"GOOGLE_CLIENT_ID=" + .identity.google.client_id' >> .env
 	@sops decrypt secrets.yaml | yq -r '"GOOGLE_CLIENT_SECRET=" + .identity.google.client_secret' >> .env
 	@sops decrypt secrets.yaml | yq -r '"GOOGLE_REDIRECT_URI=" + .identity.google.dev.redirect_uri' >> .env
+	@sops decrypt secrets.yaml | yq -r '"ENCRYPTION_KEY=" + .encryption_key' >> .env
 	@echo "Generated .env from secrets.yaml (dev)"
 
 # Migrations commands

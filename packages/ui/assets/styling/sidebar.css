@@ -34,7 +34,8 @@
     white-space: nowrap;
 }
 
-.sidebar-new-page {
+.sidebar-new-page,
+.sidebar-action-btn {
     background: transparent;
     border: none;
     color: #787774;
@@ -48,7 +49,8 @@
     justify-content: center;
 }
 
-.sidebar-new-page:hover {
+.sidebar-new-page:hover,
+.sidebar-action-btn:hover {
     background: #efefef;
     color: #37352f;
 }
@@ -78,6 +80,40 @@
 
 .namespace-header:hover {
     background: #efefef;
+}
+
+.namespace-name {
+    flex: 1;
+}
+
+.namespace-actions {
+    display: none;
+    align-items: center;
+    gap: 0.125rem;
+    margin-left: auto;
+}
+
+.namespace-header:hover .namespace-actions {
+    display: flex;
+}
+
+.namespace-action-btn {
+    background: transparent;
+    border: none;
+    color: #787774;
+    cursor: pointer;
+    padding: 0.125rem 0.25rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.namespace-action-btn:hover {
+    background: #e3e2e0;
+    color: #37352f;
 }
 
 .namespace-header .icon {

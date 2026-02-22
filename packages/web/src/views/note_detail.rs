@@ -28,6 +28,8 @@ pub fn NoteDetail(note_path: String) -> Element {
     let mut current_note = use_signal(|| Option::<TypedNoteInfo>::None);
     let mut show_new_note = use_signal(|| false);
     let mut new_note_namespace = use_signal(|| Option::<String>::None);
+    let mut show_new_namespace = use_signal(|| false);
+    let mut new_ns_name = use_signal(|| String::new());
     let nav = use_navigator();
     let auth = use_auth();
 
@@ -57,6 +59,28 @@ pub fn NoteDetail(note_path: String) -> Element {
     let on_create_note = move |ns: Option<String>| {
         new_note_namespace.set(ns);
         show_new_note.set(true);
+        show_new_namespace.set(false);
+    };
+
+    let on_create_namespace = move |parent: Option<String>| {
+        let prefix = parent.map(|p| format!("{p}/")).unwrap_or_default();
+        new_ns_name.set(prefix);
+        show_new_namespace.set(true);
+        show_new_note.set(false);
+    };
+
+    let handle_create_namespace = move |_| {
+        let name = new_ns_name().trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        spawn(async move {
+            let repo = make_repo();
+            repo.create_namespace(&name).await;
+            notes.set(repo.list_notes().await);
+            namespaces.set(repo.list_namespaces().await);
+            show_new_namespace.set(false);
+        });
     };
 
     let on_navigate_settings = move |_| {
@@ -77,6 +101,16 @@ pub fn NoteDetail(note_path: String) -> Element {
                     repo.write_note(stem, &content, &note.r#type).await;
                     current_note.set(repo.get_note(&path).await);
                     notes.set(repo.list_notes().await);
+
+                    // Fire-and-forget git sync
+                    let sync_path = path.clone();
+                    let sync_content = content.clone();
+                    let sync_type = note.r#type.clone();
+                    spawn(async move {
+                        if let Err(_e) = api::sync_note(sync_path, sync_content, sync_type).await {
+                            // Git sync failure is non-fatal; note is saved locally
+                        }
+                    });
                 }
             });
         }
@@ -89,6 +123,15 @@ pub fn NoteDetail(note_path: String) -> Element {
             spawn(async move {
                 let repo = make_repo();
                 repo.delete_note(&path).await;
+
+                // Fire-and-forget git delete
+                let del_path = path.clone();
+                spawn(async move {
+                    if let Err(_e) = api::delete_note_remote(del_path).await {
+                        // Git delete sync failure is non-fatal
+                    }
+                });
+
                 nav.push(Route::Notes {});
             });
         }
@@ -129,6 +172,7 @@ pub fn NoteDetail(note_path: String) -> Element {
                 user: auth().user,
                 on_select_note: on_select_note,
                 on_create_note: on_create_note,
+                on_create_namespace: on_create_namespace,
                 on_navigate_settings: on_navigate_settings,
             }
 
@@ -141,6 +185,34 @@ pub fn NoteDetail(note_path: String) -> Element {
                         default_namespace: new_note_namespace(),
                         on_create: handle_create_note,
                         on_cancel: move |_| show_new_note.set(false),
+                    }
+                } else if show_new_namespace() {
+                    div {
+                        class: "new-note-form",
+                        h2 { "New Folder" }
+                        div {
+                            class: "form-field",
+                            label { "Folder name" }
+                            input {
+                                r#type: "text",
+                                placeholder: "my-folder",
+                                value: new_ns_name(),
+                                oninput: move |evt| new_ns_name.set(evt.value()),
+                            }
+                        }
+                        div {
+                            class: "form-actions",
+                            button {
+                                class: "primary",
+                                onclick: handle_create_namespace,
+                                "Create"
+                            }
+                            button {
+                                class: "secondary",
+                                onclick: move |_| show_new_namespace.set(false),
+                                "Cancel"
+                            }
+                        }
                     }
                 } else if let Some(note) = current_note() {
                     NoteEditor {

@@ -31,7 +31,7 @@ pub fn Settings() -> Element {
     let mut git_remote_url = use_signal(String::new);
     let mut ssh_private_key = use_signal(String::new);
     let mut ssh_public_key = use_signal(|| Option::<String>::None);
-    let mut git_save_status = use_signal(|| Option::<&str>::None);
+    let mut git_save_status = use_signal(|| Option::<String>::None);
     let mut git_saving = use_signal(|| false);
 
     // Load data on mount
@@ -57,6 +57,10 @@ pub fn Settings() -> Element {
     };
 
     let on_create_note = move |_ns: Option<String>| {
+        nav.push(Route::Notes {});
+    };
+
+    let on_create_namespace = move |_parent: Option<String>| {
         nav.push(Route::Notes {});
     };
 
@@ -89,10 +93,10 @@ pub fn Settings() -> Element {
                     ssh_public_key.set(creds.ssh_public_key);
                     git_remote_url.set(creds.git_remote_url.unwrap_or_default());
                     ssh_private_key.set(String::new());
-                    git_save_status.set(Some("success"));
+                    git_save_status.set(Some("success".to_string()));
                 }
-                Err(_) => {
-                    git_save_status.set(Some("error"));
+                Err(e) => {
+                    git_save_status.set(Some(e.to_string()));
                 }
             }
             git_saving.set(false);
@@ -112,6 +116,7 @@ pub fn Settings() -> Element {
                 user: auth().user,
                 on_select_note: on_select_note,
                 on_create_note: on_create_note,
+                on_create_namespace: on_create_namespace,
                 on_navigate_settings: on_navigate_settings,
             }
 
@@ -227,10 +232,17 @@ pub fn Settings() -> Element {
                                 disabled: git_saving(),
                                 if git_saving() { "Saving..." } else { "Save Git Settings" }
                             }
-                            if let Some(status) = git_save_status() {
-                                span {
-                                    class: "save-status {status}",
-                                    if status == "success" { "Saved" } else { "Error saving git settings" }
+                            if let Some(ref status) = git_save_status() {
+                                if status == "success" {
+                                    span {
+                                        class: "save-status success",
+                                        "Saved"
+                                    }
+                                } else {
+                                    span {
+                                        class: "save-status error",
+                                        "{status}"
+                                    }
                                 }
                             }
                         }

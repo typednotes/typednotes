@@ -124,3 +124,10 @@ variable "github_client_secret" {
   sensitive   = true
   default     = ""
 }
+
+variable "encryption_key" {
+  description = "AES-256-GCM master encryption key (64 hex chars / 32 bytes)"
+  type        = string
+  sensitive   = true
+  default     = ""
+}

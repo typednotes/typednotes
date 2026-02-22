@@ -82,8 +82,19 @@ async fn launch_server() {
         // Add session layer to all routes
         .layer(session_layer);
 
-    // Use the address from dx serve or default to localhost:8080
-    let addr = dioxus::cli_config::fullstack_address_or_localhost();
+    // Use IP/PORT env vars (set in production), falling back to dioxus default for local dev
+    let addr = {
+        let default = dioxus::cli_config::fullstack_address_or_localhost();
+        let ip = std::env::var("IP")
+            .ok()
+            .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+            .unwrap_or(default.ip());
+        let port = std::env::var("PORT")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(default.port());
+        std::net::SocketAddr::new(ip, port)
+    };
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     tracing::info!("Server listening on {}", addr);
 

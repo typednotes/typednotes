@@ -12,6 +12,7 @@ pub fn Sidebar(
     user: Option<UserInfo>,
     on_select_note: EventHandler<String>,
     on_create_note: EventHandler<Option<String>>,
+    on_create_namespace: EventHandler<Option<String>>,
     on_navigate_settings: EventHandler<()>,
 ) -> Element {
     // Build a tree: root namespaces + root notes
@@ -48,7 +49,13 @@ pub fn Sidebar(
                     }
                 }
                 button {
-                    class: "sidebar-new-page",
+                    class: "sidebar-action-btn",
+                    title: "New folder",
+                    onclick: move |_| on_create_namespace.call(None),
+                    "\u{1F4C1}"
+                }
+                button {
+                    class: "sidebar-action-btn",
                     title: "New page",
                     onclick: move |_| on_create_note.call(None),
                     "+"
@@ -69,6 +76,7 @@ pub fn Sidebar(
                         active_path: active_path.clone(),
                         on_select_note: on_select_note,
                         on_create_note: on_create_note,
+                        on_create_namespace: on_create_namespace,
                     }
                 }
 
@@ -138,6 +146,7 @@ fn NamespaceNode(
     active_path: Option<String>,
     on_select_note: EventHandler<String>,
     on_create_note: EventHandler<Option<String>>,
+    on_create_namespace: EventHandler<Option<String>>,
 ) -> Element {
     let mut expanded = use_signal(|| true);
 
@@ -160,7 +169,34 @@ fn NamespaceNode(
                     class: "icon",
                     if expanded() { "\u{25BE}" } else { "\u{25B8}" }
                 }
-                span { "{namespace.name}" }
+                span { class: "namespace-name", "{namespace.name}" }
+                span {
+                    class: "namespace-actions",
+                    button {
+                        class: "namespace-action-btn",
+                        title: "New note in folder",
+                        onclick: {
+                            let path = namespace.path.clone();
+                            move |evt: Event<MouseData>| {
+                                evt.stop_propagation();
+                                on_create_note.call(Some(path.clone()));
+                            }
+                        },
+                        "+"
+                    }
+                    button {
+                        class: "namespace-action-btn",
+                        title: "New subfolder",
+                        onclick: {
+                            let path = namespace.path.clone();
+                            move |evt: Event<MouseData>| {
+                                evt.stop_propagation();
+                                on_create_namespace.call(Some(path.clone()));
+                            }
+                        },
+                        "\u{1F4C1}"
+                    }
+                }
             }
 
             if expanded() {
@@ -175,6 +211,7 @@ fn NamespaceNode(
                             active_path: active_path.clone(),
                             on_select_note: on_select_note,
                             on_create_note: on_create_note,
+                            on_create_namespace: on_create_namespace,
                         }
                     }
                     for note in child_notes {
