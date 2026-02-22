@@ -1,14 +1,16 @@
-//! Login page view with email/password and OAuth buttons.
+//! Registration page view with email/password form.
 
 use dioxus::prelude::*;
-use ui::{LoginButton, use_auth};
+use ui::use_auth;
 
-/// Login page component.
+/// Register page component.
 #[component]
-pub fn Login() -> Element {
+pub fn Register() -> Element {
     let mut auth = use_auth();
+    let mut name = use_signal(String::new);
     let mut email = use_signal(String::new);
     let mut password = use_signal(String::new);
+    let mut confirm_password = use_signal(String::new);
     let mut error = use_signal(|| Option::<String>::None);
     let mut loading = use_signal(|| false);
 
@@ -22,25 +24,35 @@ pub fn Login() -> Element {
         }
     }
 
-    let handle_login = move |evt: FormEvent| {
+    let handle_register = move |evt: FormEvent| {
         evt.prevent_default();
         spawn(async move {
             error.set(None);
 
+            let n = name().trim().to_string();
             let e = email().trim().to_string();
             let p = password();
+            let cp = confirm_password();
 
-            if e.is_empty() {
-                error.set(Some("Please enter your email".to_string()));
+            if n.is_empty() {
+                error.set(Some("Name is required".to_string()));
                 return;
             }
-            if p.is_empty() {
-                error.set(Some("Please enter your password".to_string()));
+            if e.is_empty() || !e.contains('@') {
+                error.set(Some("Please enter a valid email".to_string()));
+                return;
+            }
+            if p.len() < 8 {
+                error.set(Some("Password must be at least 8 characters".to_string()));
+                return;
+            }
+            if p != cp {
+                error.set(Some("Passwords do not match".to_string()));
                 return;
             }
 
             loading.set(true);
-            match api::login_password(e, p).await {
+            match api::register(e, p, n).await {
                 Ok(user) => {
                     let mut state = auth();
                     state.user = Some(user);
@@ -68,17 +80,16 @@ pub fn Login() -> Element {
 
             h1 {
                 style: "margin-bottom: 0.5rem; color: #37352f; font-weight: 700; font-size: 1.75rem;",
-                "TypedNotes"
+                "Create Account"
             }
 
             p {
                 style: "margin-bottom: 2rem; color: #787774; font-size: 0.9375rem;",
-                "Sign in to your account"
+                "Sign up for TypedNotes"
             }
 
-            // Email/password form
             form {
-                onsubmit: handle_login,
+                onsubmit: handle_register,
                 style: "display: flex; flex-direction: column; gap: 0.75rem; width: 100%; max-width: 320px;",
 
                 if let Some(err) = error() {
@@ -86,6 +97,14 @@ pub fn Login() -> Element {
                         style: "padding: 0.625rem; background: #fef2f2; border: 1px solid #fecaca; border-radius: 4px; color: #dc2626; font-size: 0.8125rem;",
                         "{err}"
                     }
+                }
+
+                input {
+                    class: "auth-input",
+                    r#type: "text",
+                    placeholder: "Name",
+                    value: name(),
+                    oninput: move |evt| name.set(evt.value()),
                 }
 
                 input {
@@ -99,52 +118,34 @@ pub fn Login() -> Element {
                 input {
                     class: "auth-input",
                     r#type: "password",
-                    placeholder: "Password",
+                    placeholder: "Password (min 8 characters)",
                     value: password(),
                     oninput: move |evt| password.set(evt.value()),
+                }
+
+                input {
+                    class: "auth-input",
+                    r#type: "password",
+                    placeholder: "Confirm password",
+                    value: confirm_password(),
+                    oninput: move |evt| confirm_password.set(evt.value()),
                 }
 
                 button {
                     class: "local-btn",
                     r#type: "submit",
                     disabled: loading(),
-                    if loading() { "Signing in..." } else { "Sign in" }
-                }
-            }
-
-            // Divider
-            div {
-                style: "display: flex; align-items: center; gap: 1rem; width: 100%; max-width: 320px; margin: 1.5rem 0;",
-                div { style: "flex: 1; height: 1px; background: #e3e2e0;" }
-                span { style: "color: #787774; font-size: 0.8125rem;", "or" }
-                div { style: "flex: 1; height: 1px; background: #e3e2e0;" }
-            }
-
-            // OAuth buttons
-            div {
-                class: "login-buttons",
-                style: "display: flex; flex-direction: column; gap: 0.75rem; width: 100%; max-width: 320px;",
-
-                LoginButton {
-                    provider: "github",
-                    label: "Continue with GitHub",
-                    class: "login-btn github-btn",
-                }
-
-                LoginButton {
-                    provider: "google",
-                    label: "Continue with Google",
-                    class: "login-btn google-btn",
+                    if loading() { "Creating account..." } else { "Sign up" }
                 }
             }
 
             p {
                 style: "margin-top: 1.5rem; font-size: 0.875rem; color: #787774;",
-                "Don't have an account? "
+                "Already have an account? "
                 a {
-                    href: "/register",
+                    href: "/login",
                     style: "color: #2383e2; text-decoration: none;",
-                    "Sign up"
+                    "Sign in"
                 }
             }
         }
@@ -189,47 +190,6 @@ pub fn Login() -> Element {
             .local-btn:disabled {{
                 opacity: 0.5;
                 cursor: not-allowed;
-            }}
-
-            .login-btn {{
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 0.625rem 1.25rem;
-                border: none;
-                border-radius: 4px;
-                font-size: 0.9375rem;
-                font-weight: 500;
-                cursor: pointer;
-                transition: background-color 0.15s;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-            }}
-
-            .login-btn:hover {{
-                opacity: 0.9;
-            }}
-
-            .login-btn:disabled {{
-                opacity: 0.5;
-                cursor: not-allowed;
-            }}
-
-            .github-btn {{
-                background-color: #24292e;
-                color: white;
-            }}
-
-            .github-btn:hover:not(:disabled) {{
-                background-color: #2f363d;
-            }}
-
-            .google-btn {{
-                background-color: #4285f4;
-                color: white;
-            }}
-
-            .google-btn:hover:not(:disabled) {{
-                background-color: #357abd;
             }}
             "#
         }

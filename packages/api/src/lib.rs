@@ -1,8 +1,11 @@
 //! This crate contains all shared fullstack server functions.
 
 use dioxus::prelude::*;
+use serde::{Deserialize, Serialize};
 
 pub mod auth;
+#[cfg(feature = "server")]
+pub mod crypto;
 pub mod db;
 pub mod models;
 
@@ -10,6 +13,13 @@ pub use models::UserInfo;
 pub use store::{NamespaceInfo, TypedNoteInfo};
 
 pub use store::TypedNotesConfig;
+
+/// Git credentials info safe to send to the client (never includes private key).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GitCredentialsInfo {
+    pub git_remote_url: Option<String>,
+    pub ssh_public_key: Option<String>,
+}
 
 /// Get the current authenticated user from the session.
 #[cfg(feature = "server")]
@@ -98,4 +108,280 @@ pub async fn logout() -> Result<(), ServerFnError> {
 #[post("/api/auth/logout")]
 pub async fn logout() -> Result<(), ServerFnError> {
     Ok(())
+}
+
+/// Register a new user with email and password.
+#[cfg(feature = "server")]
+#[post("/api/auth/register", session: tower_sessions::Session)]
+pub async fn register(
+    email: String,
+    password: String,
+    name: String,
+) -> Result<UserInfo, ServerFnError> {
+    use crate::db::get_pool;
+
+    let email = email.trim().to_lowercase();
+    let name = name.trim().to_string();
+
+    if email.is_empty() || !email.contains('@') {
+        return Err(ServerFnError::new("Invalid email address"));
+    }
+    if password.len() < 8 {
+        return Err(ServerFnError::new(
+            "Password must be at least 8 characters",
+        ));
+    }
+    if name.is_empty() {
+        return Err(ServerFnError::new("Name is required"));
+    }
+
+    let pool = get_pool()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    // Check if user already exists
+    let existing: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 as n FROM users WHERE provider = 'local' AND provider_id = $1",
+    )
+    .bind(&email)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    if existing.is_some() {
+        return Err(ServerFnError::new("An account with this email already exists"));
+    }
+
+    let password_hash = auth::hash_password(&password)
+        .map_err(|e| ServerFnError::new(e))?;
+
+    let user: models::User = sqlx::query_as(
+        "INSERT INTO users (email, name, provider, provider_id, password_hash) VALUES ($1, $2, 'local', $1, $3) RETURNING *",
+    )
+    .bind(&email)
+    .bind(&name)
+    .bind(&password_hash)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    session
+        .insert(auth::SESSION_USER_ID_KEY, user.id.to_string())
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(user.to_info())
+}
+
+#[cfg(not(feature = "server"))]
+#[post("/api/auth/register")]
+pub async fn register(
+    email: String,
+    password: String,
+    name: String,
+) -> Result<UserInfo, ServerFnError> {
+    Err(ServerFnError::new("Server only"))
+}
+
+/// Log in with email and password.
+#[cfg(feature = "server")]
+#[post("/api/auth/login-password", session: tower_sessions::Session)]
+pub async fn login_password(email: String, password: String) -> Result<UserInfo, ServerFnError> {
+    use crate::db::get_pool;
+
+    let email = email.trim().to_lowercase();
+
+    let pool = get_pool()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let user: Option<models::User> = sqlx::query_as(
+        "SELECT * FROM users WHERE provider = 'local' AND provider_id = $1",
+    )
+    .bind(&email)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let Some(user) = user else {
+        return Err(ServerFnError::new("Invalid email or password"));
+    };
+
+    let Some(ref hash) = user.password_hash else {
+        return Err(ServerFnError::new("Invalid email or password"));
+    };
+
+    let valid = auth::verify_password(&password, hash)
+        .map_err(|e| ServerFnError::new(e))?;
+
+    if !valid {
+        return Err(ServerFnError::new("Invalid email or password"));
+    }
+
+    session
+        .insert(auth::SESSION_USER_ID_KEY, user.id.to_string())
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(user.to_info())
+}
+
+#[cfg(not(feature = "server"))]
+#[post("/api/auth/login-password")]
+pub async fn login_password(email: String, password: String) -> Result<UserInfo, ServerFnError> {
+    Err(ServerFnError::new("Server only"))
+}
+
+/// Save git credentials (remote URL and optional SSH key).
+#[cfg(feature = "server")]
+#[post("/api/git/credentials", session: tower_sessions::Session)]
+pub async fn save_git_credentials(
+    git_remote_url: String,
+    ssh_private_key: Option<String>,
+) -> Result<GitCredentialsInfo, ServerFnError> {
+    use crate::db::get_pool;
+
+    let user_id: Option<String> = session
+        .get(auth::SESSION_USER_ID_KEY)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let Some(user_id) = user_id else {
+        return Err(ServerFnError::new("Not authenticated"));
+    };
+
+    let user_uuid =
+        uuid::Uuid::parse_str(&user_id).map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let pool = get_pool()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let git_remote_url = if git_remote_url.trim().is_empty() {
+        None
+    } else {
+        Some(git_remote_url.trim().to_string())
+    };
+
+    // If SSH key provided, encrypt it and extract public key
+    let (encrypted_key, nonce, public_key) = if let Some(ref key_pem) = ssh_private_key {
+        if key_pem.trim().is_empty() {
+            (None, None, None)
+        } else {
+            let pub_key = crypto::extract_public_key(key_pem)
+                .map_err(|e| ServerFnError::new(e))?;
+            let (enc, n) = crypto::encrypt_ssh_key(key_pem.as_bytes())
+                .map_err(|e| ServerFnError::new(e))?;
+            (Some(enc), Some(n), Some(pub_key))
+        }
+    } else {
+        (None, None, None)
+    };
+
+    if encrypted_key.is_some() {
+        // Upsert with new SSH key
+        sqlx::query(
+            "INSERT INTO user_git_config (user_id, git_remote_url, ssh_private_key_enc, ssh_public_key, encryption_nonce)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (user_id) DO UPDATE SET
+                git_remote_url = $2,
+                ssh_private_key_enc = $3,
+                ssh_public_key = $4,
+                encryption_nonce = $5,
+                updated_at = NOW()",
+        )
+        .bind(user_uuid)
+        .bind(&git_remote_url)
+        .bind(&encrypted_key)
+        .bind(&public_key)
+        .bind(&nonce)
+        .execute(pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    } else {
+        // Upsert URL only, preserve existing SSH key
+        sqlx::query(
+            "INSERT INTO user_git_config (user_id, git_remote_url)
+             VALUES ($1, $2)
+             ON CONFLICT (user_id) DO UPDATE SET
+                git_remote_url = $2,
+                updated_at = NOW()",
+        )
+        .bind(user_uuid)
+        .bind(&git_remote_url)
+        .execute(pool)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+    }
+
+    // Fetch back the saved state
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT git_remote_url, ssh_public_key FROM user_git_config WHERE user_id = $1",
+    )
+    .bind(user_uuid)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(match row {
+        Some((url, pub_key)) => GitCredentialsInfo {
+            git_remote_url: url,
+            ssh_public_key: pub_key,
+        },
+        None => GitCredentialsInfo {
+            git_remote_url: None,
+            ssh_public_key: None,
+        },
+    })
+}
+
+#[cfg(not(feature = "server"))]
+#[post("/api/git/credentials")]
+pub async fn save_git_credentials(
+    git_remote_url: String,
+    ssh_private_key: Option<String>,
+) -> Result<GitCredentialsInfo, ServerFnError> {
+    Err(ServerFnError::new("Server only"))
+}
+
+/// Get git credentials for the current user (URL + public key only).
+#[cfg(feature = "server")]
+#[get("/api/git/credentials", session: tower_sessions::Session)]
+pub async fn get_git_credentials() -> Result<Option<GitCredentialsInfo>, ServerFnError> {
+    use crate::db::get_pool;
+
+    let user_id: Option<String> = session
+        .get(auth::SESSION_USER_ID_KEY)
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let Some(user_id) = user_id else {
+        return Err(ServerFnError::new("Not authenticated"));
+    };
+
+    let user_uuid =
+        uuid::Uuid::parse_str(&user_id).map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let pool = get_pool()
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT git_remote_url, ssh_public_key FROM user_git_config WHERE user_id = $1",
+    )
+    .bind(user_uuid)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?;
+
+    Ok(row.map(|(url, pub_key)| GitCredentialsInfo {
+        git_remote_url: url,
+        ssh_public_key: pub_key,
+    }))
+}
+
+#[cfg(not(feature = "server"))]
+#[get("/api/git/credentials")]
+pub async fn get_git_credentials() -> Result<Option<GitCredentialsInfo>, ServerFnError> {
+    Err(ServerFnError::new("Server only"))
 }

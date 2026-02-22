@@ -7,10 +7,14 @@ mod github;
 #[cfg(feature = "server")]
 mod google;
 #[cfg(feature = "server")]
+mod password;
+#[cfg(feature = "server")]
 mod session;
 
 #[cfg(feature = "server")]
 pub use config::OAuthConfig;
+#[cfg(feature = "server")]
+pub use password::{hash_password, verify_password};
 #[cfg(feature = "server")]
 pub use github::GitHubOAuth;
 #[cfg(feature = "server")]

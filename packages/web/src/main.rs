@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use ui::AuthProvider;
-use views::{Login, NoteDetail, Notes, Settings};
+use views::{Login, NoteDetail, Notes, Register, Settings};
 
 mod views;
 
@@ -12,6 +12,8 @@ enum Route {
     Root {},
     #[route("/login")]
     Login {},
+    #[route("/register")]
+    Register {},
     #[route("/notes")]
     Notes {},
     #[route("/notes/:note_path")]

@@ -164,3 +164,35 @@
 .save-status.error {
     color: #eb5757;
 }
+
+/* SSH key textarea */
+.ssh-key-textarea {
+    width: 100%;
+    background: #ffffff;
+    border: 1px solid #e3e2e0;
+    border-radius: 4px;
+    color: #37352f;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    font-family: "SF Mono", "Fira Code", "Fira Mono", "Roboto Mono", monospace;
+    outline: none;
+    box-sizing: border-box;
+    resize: vertical;
+    line-height: 1.5;
+}
+
+.ssh-key-textarea:focus {
+    border-color: #2383e2;
+    box-shadow: 0 0 0 1px #2383e2;
+}
+
+.ssh-key-textarea[readonly] {
+    background: #f7f6f3;
+    color: #787774;
+    cursor: default;
+}
+
+.ssh-key-textarea[readonly]:focus {
+    border-color: #e3e2e0;
+    box-shadow: none;
+}
