@@ -189,6 +189,9 @@ async fn google_callback(
 
 #[component]
 fn App() -> Element {
+    use_context_provider(|| Signal::new(ui::ActivityLog::default()));
+    use_context_provider(|| Signal::new(SidebarState::default()));
+
     rsx! {
         // Global app resources
         document::Link { rel: "icon", href: FAVICON }
@@ -196,6 +199,21 @@ fn App() -> Element {
 
         AuthProvider {
             Router::<Route> {}
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SidebarState {
+    pub width: f64,
+    pub collapsed: bool,
+}
+
+impl Default for SidebarState {
+    fn default() -> Self {
+        Self {
+            width: 240.0,
+            collapsed: false,
         }
     }
 }

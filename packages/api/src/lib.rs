@@ -8,7 +8,7 @@ pub mod auth;
 pub mod crypto;
 pub mod db;
 #[cfg(feature = "server")]
-pub mod git_sync;
+pub mod git_transport;
 pub mod models;
 
 pub use models::UserInfo;
@@ -21,6 +21,7 @@ pub use store::TypedNotesConfig;
 pub struct GitCredentialsInfo {
     pub git_remote_url: Option<String>,
     pub ssh_public_key: Option<String>,
+    pub git_branch: Option<String>,
 }
 
 /// Get the current authenticated user from the session.
@@ -234,12 +235,13 @@ pub async fn login_password(email: String, password: String) -> Result<UserInfo,
     Err(ServerFnError::new("Server only"))
 }
 
-/// Save git credentials (remote URL and optional SSH key).
+/// Save git credentials (remote URL, optional SSH key, optional branch).
 #[cfg(feature = "server")]
 #[post("/api/git/credentials", session: tower_sessions::Session)]
 pub async fn save_git_credentials(
     git_remote_url: String,
     ssh_private_key: Option<String>,
+    git_branch: Option<String>,
 ) -> Result<GitCredentialsInfo, ServerFnError> {
     use crate::db::get_pool;
 
@@ -280,16 +282,21 @@ pub async fn save_git_credentials(
         (None, None, None)
     };
 
+    let branch = git_branch
+        .filter(|b| !b.trim().is_empty())
+        .unwrap_or_else(|| "main".to_string());
+
     if encrypted_key.is_some() {
         // Upsert with new SSH key
         sqlx::query(
-            "INSERT INTO user_git_config (user_id, git_remote_url, ssh_private_key_enc, ssh_public_key, encryption_nonce)
-             VALUES ($1, $2, $3, $4, $5)
+            "INSERT INTO user_git_config (user_id, git_remote_url, ssh_private_key_enc, ssh_public_key, encryption_nonce, git_branch)
+             VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (user_id) DO UPDATE SET
                 git_remote_url = $2,
                 ssh_private_key_enc = $3,
                 ssh_public_key = $4,
                 encryption_nonce = $5,
+                git_branch = $6,
                 updated_at = NOW()",
         )
         .bind(user_uuid)
@@ -297,28 +304,31 @@ pub async fn save_git_credentials(
         .bind(&encrypted_key)
         .bind(&public_key)
         .bind(&nonce)
+        .bind(&branch)
         .execute(pool)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     } else {
-        // Upsert URL only, preserve existing SSH key
+        // Upsert URL + branch only, preserve existing SSH key
         sqlx::query(
-            "INSERT INTO user_git_config (user_id, git_remote_url)
-             VALUES ($1, $2)
+            "INSERT INTO user_git_config (user_id, git_remote_url, git_branch)
+             VALUES ($1, $2, $3)
              ON CONFLICT (user_id) DO UPDATE SET
                 git_remote_url = $2,
+                git_branch = $3,
                 updated_at = NOW()",
         )
         .bind(user_uuid)
         .bind(&git_remote_url)
+        .bind(&branch)
         .execute(pool)
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
     }
 
     // Fetch back the saved state
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT git_remote_url, ssh_public_key FROM user_git_config WHERE user_id = $1",
+    let row: Option<(Option<String>, Option<String>, String)> = sqlx::query_as(
+        "SELECT git_remote_url, ssh_public_key, git_branch FROM user_git_config WHERE user_id = $1",
     )
     .bind(user_uuid)
     .fetch_optional(pool)
@@ -326,13 +336,15 @@ pub async fn save_git_credentials(
     .map_err(|e| ServerFnError::new(e.to_string()))?;
 
     Ok(match row {
-        Some((url, pub_key)) => GitCredentialsInfo {
+        Some((url, pub_key, branch)) => GitCredentialsInfo {
             git_remote_url: url,
             ssh_public_key: pub_key,
+            git_branch: Some(branch),
         },
         None => GitCredentialsInfo {
             git_remote_url: None,
             ssh_public_key: None,
+            git_branch: Some("main".to_string()),
         },
     })
 }
@@ -342,6 +354,7 @@ pub async fn save_git_credentials(
 pub async fn save_git_credentials(
     git_remote_url: String,
     ssh_private_key: Option<String>,
+    git_branch: Option<String>,
 ) -> Result<GitCredentialsInfo, ServerFnError> {
     Err(ServerFnError::new("Server only"))
 }
@@ -368,17 +381,18 @@ pub async fn get_git_credentials() -> Result<Option<GitCredentialsInfo>, ServerF
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT git_remote_url, ssh_public_key FROM user_git_config WHERE user_id = $1",
+    let row: Option<(Option<String>, Option<String>, String)> = sqlx::query_as(
+        "SELECT git_remote_url, ssh_public_key, git_branch FROM user_git_config WHERE user_id = $1",
     )
     .bind(user_uuid)
     .fetch_optional(pool)
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    Ok(row.map(|(url, pub_key)| GitCredentialsInfo {
+    Ok(row.map(|(url, pub_key, branch)| GitCredentialsInfo {
         git_remote_url: url,
         ssh_public_key: pub_key,
+        git_branch: Some(branch),
     }))
 }
 
@@ -395,11 +409,11 @@ pub struct RemoteFile {
     pub content: String,
 }
 
-/// Helper: get user_id, remote URL, and decrypted SSH key from the session + DB.
+/// Helper: get user_id, remote URL, decrypted SSH key, and branch from the session + DB.
 #[cfg(feature = "server")]
 async fn get_user_git_context(
     session: &tower_sessions::Session,
-) -> Result<(uuid::Uuid, String, String), ServerFnError> {
+) -> Result<(uuid::Uuid, String, String, String), ServerFnError> {
     use crate::db::get_pool;
 
     let user_id: Option<String> = session
@@ -418,15 +432,15 @@ async fn get_user_git_context(
         .await
         .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    let row: Option<(Option<String>, Option<Vec<u8>>, Option<Vec<u8>>)> = sqlx::query_as(
-        "SELECT git_remote_url, ssh_private_key_enc, encryption_nonce FROM user_git_config WHERE user_id = $1",
+    let row: Option<(Option<String>, Option<Vec<u8>>, Option<Vec<u8>>, String)> = sqlx::query_as(
+        "SELECT git_remote_url, ssh_private_key_enc, encryption_nonce, git_branch FROM user_git_config WHERE user_id = $1",
     )
     .bind(user_uuid)
     .fetch_optional(pool)
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    let Some((Some(remote_url), Some(enc_key), Some(nonce))) = row else {
+    let Some((Some(remote_url), Some(enc_key), Some(nonce), branch)) = row else {
         return Err(ServerFnError::new(
             "Git sync not configured: set remote URL and SSH key in Settings",
         ));
@@ -437,34 +451,56 @@ async fn get_user_git_context(
     let ssh_key_pem =
         String::from_utf8(key_bytes).map_err(|e| ServerFnError::new(e.to_string()))?;
 
-    Ok((user_uuid, remote_url, ssh_key_pem))
+    Ok((user_uuid, remote_url, ssh_key_pem, branch))
 }
 
-/// Sync a single note to the git remote: pull, write file, commit, push.
+/// Sync a single note to the git remote: fetch, write note in memory, push.
 #[cfg(feature = "server")]
 #[post("/api/git/sync-note", session: tower_sessions::Session)]
 pub async fn sync_note(
     path: String,
     content: String,
-    _note_type: String,
+    note_type: String,
 ) -> Result<(), ServerFnError> {
-    let (user_id, remote_url, ssh_key_pem) = get_user_git_context(&session).await?;
+    let (_user_id, remote_url, ssh_key_pem, branch) = get_user_git_context(&session).await?;
 
+    let mem = store::MemoryStore::new();
+    let repo = store::Repository::new(mem.clone());
+
+    // Fetch current state from remote (blocking I/O)
+    let mem2 = mem.clone();
+    let url = remote_url.clone();
+    let key = ssh_key_pem.clone();
+    let branch2 = branch.clone();
+    tokio::task::spawn_blocking(move || git_transport::fetch(&mem2, &url, &key, Some(&branch2)))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .map_err(|e| ServerFnError::new(e))?;
+
+    // Snapshot SHAs before modification
+    let pre_shas: std::collections::HashSet<String> =
+        mem.all_object_shas().into_iter().collect();
+
+    // Write note in memory (fast, no I/O)
+    repo.write_note(&path, &content, &note_type).await;
+
+    // Determine new objects to push
+    let new_shas: Vec<String> = mem
+        .all_object_shas()
+        .into_iter()
+        .filter(|s| !pre_shas.contains(s))
+        .collect();
+
+    // Push to remote (blocking I/O)
+    let mem2 = mem.clone();
     tokio::task::spawn_blocking(move || {
-        let repo = git_sync::ensure_repo(&user_id, &remote_url, &ssh_key_pem)
-            .map_err(|e| ServerFnError::new(e))?;
-
-        // Best-effort pull before writing
-        if let Err(e) = git_sync::pull(&repo, &ssh_key_pem) {
-            eprintln!("WARN: pull before sync failed (continuing): {e}");
-        }
-
-        let message = format!("Update {path}");
-        git_sync::sync_file(&repo, &path, &content, &message, &ssh_key_pem)
-            .map_err(|e| ServerFnError::new(e))
+        git_transport::push(&mem2, &remote_url, &ssh_key_pem, &branch, &new_shas)
     })
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?
+    .map_err(|e| ServerFnError::new(e))?;
+
+    Ok(())
 }
 
 #[cfg(not(feature = "server"))]
@@ -477,26 +513,47 @@ pub async fn sync_note(
     Err(ServerFnError::new("Server only"))
 }
 
-/// Delete a note from the git remote: pull, remove file, commit, push.
+/// Delete a note from the git remote: fetch, delete in memory, push.
 #[cfg(feature = "server")]
 #[post("/api/git/delete-note", session: tower_sessions::Session)]
 pub async fn delete_note_remote(path: String) -> Result<(), ServerFnError> {
-    let (user_id, remote_url, ssh_key_pem) = get_user_git_context(&session).await?;
+    let (_user_id, remote_url, ssh_key_pem, branch) = get_user_git_context(&session).await?;
 
+    let mem = store::MemoryStore::new();
+    let repo = store::Repository::new(mem.clone());
+
+    // Fetch
+    let mem2 = mem.clone();
+    let url = remote_url.clone();
+    let key = ssh_key_pem.clone();
+    let branch2 = branch.clone();
+    tokio::task::spawn_blocking(move || git_transport::fetch(&mem2, &url, &key, Some(&branch2)))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .map_err(|e| ServerFnError::new(e))?;
+
+    let pre_shas: std::collections::HashSet<String> =
+        mem.all_object_shas().into_iter().collect();
+
+    // Delete note in memory
+    repo.delete_note(&path).await;
+
+    let new_shas: Vec<String> = mem
+        .all_object_shas()
+        .into_iter()
+        .filter(|s| !pre_shas.contains(s))
+        .collect();
+
+    // Push
+    let mem2 = mem.clone();
     tokio::task::spawn_blocking(move || {
-        let repo = git_sync::ensure_repo(&user_id, &remote_url, &ssh_key_pem)
-            .map_err(|e| ServerFnError::new(e))?;
-
-        if let Err(e) = git_sync::pull(&repo, &ssh_key_pem) {
-            eprintln!("WARN: pull before delete failed (continuing): {e}");
-        }
-
-        let message = format!("Delete {path}");
-        git_sync::delete_file(&repo, &path, &message, &ssh_key_pem)
-            .map_err(|e| ServerFnError::new(e))
+        git_transport::push(&mem2, &remote_url, &ssh_key_pem, &branch, &new_shas)
     })
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?
+    .map_err(|e| ServerFnError::new(e))?;
+
+    Ok(())
 }
 
 #[cfg(not(feature = "server"))]
@@ -509,23 +566,29 @@ pub async fn delete_note_remote(path: String) -> Result<(), ServerFnError> {
 #[cfg(feature = "server")]
 #[get("/api/git/pull", session: tower_sessions::Session)]
 pub async fn pull_notes() -> Result<Vec<RemoteFile>, ServerFnError> {
-    let (user_id, remote_url, ssh_key_pem) = get_user_git_context(&session).await?;
+    let (_user_id, remote_url, ssh_key_pem, branch) = get_user_git_context(&session).await?;
 
+    let mem = store::MemoryStore::new();
+    let repo = store::Repository::new(mem.clone());
+
+    // Fetch
     tokio::task::spawn_blocking(move || {
-        let repo = git_sync::ensure_repo(&user_id, &remote_url, &ssh_key_pem)
-            .map_err(|e| ServerFnError::new(e))?;
-
-        git_sync::pull(&repo, &ssh_key_pem).map_err(|e| ServerFnError::new(e))?;
-
-        let files = git_sync::list_files(&repo).map_err(|e| ServerFnError::new(e))?;
-
-        Ok(files
-            .into_iter()
-            .map(|(path, content)| RemoteFile { path, content })
-            .collect())
+        git_transport::fetch(&mem, &remote_url, &ssh_key_pem, Some(&branch))
     })
     .await
     .map_err(|e| ServerFnError::new(e.to_string()))?
+    .map_err(|e| ServerFnError::new(e))?;
+
+    // List notes from in-memory repo
+    let notes = repo.list_notes().await;
+
+    Ok(notes
+        .into_iter()
+        .map(|n| RemoteFile {
+            path: n.path,
+            content: n.note,
+        })
+        .collect())
 }
 
 #[cfg(not(feature = "server"))]

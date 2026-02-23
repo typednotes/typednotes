@@ -1,9 +1,9 @@
 use dioxus::prelude::*;
 
 use store::{NamespaceInfo, Repository, TypedNoteInfo};
-use ui::{NewNoteDialog, NoteEditor, Sidebar, use_auth};
+use ui::{ActivityLogPanel, NewNoteDialog, NoteEditor, Sidebar, use_auth, LogLevel, log_activity, use_activity_log};
 
-use crate::Route;
+use crate::{Route, SidebarState};
 
 const NOTES_CSS: Asset = asset!("/assets/notes.css");
 
@@ -20,12 +20,16 @@ fn make_repo() -> Repository<impl store::ObjectStore> {
 
 #[component]
 pub fn NoteDetail(note_path: String) -> Element {
-    // Decode path: "~" back to "/"
-    let decoded_path = note_path.replace('~', "/");
+    // Track decoded path in a signal so use_resource re-runs on route param change
+    let mut path_signal = use_signal(|| note_path.replace('~', "/"));
+    if *path_signal.peek() != note_path.replace('~', "/") {
+        path_signal.set(note_path.replace('~', "/"));
+    }
 
     let mut notes = use_signal(Vec::<TypedNoteInfo>::new);
     let mut namespaces = use_signal(Vec::<NamespaceInfo>::new);
     let mut current_note = use_signal(|| Option::<TypedNoteInfo>::None);
+    let mut auto_sync_secs = use_signal(|| 30u32);
     let mut show_new_note = use_signal(|| false);
     let mut new_note_namespace = use_signal(|| Option::<String>::None);
     let mut show_new_namespace = use_signal(|| false);
@@ -33,19 +37,16 @@ pub fn NoteDetail(note_path: String) -> Element {
     let nav = use_navigator();
     let auth = use_auth();
 
-    // Clone for closures
-    let decoded_path_for_save = decoded_path.clone();
-    let decoded_path_for_delete = decoded_path.clone();
-    let decoded_path_for_template = decoded_path.clone();
-
     // Load everything on mount and when path changes
     let _loader = use_resource(move || {
-        let path = decoded_path.clone();
+        let path = path_signal(); // Reads signal → reactive dependency
         async move {
             let repo = make_repo();
             notes.set(repo.list_notes().await);
             namespaces.set(repo.list_namespaces().await);
             current_note.set(repo.get_note(&path).await);
+            let config = repo.get_config().await;
+            auto_sync_secs.set(config.sync.auto_sync_interval_secs);
         }
     });
 
@@ -87,54 +88,54 @@ pub fn NoteDetail(note_path: String) -> Element {
         nav.push(Route::Settings {});
     };
 
-    let handle_save = {
-        let decoded_path = decoded_path_for_save;
-        move |content: String| {
-            let path = decoded_path.clone();
-            spawn(async move {
-                let repo = make_repo();
-                if let Some(note) = current_note() {
-                    let stem = path.trim_end_matches(&format!(
-                        ".{}",
-                        store::models::ext_from_note_type(&note.r#type)
-                    ));
-                    repo.write_note(stem, &content, &note.r#type).await;
-                    current_note.set(repo.get_note(&path).await);
-                    notes.set(repo.list_notes().await);
+    let mut activity_log = use_activity_log();
 
-                    // Fire-and-forget git sync
-                    let sync_path = path.clone();
-                    let sync_content = content.clone();
-                    let sync_type = note.r#type.clone();
-                    spawn(async move {
-                        if let Err(_e) = api::sync_note(sync_path, sync_content, sync_type).await {
-                            // Git sync failure is non-fatal; note is saved locally
-                        }
-                    });
+    let handle_save = move |content: String| {
+        let path = path_signal();
+        spawn(async move {
+            let repo = make_repo();
+            if let Some(note) = current_note() {
+                let stem = path.trim_end_matches(&format!(
+                    ".{}",
+                    store::models::ext_from_note_type(&note.r#type)
+                ));
+                repo.write_note(stem, &content, &note.r#type).await;
+                current_note.set(repo.get_note(&path).await);
+                notes.set(repo.list_notes().await);
+                log_activity(&mut activity_log, LogLevel::Info, &format!("Saved {path}"));
+
+                // Git sync
+                match api::sync_note(path.clone(), content.clone(), note.r#type.clone()).await {
+                    Ok(()) => log_activity(&mut activity_log, LogLevel::Success, &format!("Synced {path}")),
+                    Err(e) => {
+                        log_activity(&mut activity_log, LogLevel::Error, &format!("Sync error: {e}"));
+                        #[cfg(target_arch = "wasm32")]
+                        web_sys::console::warn_1(&format!("Git sync: {e}").into());
+                    }
                 }
-            });
-        }
+            }
+        });
     };
 
-    let handle_delete = {
-        let decoded_path = decoded_path_for_delete;
-        move |_| {
-            let path = decoded_path.clone();
-            spawn(async move {
-                let repo = make_repo();
-                repo.delete_note(&path).await;
+    let handle_delete = move |_| {
+        let path = path_signal();
+        spawn(async move {
+            let repo = make_repo();
+            repo.delete_note(&path).await;
+            log_activity(&mut activity_log, LogLevel::Info, &format!("Deleted {path}"));
 
-                // Fire-and-forget git delete
-                let del_path = path.clone();
-                spawn(async move {
-                    if let Err(_e) = api::delete_note_remote(del_path).await {
-                        // Git delete sync failure is non-fatal
-                    }
-                });
+            // Git delete
+            match api::delete_note_remote(path.clone()).await {
+                Ok(()) => log_activity(&mut activity_log, LogLevel::Success, &format!("Deleted remote {path}")),
+                Err(e) => {
+                    log_activity(&mut activity_log, LogLevel::Error, &format!("Delete sync error: {e}"));
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::warn_1(&format!("Git delete sync: {e}").into());
+                }
+            }
 
-                nav.push(Route::Notes {});
-            });
-        }
+            nav.push(Route::Notes {});
+        });
     };
 
     let handle_create_note =
@@ -159,21 +160,59 @@ pub fn NoteDetail(note_path: String) -> Element {
             });
         };
 
+    let mut sidebar_state = use_context::<Signal<SidebarState>>();
+    let mut is_resizing = use_signal(|| false);
+
+    let on_toggle_collapse = move |_| {
+        let mut st = sidebar_state.write();
+        st.collapsed = !st.collapsed;
+    };
+
+    let handle_mouse_move = move |evt: Event<MouseData>| {
+        if is_resizing() {
+            let x = evt.page_coordinates().x;
+            let new_width = x.max(120.0).min(600.0);
+            sidebar_state.write().width = new_width;
+        }
+    };
+
+    let handle_mouse_up = move |_| {
+        is_resizing.set(false);
+    };
+
+    let ss = sidebar_state();
+    let sidebar_width = if ss.collapsed { "48px".to_string() } else { format!("{}px", ss.width) };
+
     rsx! {
         document::Stylesheet { href: NOTES_CSS }
 
         div {
             class: "notes-layout",
+            onmousemove: handle_mouse_move,
+            onmouseup: handle_mouse_up,
 
-            Sidebar {
-                namespaces: namespaces(),
-                notes: notes(),
-                active_path: Some(decoded_path_for_template.clone()),
-                user: auth().user,
-                on_select_note: on_select_note,
-                on_create_note: on_create_note,
-                on_create_namespace: on_create_namespace,
-                on_navigate_settings: on_navigate_settings,
+            div {
+                style: "width: {sidebar_width}; min-width: {sidebar_width}; display: flex; flex-shrink: 0;",
+
+                Sidebar {
+                    namespaces: namespaces(),
+                    notes: notes(),
+                    active_path: Some(path_signal()),
+                    user: auth().user,
+                    on_select_note: on_select_note,
+                    on_create_note: on_create_note,
+                    on_create_namespace: on_create_namespace,
+                    on_navigate_settings: on_navigate_settings,
+                    collapsed: ss.collapsed,
+                    on_toggle_collapse: on_toggle_collapse,
+                }
+
+                if !ss.collapsed {
+                    div {
+                        class: if is_resizing() { "sidebar-resize-handle active" } else { "sidebar-resize-handle" },
+                        onmousedown: move |_| is_resizing.set(true),
+                    }
+                }
             }
 
             div {
@@ -221,6 +260,7 @@ pub fn NoteDetail(note_path: String) -> Element {
                         breadcrumb: note.namespace.clone(),
                         on_save: handle_save,
                         on_delete: handle_delete,
+                        auto_sync_interval_secs: auto_sync_secs(),
                     }
                 } else {
                     div {
@@ -228,6 +268,8 @@ pub fn NoteDetail(note_path: String) -> Element {
                         h2 { "Loading..." }
                     }
                 }
+
+                ActivityLogPanel {}
             }
         }
     }

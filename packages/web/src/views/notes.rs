@@ -1,9 +1,9 @@
 use dioxus::prelude::*;
 
 use store::{NamespaceInfo, Repository, TypedNoteInfo};
-use ui::{NewNoteDialog, Sidebar, use_auth};
+use ui::{ActivityLogPanel, NewNoteDialog, Sidebar, use_auth, LogLevel, log_activity, use_activity_log};
 
-use crate::Route;
+use crate::{Route, SidebarState};
 
 const NOTES_CSS: Asset = asset!("/assets/notes.css");
 
@@ -28,6 +28,7 @@ pub fn Notes() -> Element {
     let mut new_ns_name = use_signal(|| String::new());
     let nav = use_navigator();
     let auth = use_auth();
+    let mut activity_log = use_activity_log();
 
     // Load notes from store on mount, then pull from git in background
     let _loader = use_resource(move || async move {
@@ -35,25 +36,33 @@ pub fn Notes() -> Element {
         notes.set(repo.list_notes().await);
         namespaces.set(repo.list_namespaces().await);
 
-        // Background git pull — silently ignored if user has no git config
+        // Background git pull
         spawn(async move {
-            if let Ok(remote_files) = api::pull_notes().await {
-                let repo = make_repo();
-                for file in &remote_files {
-                    // Derive note type from file extension
-                    let ext = file
-                        .path
-                        .rsplit('.')
-                        .next()
-                        .unwrap_or("md");
-                    let note_type = store::models::note_type_from_ext(ext);
-                    // Strip extension for the stem
-                    let stem = file.path.trim_end_matches(&format!(".{ext}"));
-                    repo.write_note(stem, &file.content, note_type).await;
+            log_activity(&mut activity_log, LogLevel::Info, "Pulling from git...");
+            match api::pull_notes().await {
+                Ok(remote_files) => {
+                    let repo = make_repo();
+                    let count = remote_files.len();
+                    for file in &remote_files {
+                        let ext = file
+                            .path
+                            .rsplit('.')
+                            .next()
+                            .unwrap_or("md");
+                        let note_type = store::models::note_type_from_ext(ext);
+                        let stem = file.path.trim_end_matches(&format!(".{ext}"));
+                        repo.write_note(stem, &file.content, note_type).await;
+                    }
+                    if !remote_files.is_empty() {
+                        notes.set(repo.list_notes().await);
+                        namespaces.set(repo.list_namespaces().await);
+                    }
+                    log_activity(&mut activity_log, LogLevel::Success, &format!("Pulled {count} notes"));
                 }
-                if !remote_files.is_empty() {
-                    notes.set(repo.list_notes().await);
-                    namespaces.set(repo.list_namespaces().await);
+                Err(e) => {
+                    log_activity(&mut activity_log, LogLevel::Warning, &format!("Git pull: {e}"));
+                    #[cfg(target_arch = "wasm32")]
+                    web_sys::console::warn_1(&format!("Git pull: {e}").into());
                 }
             }
         });
@@ -119,21 +128,59 @@ pub fn Notes() -> Element {
         });
     };
 
+    let mut sidebar_state = use_context::<Signal<SidebarState>>();
+    let mut is_resizing = use_signal(|| false);
+
+    let on_toggle_collapse = move |_| {
+        let mut st = sidebar_state.write();
+        st.collapsed = !st.collapsed;
+    };
+
+    let handle_mouse_move = move |evt: Event<MouseData>| {
+        if is_resizing() {
+            let x = evt.page_coordinates().x;
+            let new_width = x.max(120.0).min(600.0);
+            sidebar_state.write().width = new_width;
+        }
+    };
+
+    let handle_mouse_up = move |_| {
+        is_resizing.set(false);
+    };
+
+    let ss = sidebar_state();
+    let sidebar_width = if ss.collapsed { "48px".to_string() } else { format!("{}px", ss.width) };
+
     rsx! {
         document::Stylesheet { href: NOTES_CSS }
 
         div {
             class: "notes-layout",
+            onmousemove: handle_mouse_move,
+            onmouseup: handle_mouse_up,
 
-            Sidebar {
-                namespaces: namespaces(),
-                notes: notes(),
-                active_path: None::<String>,
-                user: auth().user,
-                on_select_note: on_select_note,
-                on_create_note: on_create_note,
-                on_create_namespace: on_create_namespace,
-                on_navigate_settings: on_navigate_settings,
+            div {
+                style: "width: {sidebar_width}; min-width: {sidebar_width}; display: flex; flex-shrink: 0;",
+
+                Sidebar {
+                    namespaces: namespaces(),
+                    notes: notes(),
+                    active_path: None::<String>,
+                    user: auth().user,
+                    on_select_note: on_select_note,
+                    on_create_note: on_create_note,
+                    on_create_namespace: on_create_namespace,
+                    on_navigate_settings: on_navigate_settings,
+                    collapsed: ss.collapsed,
+                    on_toggle_collapse: on_toggle_collapse,
+                }
+
+                if !ss.collapsed {
+                    div {
+                        class: if is_resizing() { "sidebar-resize-handle active" } else { "sidebar-resize-handle" },
+                        onmousedown: move |_| is_resizing.set(true),
+                    }
+                }
             }
 
             div {
@@ -181,6 +228,8 @@ pub fn Notes() -> Element {
                         p { "Choose a note from the sidebar or create a new one." }
                     }
                 }
+
+                ActivityLogPanel {}
             }
         }
     }

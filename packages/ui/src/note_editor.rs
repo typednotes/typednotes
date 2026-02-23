@@ -1,5 +1,6 @@
 use dioxus::prelude::*;
 use store::TypedNoteInfo;
+use crate::activity_log_panel::ActivityLogToggle;
 
 const EDITOR_CSS: Asset = asset!("/assets/styling/note_editor.css");
 
@@ -9,6 +10,7 @@ pub fn NoteEditor(
     breadcrumb: Option<String>,
     on_save: EventHandler<String>,
     on_delete: EventHandler<()>,
+    #[props(default = 30)] auto_sync_interval_secs: u32,
 ) -> Element {
     let mut content = use_signal({
         let initial = note.note.clone();
@@ -22,6 +24,26 @@ pub fn NoteEditor(
             dirty.set(false);
         }
     };
+
+    // Auto-sync timer
+    #[cfg(target_arch = "wasm32")]
+    {
+        let interval = auto_sync_interval_secs;
+        use_effect(move || {
+            if interval == 0 {
+                return;
+            }
+            spawn(async move {
+                loop {
+                    gloo_timers::future::TimeoutFuture::new(interval * 1000).await;
+                    if dirty() {
+                        on_save.call(content());
+                        dirty.set(false);
+                    }
+                }
+            });
+        });
+    }
 
     rsx! {
         document::Stylesheet { href: EDITOR_CSS }
@@ -48,6 +70,7 @@ pub fn NoteEditor(
                             "Unsaved changes"
                         }
                     }
+                    ActivityLogToggle {}
                     button {
                         class: "danger",
                         onclick: move |_| on_delete.call(()),

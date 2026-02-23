@@ -1,12 +1,11 @@
 # Build stage
 FROM rust:latest AS builder
 
-# Install dependencies (cmake needed for vendored libgit2)
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     binaryen \
-    cmake \
     && rm -rf /var/lib/apt/lists/*
 
 # Add wasm target
@@ -30,6 +29,7 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -37,8 +37,6 @@ WORKDIR /app
 # Copy the built artifacts
 COPY --from=builder /app/target/dx/web/release/web/web ./web
 COPY --from=builder /app/target/dx/web/release/web/public ./public
-
-RUN mkdir -p /data/repos
 
 EXPOSE 8080
 

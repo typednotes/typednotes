@@ -21,7 +21,8 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"], optional = t
 dotenvy = { version = "0.15", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = ["Window", "Location"] }
+web-sys = { version = "0.3", features = ["Window", "Location", "console"] }
+js-sys = "0.3"
 
 [features]
 default = []

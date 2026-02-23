@@ -15,6 +15,34 @@ impl MemoryStore {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Synchronous get — for use in blocking contexts (e.g. git transport).
+    pub fn get_sync(&self, sha: &Sha) -> Option<Vec<u8>> {
+        self.objects.lock().unwrap().get(&sha.to_hex()).cloned()
+    }
+
+    /// Synchronous put — for use in blocking contexts.
+    pub fn put_sync(&self, sha: &Sha, data: Vec<u8>) {
+        self.objects.lock().unwrap().insert(sha.to_hex(), data);
+    }
+
+    /// Synchronous get_ref — for use in blocking contexts.
+    pub fn get_ref_sync(&self, name: &str) -> Option<Sha> {
+        self.refs.lock().unwrap().get(name).cloned()
+    }
+
+    /// Synchronous set_ref — for use in blocking contexts.
+    pub fn set_ref_sync(&self, name: &str, sha: &Sha) {
+        self.refs
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), sha.clone());
+    }
+
+    /// Return the hex SHA strings of all stored objects.
+    pub fn all_object_shas(&self) -> Vec<String> {
+        self.objects.lock().unwrap().keys().cloned().collect()
+    }
 }
 
 impl ObjectStore for MemoryStore {
