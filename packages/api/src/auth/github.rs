@@ -1,4 +1,31 @@
-//! GitHub OAuth implementation.
+//! # GitHub OAuth 2.0 implementation
+//!
+//! Implements the full GitHub Authorization Code flow with PKCE for TypedNotes.
+//!
+//! ## Types
+//!
+//! - [`GitHubUser`] / [`GitHubEmail`] — deserialization targets for the GitHub REST API
+//!   responses (`/user` and `/user/emails`).
+//! - [`ConfiguredClient`] — a fully-typed `oauth2::Client` alias with auth and token
+//!   endpoints set.
+//! - [`GitHubOAuth`] — the public handler that wraps an [`OAuthConfig`].
+//!
+//! ## Flow
+//!
+//! 1. **[`generate_auth_url`](GitHubOAuth::generate_auth_url)** — builds an authorization
+//!    URL requesting the `user:email` and `read:user` scopes, generates a random PKCE
+//!    challenge, and persists the CSRF state + verifier in the `oauth_states` table with
+//!    a 10-minute expiry.
+//!
+//! 2. **[`exchange_code`](GitHubOAuth::exchange_code)** — called by the `/auth/github/callback`
+//!    route in the `web` crate. It:
+//!    - Retrieves and atomically deletes the matching `oauth_states` row (validating CSRF
+//!      state and expiry in one query).
+//!    - Exchanges the authorization code + PKCE verifier for an access token.
+//!    - Fetches the user's profile from `api.github.com/user`; if no email is present,
+//!      falls back to `/user/emails` and picks the primary verified address.
+//!    - Upserts the user in the `users` table (keyed on `provider = 'github'` +
+//!      `provider_id`) so returning users get their profile refreshed.
 
 use oauth2::basic::BasicClient;
 use oauth2::{

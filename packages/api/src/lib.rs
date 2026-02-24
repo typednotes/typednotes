@@ -1,4 +1,29 @@
-//! This crate contains all shared fullstack server functions.
+//! # API crate — shared fullstack server functions for TypedNotes
+//!
+//! This crate is the backbone of the TypedNotes fullstack architecture. It defines every
+//! Dioxus server function that the web, desktop, and mobile frontends call, along with
+//! the supporting modules they depend on.
+//!
+//! ## Modules
+//!
+//! | Module | Feature gate | Purpose |
+//! |--------|-------------|---------|
+//! | [`auth`] | — | OAuth (GitHub, Google) and local password authentication, session management, password hashing |
+//! | [`crypto`] | `server` | AES-GCM encryption/decryption of SSH private keys, public key extraction |
+//! | [`db`] | — | PostgreSQL connection pool (lazy `OnceCell` singleton) and migrations |
+//! | [`git_transport`] | `server` | Low-level Git fetch/push over SSH using an in-memory object store |
+//! | [`models`] | — | Database models (`User`) and their client-safe projections (`UserInfo`) |
+//!
+//! ## Server functions exposed here
+//!
+//! Every public `async fn` in this file is a Dioxus server function, annotated with
+//! `#[get(...)]` or `#[post(...)]` and compiled twice: once with full server logic
+//! (behind `#[cfg(feature = "server")]`) and once as a thin client stub that simply
+//! forwards the call over HTTP.
+//!
+//! - **Authentication**: `get_current_user`, `get_login_url`, `logout`, `register`, `login_password`
+//! - **Git credentials**: `save_git_credentials`, `get_git_credentials`
+//! - **Git sync**: `sync_note`, `delete_note_remote`, `pull_notes`
 
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};

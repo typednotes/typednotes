@@ -1,4 +1,16 @@
-//! Session data types.
+//! # Session data types and constants
+//!
+//! Defines the lightweight structures used to track authenticated users across requests
+//! via `tower-sessions`.
+//!
+//! - [`SESSION_USER_ID_KEY`] — the string key (`"user_id"`) under which the authenticated
+//!   user's UUID is stored in the session. Every server function that needs authentication
+//!   reads this key from the [`tower_sessions::Session`] to identify the caller.
+//!
+//! - [`SessionData`] — a typed wrapper around the session payload. Currently holds only an
+//!   optional `user_id`; defaults to `None` (unauthenticated). It is `Serialize + Deserialize`
+//!   so it can be persisted by the PostgreSQL-backed session store
+//!   (`tower-sessions-sqlx-store`).
 
 use serde::{Deserialize, Serialize};
 

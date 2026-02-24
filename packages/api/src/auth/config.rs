@@ -1,4 +1,19 @@
-//! OAuth configuration from environment variables.
+//! # OAuth configuration from environment variables
+//!
+//! Provides [`OAuthConfig`], a provider-agnostic container for the five pieces of data
+//! needed by any OAuth 2.0 Authorization Code flow: client ID, client secret, authorize
+//! URL, token URL, and redirect URL.
+//!
+//! Two constructors are offered:
+//!
+//! - [`OAuthConfig::github`] — reads `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and
+//!   optionally `GITHUB_AUTH_REDIRECT_URI` (defaults to `localhost:8080`).
+//! - [`OAuthConfig::google`] — reads `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
+//!   optionally `GOOGLE_AUTH_REDIRECT_URI`.
+//!
+//! Both load `.env` via `dotenvy` first so local development works without exporting
+//! variables manually. In production the values come from the container environment
+//! injected by the infrastructure layer.
 
 use oauth2::{AuthUrl, ClientId, ClientSecret, RedirectUrl, TokenUrl};
 

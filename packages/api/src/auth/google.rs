@@ -1,4 +1,31 @@
-//! Google OAuth implementation.
+//! # Google OAuth 2.0 implementation
+//!
+//! Implements the full Google Authorization Code flow with PKCE for TypedNotes.
+//! The structure mirrors [`super::github`] but targets Google's endpoints and scopes.
+//!
+//! ## Types
+//!
+//! - [`GoogleUser`] — deserialization target for the Google userinfo API response
+//!   (`googleapis.com/oauth2/v2/userinfo`).
+//! - [`ConfiguredClient`] — a fully-typed `oauth2::Client` alias with auth and token
+//!   endpoints set.
+//! - [`GoogleOAuth`] — the public handler that wraps an [`OAuthConfig`].
+//!
+//! ## Flow
+//!
+//! 1. **[`generate_auth_url`](GoogleOAuth::generate_auth_url)** — builds an authorization
+//!    URL requesting `openid`, `email`, and `profile` scopes, generates a random PKCE
+//!    challenge, and persists the CSRF state + verifier in the `oauth_states` table with
+//!    a 10-minute expiry.
+//!
+//! 2. **[`exchange_code`](GoogleOAuth::exchange_code)** — called by the `/auth/google/callback`
+//!    route in the `web` crate. It:
+//!    - Retrieves and atomically deletes the matching `oauth_states` row (validating CSRF
+//!      state and expiry in one query).
+//!    - Exchanges the authorization code + PKCE verifier for an access token.
+//!    - Fetches the user's profile from the Google userinfo endpoint.
+//!    - Upserts the user in the `users` table (keyed on `provider = 'google'` +
+//!      `provider_id`) so returning users get their profile refreshed.
 
 use oauth2::basic::BasicClient;
 use oauth2::{

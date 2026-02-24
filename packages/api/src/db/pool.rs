@@ -1,4 +1,26 @@
-//! Database connection pool using OnceLock pattern.
+//! # PostgreSQL connection pool — lazy singleton via `OnceCell`
+//!
+//! Implements the single-pool pattern for the TypedNotes server: a `static` [`OnceCell`]
+//! holds the [`PgPool`] so that every server function, OAuth callback, and session store
+//! shares the same set of connections without passing the pool through function arguments.
+//!
+//! ## Initialisation
+//!
+//! [`get_pool`] is the sole public entry point. On first invocation it:
+//!
+//! 1. Loads environment variables from `.env` via `dotenvy` (errors silently ignored so
+//!    production deployments that inject env vars directly are unaffected).
+//! 2. Reads `DATABASE_URL` — panics if unset, since no useful work can happen without a
+//!    database.
+//! 3. Opens a [`PgPoolOptions`] pool capped at **5 connections** and caches the resulting
+//!    `PgPool` in the `OnceCell`.
+//!
+//! Subsequent calls return the cached pool immediately without re-connecting.
+//!
+//! ## Error handling
+//!
+//! Returns `Result<&'static PgPool, sqlx::Error>` so callers (typically server functions)
+//! can convert the error into a `ServerFnError` and surface it to the client.
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;

@@ -1,4 +1,18 @@
-//! Password hashing and verification using Argon2id.
+//! # Password hashing and verification — Argon2id
+//!
+//! Provides the two functions used by the local (email + password) authentication path:
+//!
+//! - [`hash_password`] — generates a random salt via [`OsRng`], hashes the plaintext
+//!   password with the default Argon2id parameters, and returns the result as a
+//!   PHC-format string (e.g. `$argon2id$v=19$m=19456,t=2,p=1$...`). This string is
+//!   stored in the `password_hash` column of the `users` table.
+//!
+//! - [`verify_password`] — parses a PHC-format hash and checks whether the provided
+//!   plaintext matches. Returns `Ok(true)` on success, `Ok(false)` on mismatch, or
+//!   `Err` if the stored hash is malformed.
+//!
+//! Both functions use the `argon2` crate with its default (memory-hard) configuration,
+//! which provides strong resistance against GPU and ASIC brute-force attacks.
 
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},

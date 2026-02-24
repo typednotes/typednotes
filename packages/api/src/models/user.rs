@@ -1,4 +1,28 @@
-//! User model for authenticated users.
+//! # User model for authenticated users
+//!
+//! Defines the two representations of a TypedNotes user:
+//!
+//! ## [`User`] (server only)
+//!
+//! The complete database row from the `users` table. It derives [`sqlx::FromRow`] so it
+//! can be loaded directly from queries and contains every column:
+//!
+//! - `id` — primary key (`UUID v4`).
+//! - `email`, `name`, `avatar_url` — profile fields populated during OAuth or registration.
+//! - `provider` / `provider_id` — identify the auth provider (`"github"`, `"google"`, or
+//!   `"local"` for email+password accounts where `provider_id` equals the email).
+//! - `password_hash` — Argon2 hash, present only for `"local"` accounts.
+//! - `created_at` / `updated_at` — audit timestamps.
+//!
+//! The [`User::to_info`] method projects this into a [`UserInfo`].
+//!
+//! ## [`UserInfo`]
+//!
+//! A client-safe subset that is `Serialize + Deserialize + PartialEq` and can cross the
+//! server/client boundary via Dioxus server functions. It omits the password hash and
+//! timestamps and converts the `Uuid` to a `String` so it works in WASM.
+//! The helper [`UserInfo::display_name`] returns the user's name or falls back to their
+//! email address.
 
 use serde::{Deserialize, Serialize};
 
