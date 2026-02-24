@@ -1,3 +1,33 @@
+//! # IndexedDB object store — browser-side persistence
+//!
+//! [`IdbStore`] is the [`ObjectStore`] implementation used on the **web platform**.
+//! It persists Git objects and refs into the browser's IndexedDB via the [`rexie`]
+//! crate (a Rust wrapper around the IndexedDB API), giving the client an offline-capable
+//! local copy of the note repository.
+//!
+//! ## Database schema
+//!
+//! A single IndexedDB database named `"typednotes"` (version 1) with two object stores:
+//!
+//! | IndexedDB store | Key | Value | Maps to |
+//! |-----------------|-----|-------|---------|
+//! | `"objects"` | SHA-1 hex string | `Vec<u8>` (serialised via `serde_wasm_bindgen`) | Git objects (blobs, trees, commits) |
+//! | `"refs"` | ref name (e.g. `"HEAD"`) | SHA-1 hex string | Named references |
+//!
+//! ## Connection management
+//!
+//! `IdbStore` is a zero-size struct (`Clone`-friendly) that opens a fresh
+//! [`Rexie`] connection on every operation. This is intentional: `Rexie` does not
+//! implement `Clone`, and reopening is cheap because the browser caches IndexedDB
+//! connections internally.
+//!
+//! ## Error handling
+//!
+//! All trait methods silently swallow errors (returning `None` for reads, doing nothing
+//! for writes). This keeps the UI resilient — a corrupted or unavailable IndexedDB
+//! degrades to "no local data" rather than crashing. The authoritative copy of the
+//! notes always lives on the Git remote.
+
 use crate::objects::Sha;
 use crate::repo::ObjectStore;
 use rexie::{ObjectStore as RexieObjectStore, Rexie, TransactionMode};

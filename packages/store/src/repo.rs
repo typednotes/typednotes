@@ -1,3 +1,58 @@
+//! # Repository — high-level Git operations on an abstract object store
+//!
+//! This module is the core of TypedNotes' storage layer. [`Repository`] provides a
+//! Git-compatible, content-addressable note store without requiring a working directory
+//! or the `git` binary. All reads and writes go through the [`ObjectStore`] trait, so
+//! the same logic works against an in-memory store (server-side Git sync), an
+//! IndexedDB store (client-side offline), or any future backend.
+//!
+//! ## [`ObjectStore`] trait
+//!
+//! An async interface with four methods — `get`/`put` for SHA-keyed object blobs, and
+//! `get_ref`/`set_ref` for named references (e.g. `"HEAD"`). Implementations live in
+//! sibling modules ([`crate::memory`], [`crate::idb`]).
+//!
+//! ## Read path
+//!
+//! | Method | Description |
+//! |--------|-------------|
+//! | [`get_head`](Repository::get_head) | Returns the SHA the `HEAD` ref points to. |
+//! | [`get_root_tree`](Repository::get_root_tree) | Follows `HEAD` → commit → root tree. |
+//! | [`list_notes`](Repository::list_notes) | Recursively walks the root tree, collecting every `.md`/`.txt` blob as a [`TypedNoteInfo`]. |
+//! | [`list_namespaces`](Repository::list_namespaces) | Same walk, but collects directories as [`NamespaceInfo`]. |
+//! | [`list_notes_in`](Repository::list_notes_in) / [`list_namespaces_in`](Repository::list_namespaces_in) | Scoped variants that start from a subtree (e.g. a configured notes root). |
+//! | [`get_note`](Repository::get_note) | Resolves a full path (e.g. `"work/ideas/project.md"`) to its blob and returns a [`TypedNoteInfo`]. |
+//! | [`get_config`](Repository::get_config) | Reads `typednotes.toml` from the repo root, falling back to [`TypedNotesConfig::default`]. |
+//!
+//! ## Write path
+//!
+//! Every write method follows the same pattern: create or update the blob, rebuild
+//! the tree hierarchy from the leaf up to the root (via [`update_tree_at_path`](Repository::update_tree_at_path)),
+//! create a new commit pointing to the new root tree with the current `HEAD` as parent,
+//! and advance `HEAD`. This mirrors how `git commit` works, but entirely in memory.
+//!
+//! | Method | Description |
+//! |--------|-------------|
+//! | [`write_note`](Repository::write_note) | Creates/updates a note, auto-appending the correct extension (`.md`/`.txt`). |
+//! | [`write_note_raw`](Repository::write_note_raw) | Writes arbitrary bytes at an exact path (used internally for `.gitkeep` and config). |
+//! | [`delete_note`](Repository::delete_note) | Removes a blob from the tree and commits the result. |
+//! | [`create_namespace`](Repository::create_namespace) | Creates a directory by writing a `.gitkeep` file inside it. |
+//! | [`set_config`](Repository::set_config) | Serialises a [`TypedNotesConfig`] to TOML and commits it at the repo root. |
+//!
+//! ## Tree manipulation
+//!
+//! [`update_tree_at_path`](Repository::update_tree_at_path) is the recursive workhorse:
+//! given a path like `"work/ideas/project.md"`, it walks/creates intermediate subtrees
+//! (`work` → `ideas`), inserts or removes the leaf entry, hashes every modified tree on
+//! the way back up, and stores them in the object store. The result is a new root
+//! [`Tree`] ready to be committed.
+//!
+//! ## Timestamps
+//!
+//! [`current_timestamp`] is platform-aware: it uses `js_sys::Date::now()` on WASM and
+//! `std::time::SystemTime` on native, ensuring commits get sensible timestamps in both
+//! environments.
+
 use crate::config::TypedNotesConfig;
 use crate::models::{ext_from_note_type, note_type_from_ext, NamespaceInfo, TypedNoteInfo};
 use crate::objects::*;

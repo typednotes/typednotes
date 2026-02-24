@@ -1,3 +1,42 @@
+//! # Git object model — types, serialisation, parsing, and hashing
+//!
+//! This module is a pure-Rust, dependency-light implementation of the four core
+//! Git object types. It is used by [`crate::Repository`] to build and read
+//! in-memory Git trees, and by [`api::git_transport`](../../api/src/git_transport.rs)
+//! when packing/unpacking objects for the wire protocol.
+//!
+//! ## Object types
+//!
+//! | Struct | Git type | Description |
+//! |--------|----------|-------------|
+//! | [`Blob`] | `blob` | Raw file content (a note's body). |
+//! | [`Tree`] | `tree` | A sorted directory listing of [`TreeEntry`] items, each carrying a mode, name, and child SHA. |
+//! | [`Commit`] | `commit` | Points to a root [`Tree`] SHA, an optional parent commit, author/timestamp metadata, and a message. |
+//! | [`Sha`] | — | A 20-byte SHA-1 hash that uniquely identifies any object. Supports hex round-tripping via [`Sha::from_hex`] / [`Sha::to_hex`]. |
+//!
+//! ## Hashing (write path)
+//!
+//! Each `hash_*` function serialises an object into the canonical Git format
+//! (`"{type} {size}\0{content}"`), computes its SHA-1, and returns both the
+//! [`Sha`] and the full byte representation ready to be stored in an object store.
+//!
+//! - [`hash_blob`] — wraps raw bytes with a `blob` header.
+//! - [`hash_tree`] — sorts entries by name (with trailing `/` for directories,
+//!   matching Git's collation), then encodes `"{mode} {name}\0{20-byte sha}"` per entry.
+//! - [`hash_commit`] — produces the standard `tree`/`parent`/`author`/`committer`
+//!   header block followed by a blank line and the commit message.
+//!
+//! ## Parsing (read path)
+//!
+//! The inverse `parse_*` functions take a raw stored object (including its header)
+//! and return the corresponding struct, or `None` if the data is malformed or the
+//! type tag does not match:
+//!
+//! - [`parse_blob`], [`parse_tree`], [`parse_commit`]
+//!
+//! All parsers delegate header validation to [`parse_header`], which checks the
+//! type tag and verifies that the declared size matches the actual content length.
+
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 

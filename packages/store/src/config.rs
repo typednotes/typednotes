@@ -1,3 +1,31 @@
+//! # Repository-level configuration — `typednotes.toml`
+//!
+//! Defines the TOML configuration file that lives at the root of a TypedNotes
+//! Git repository (filename: [`TypedNotesConfig::filename`] = `"typednotes.toml"`).
+//! The file is read during sync to determine how notes are organised in the repo
+//! and how automatic synchronisation behaves.
+//!
+//! ## Structure
+//!
+//! ```toml
+//! [notes]
+//! root = "notes"          # subfolder containing notes (empty = repo root)
+//!
+//! [sync]
+//! auto_sync_interval_secs = 30   # 0 to disable auto-sync
+//! ```
+//!
+//! ## Types
+//!
+//! | Struct | Purpose |
+//! |--------|---------|
+//! | [`TypedNotesConfig`] | Top-level config. Provides builder helpers (`new`, `with_sync_interval`), TOML (de)serialisation, and the canonical filename constant. |
+//! | [`NotesConfig`] | Notes section — currently just a `root` path for the notes subfolder. |
+//! | [`SyncConfig`] | Sync section — `auto_sync_interval_secs` with a default of **30 seconds**. |
+//!
+//! All structs derive `Default` (with sensible production defaults) so that a
+//! missing or empty config file is equivalent to the default configuration.
+
 use serde::{Deserialize, Serialize};
 
 /// Top-level configuration stored in `typednotes.toml`.

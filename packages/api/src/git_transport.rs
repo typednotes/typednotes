@@ -1,10 +1,51 @@
-//! Git transport over SSH using the git smart protocol.
+//! # Git transport over SSH — smart protocol implementation
 //!
-//! All functions are **blocking** (they spawn an SSH subprocess) and should be
-//! called from `tokio::task::spawn_blocking`.
+//! This module implements the [Git smart transfer protocol][smart] (v1) over SSH,
+//! providing the low-level fetch and push operations that power TypedNotes' Git
+//! sync feature. It communicates with a standard Git remote (GitHub, GitLab, any
+//! SSH-accessible server) by spawning `ssh` subprocesses that invoke
+//! `git-upload-pack` (fetch) and `git-receive-pack` (push).
 //!
-//! Objects are stored in / read from a [`store::MemoryStore`] using its sync
-//! methods so that the async ObjectStore trait is not required.
+//! [smart]: https://git-scm.com/docs/pack-protocol
+//!
+//! ## Threading model
+//!
+//! All public functions are **blocking** — they spawn an SSH child process and
+//! perform synchronous I/O on its stdin/stdout. Callers in the async server
+//! functions (see [`crate`]) wrap them in [`tokio::task::spawn_blocking`].
+//!
+//! ## Storage
+//!
+//! Objects are read from and written to a [`store::MemoryStore`] via its
+//! synchronous accessors (`get_sync`, `put_sync`, `set_ref_sync`). This avoids
+//! the need for an async runtime inside the blocking task and keeps the entire
+//! fetch/push cycle self-contained in memory.
+//!
+//! ## Public API
+//!
+//! | Function | Git command | Description |
+//! |----------|-------------|-------------|
+//! | [`fetch`] | `git-upload-pack` | Downloads all refs and objects from the remote into the `MemoryStore`. Negotiates wants (all advertised refs), receives a packfile via sideband-64k, parses it, and sets `HEAD` to the requested branch. |
+//! | [`push`] | `git-receive-pack` | Sends locally-created objects to the remote. Builds a minimal packfile containing only new objects, sends a ref-update command, and verifies the `report-status` response. |
+//!
+//! ## Internal structure
+//!
+//! The rest of the module is organised into helper sections:
+//!
+//! - **SSH helpers** — `parse_ssh_url` (SCP-like and `ssh://` formats), `write_ssh_key`
+//!   (temp file with `0600` permissions), `ssh_opts` (strict host-key checking disabled
+//!   for headless operation).
+//! - **pkt-line protocol** — `read_pkt_line`, `write_pkt_line`, `write_pkt_flush` for
+//!   the length-prefixed framing used by the Git wire protocol.
+//! - **Ref advertisement parsing** — reads the initial ref list + capabilities sent by
+//!   the remote.
+//! - **Pack file parsing (fetch)** — `parse_pack` handles version-2/3 packs with
+//!   non-delta objects (commit, tree, blob, tag), `OFS_DELTA`, and `REF_DELTA` entries,
+//!   including zlib decompression and delta application.
+//! - **Pack file building (push)** — `build_pack` serialises a set of objects into a
+//!   valid version-2 pack with a trailing SHA-1 checksum.
+//! - **Delta application** — `apply_delta` implements the copy/insert instruction set
+//!   defined by the Git delta format.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};

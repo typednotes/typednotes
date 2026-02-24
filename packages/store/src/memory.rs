@@ -1,3 +1,38 @@
+//! # In-memory object store
+//!
+//! [`MemoryStore`] is an [`ObjectStore`] implementation that keeps every Git object
+//! and ref in process memory, backed by `Arc<Mutex<HashMap>>` maps. It is used in
+//! two contexts:
+//!
+//! - **Server-side Git sync** — each fetch/push cycle in [`api::git_transport`] creates
+//!   a fresh `MemoryStore`, populates it via `fetch`, lets [`crate::Repository`] read
+//!   or mutate the tree, and then `push`es the result. The store is discarded once the
+//!   request completes — there is no persistent server-side state beyond the remote.
+//!
+//! - **Tests** — the `#[cfg(test)]` section at the bottom of this file exercises the
+//!   full `Repository` API (write, read, delete, namespaces, config, scoped listing)
+//!   against a `MemoryStore`, validating the entire storage layer without I/O.
+//!
+//! ## Dual API surface
+//!
+//! Because the Git transport code runs inside `tokio::task::spawn_blocking`, it cannot
+//! call `async` methods. `MemoryStore` therefore exposes **both**:
+//!
+//! - The async [`ObjectStore`] trait (`get`, `put`, `get_ref`, `set_ref`) — used by
+//!   `Repository` in normal async code.
+//! - Synchronous equivalents (`get_sync`, `put_sync`, `get_ref_sync`, `set_ref_sync`)
+//!   — used by the blocking Git transport layer.
+//!
+//! Both surfaces access the same underlying `Arc<Mutex<…>>` maps, so data written via
+//! one is immediately visible to the other.
+//!
+//! ## `all_object_shas`
+//!
+//! A convenience method that returns the hex SHA keys of every stored object. Used by
+//! the server functions in [`api`] to compute the set of newly created objects (by
+//! diffing snapshots before and after a `Repository` write) so that only those objects
+//! are included in the push packfile.
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 

@@ -1,3 +1,25 @@
+//! # Domain models for notes and namespaces
+//!
+//! Defines the data structures returned by [`crate::Repository`] when listing or
+//! reading the contents of a Git tree. These types are `Serialize + Deserialize`
+//! so they can cross the server/client boundary via Dioxus server functions.
+//!
+//! ## Types
+//!
+//! | Struct | Represents |
+//! |--------|-----------|
+//! | [`TypedNoteInfo`] | A single note file in the repository. Carries the full tree path, a human-friendly `name` (filename without extension), an optional `namespace` (parent directory), the note `type` (`"markdown"` or `"text"`), the body content, and the blob SHA for change detection. |
+//! | [`NamespaceInfo`] | A directory in the repository's note tree. Stores its full path, display name, and optional parent — used by the UI to render a folder hierarchy. |
+//!
+//! ## Helper functions
+//!
+//! - [`note_type_from_ext`] — maps a file extension to a note type (`"md"` → `"markdown"`,
+//!   everything else → `"text"`).
+//! - [`ext_from_note_type`] — the inverse mapping (`"markdown"` → `"md"`, default `"txt"`).
+//!
+//! These are used by [`crate::Repository`] when reading notes from the tree and when
+//! constructing file paths for new or updated notes.
+
 use serde::{Deserialize, Serialize};
 
 /// Information about a note stored in the git tree.
