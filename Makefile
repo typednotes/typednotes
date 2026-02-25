@@ -63,12 +63,21 @@ env:
 	@sops decrypt secrets.yaml | yq -r '"SCW_CONTAINER_URL=" + .cloud.scaleway.container_url' >> .env
 	@sops decrypt secrets.yaml | yq -r '"GITHUB_CLIENT_ID=" + .identity.github.dev.client_id' >> .env
 	@sops decrypt secrets.yaml | yq -r '"GITHUB_CLIENT_SECRET=" + .identity.github.dev.client_secret' >> .env
-	@sops decrypt secrets.yaml | yq -r '"GITHUB_REDIRECT_URI=" + .identity.github.dev.redirect_uri' >> .env
+	@sops decrypt secrets.yaml | yq -r '"GITHUB_AUTH_REDIRECT_URI=" + .identity.github.dev.redirect_uri' >> .env
 	@sops decrypt secrets.yaml | yq -r '"GOOGLE_CLIENT_ID=" + .identity.google.client_id' >> .env
 	@sops decrypt secrets.yaml | yq -r '"GOOGLE_CLIENT_SECRET=" + .identity.google.client_secret' >> .env
-	@sops decrypt secrets.yaml | yq -r '"GOOGLE_REDIRECT_URI=" + .identity.google.dev.redirect_uri' >> .env
+	@sops decrypt secrets.yaml | yq -r '"GOOGLE_AUTH_REDIRECT_URI=" + .identity.google.dev.redirect_uri' >> .env
 	@sops decrypt secrets.yaml | yq -r '"ENCRYPTION_KEY=" + .encryption_key' >> .env
 	@echo "Generated .env from secrets.yaml (dev)"
+
+# Tailwind CSS
+.PHONY: tailwind
+tailwind:
+	npx @tailwindcss/cli -i ./input.css -o ./packages/web/assets/tailwind.css --watch
+
+.PHONY: tailwind-build
+tailwind-build:
+	npx @tailwindcss/cli -i ./input.css -o ./packages/web/assets/tailwind.css --minify
 
 # Migrations commands
 

@@ -1,6 +1,7 @@
 //! Registration page view with email/password form.
 
 use dioxus::prelude::*;
+use ui::components::{Button, ButtonVariant, Input};
 use ui::use_auth;
 
 /// Register page component.
@@ -75,64 +76,64 @@ pub fn Register() -> Element {
 
     rsx! {
         div {
-            class: "login-container",
-            style: "display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem; background: #ffffff;",
+            class: "flex flex-col items-center justify-center min-h-screen p-8 bg-white",
 
             h1 {
-                style: "margin-bottom: 0.5rem; color: #37352f; font-weight: 700; font-size: 1.75rem;",
+                class: "mb-2 text-neutral-800 font-bold text-[1.75rem]",
                 "Create Account"
             }
 
             p {
-                style: "margin-bottom: 2rem; color: #787774; font-size: 0.9375rem;",
+                class: "mb-8 text-neutral-600 text-[0.9375rem]",
                 "Sign up for TypedNotes"
             }
 
             form {
                 onsubmit: handle_register,
-                style: "display: flex; flex-direction: column; gap: 0.75rem; width: 100%; max-width: 320px;",
+                class: "flex flex-col gap-3 w-full max-w-[320px]",
 
                 if let Some(err) = error() {
                     div {
-                        style: "padding: 0.625rem; background: #fef2f2; border: 1px solid #fecaca; border-radius: 4px; color: #dc2626; font-size: 0.8125rem;",
+                        class: "px-2.5 py-2.5 bg-red-50 border border-red-200 rounded text-red-600 text-[0.8125rem]",
                         "{err}"
                     }
                 }
 
-                input {
-                    class: "auth-input",
+                Input {
+                    class: "w-full",
                     r#type: "text",
                     placeholder: "Name",
                     value: name(),
-                    oninput: move |evt| name.set(evt.value()),
+                    oninput: move |evt: FormEvent| name.set(evt.value()),
                 }
 
-                input {
-                    class: "auth-input",
+                Input {
+                    class: "w-full",
                     r#type: "email",
                     placeholder: "Email",
                     value: email(),
-                    oninput: move |evt| email.set(evt.value()),
+                    oninput: move |evt: FormEvent| email.set(evt.value()),
                 }
 
-                input {
-                    class: "auth-input",
+                Input {
+                    class: "w-full",
                     r#type: "password",
                     placeholder: "Password (min 8 characters)",
                     value: password(),
-                    oninput: move |evt| password.set(evt.value()),
+                    oninput: move |evt: FormEvent| password.set(evt.value()),
                 }
 
-                input {
-                    class: "auth-input",
+                Input {
+                    class: "w-full",
                     r#type: "password",
                     placeholder: "Confirm password",
                     value: confirm_password(),
-                    oninput: move |evt| confirm_password.set(evt.value()),
+                    oninput: move |evt: FormEvent| confirm_password.set(evt.value()),
                 }
 
-                button {
-                    class: "local-btn",
+                Button {
+                    variant: ButtonVariant::Primary,
+                    class: "w-full text-[0.9375rem] font-medium",
                     r#type: "submit",
                     disabled: loading(),
                     if loading() { "Creating account..." } else { "Sign up" }
@@ -140,58 +141,14 @@ pub fn Register() -> Element {
             }
 
             p {
-                style: "margin-top: 1.5rem; font-size: 0.875rem; color: #787774;",
+                class: "mt-6 text-sm text-neutral-600",
                 "Already have an account? "
                 a {
+                    class: "text-primary-500 no-underline",
                     href: "/login",
-                    style: "color: #2383e2; text-decoration: none;",
                     "Sign in"
                 }
             }
-        }
-
-        style {
-            r#"
-            .auth-input {{
-                width: 100%;
-                padding: 0.625rem 0.75rem;
-                border: 1px solid #e3e2e0;
-                border-radius: 4px;
-                font-size: 0.9375rem;
-                color: #37352f;
-                background: #ffffff;
-                outline: none;
-                box-sizing: border-box;
-                font-family: inherit;
-            }}
-
-            .auth-input:focus {{
-                border-color: #2383e2;
-                box-shadow: 0 0 0 1px #2383e2;
-            }}
-
-            .local-btn {{
-                padding: 0.625rem 1.25rem;
-                background: #2383e2;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                font-size: 0.9375rem;
-                font-weight: 500;
-                cursor: pointer;
-                font-family: inherit;
-                transition: background-color 0.15s;
-            }}
-
-            .local-btn:hover:not(:disabled) {{
-                background: #1b6ec2;
-            }}
-
-            .local-btn:disabled {{
-                opacity: 0.5;
-                cursor: not-allowed;
-            }}
-            "#
         }
     }
 }

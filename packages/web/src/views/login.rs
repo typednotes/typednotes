@@ -1,6 +1,7 @@
 //! Login page view with email/password and OAuth buttons.
 
 use dioxus::prelude::*;
+use ui::components::{Button, ButtonVariant, Input};
 use ui::{LoginButton, use_auth};
 
 /// Login page component.
@@ -63,49 +64,49 @@ pub fn Login() -> Element {
 
     rsx! {
         div {
-            class: "login-container",
-            style: "display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 2rem; background: #ffffff;",
+            class: "flex flex-col items-center justify-center min-h-screen p-8 bg-white",
 
             h1 {
-                style: "margin-bottom: 0.5rem; color: #37352f; font-weight: 700; font-size: 1.75rem;",
+                class: "mb-2 text-neutral-800 font-bold text-[1.75rem]",
                 "TypedNotes"
             }
 
             p {
-                style: "margin-bottom: 2rem; color: #787774; font-size: 0.9375rem;",
+                class: "mb-8 text-neutral-600 text-[0.9375rem]",
                 "Sign in to your account"
             }
 
             // Email/password form
             form {
                 onsubmit: handle_login,
-                style: "display: flex; flex-direction: column; gap: 0.75rem; width: 100%; max-width: 320px;",
+                class: "flex flex-col gap-3 w-full max-w-[320px]",
 
                 if let Some(err) = error() {
                     div {
-                        style: "padding: 0.625rem; background: #fef2f2; border: 1px solid #fecaca; border-radius: 4px; color: #dc2626; font-size: 0.8125rem;",
+                        class: "px-2.5 py-2.5 bg-red-50 border border-red-200 rounded text-red-600 text-[0.8125rem]",
                         "{err}"
                     }
                 }
 
-                input {
-                    class: "auth-input",
+                Input {
+                    class: "w-full",
                     r#type: "email",
                     placeholder: "Email",
                     value: email(),
-                    oninput: move |evt| email.set(evt.value()),
+                    oninput: move |evt: FormEvent| email.set(evt.value()),
                 }
 
-                input {
-                    class: "auth-input",
+                Input {
+                    class: "w-full",
                     r#type: "password",
                     placeholder: "Password",
                     value: password(),
-                    oninput: move |evt| password.set(evt.value()),
+                    oninput: move |evt: FormEvent| password.set(evt.value()),
                 }
 
-                button {
-                    class: "local-btn",
+                Button {
+                    variant: ButtonVariant::Primary,
+                    class: "w-full text-[0.9375rem] font-medium",
                     r#type: "submit",
                     disabled: loading(),
                     if loading() { "Signing in..." } else { "Sign in" }
@@ -114,124 +115,38 @@ pub fn Login() -> Element {
 
             // Divider
             div {
-                style: "display: flex; align-items: center; gap: 1rem; width: 100%; max-width: 320px; margin: 1.5rem 0;",
-                div { style: "flex: 1; height: 1px; background: #e3e2e0;" }
-                span { style: "color: #787774; font-size: 0.8125rem;", "or" }
-                div { style: "flex: 1; height: 1px; background: #e3e2e0;" }
+                class: "flex items-center gap-4 w-full max-w-[320px] my-6",
+                div { class: "flex-1 h-px bg-neutral-300" }
+                span { class: "text-neutral-600 text-[0.8125rem]", "or" }
+                div { class: "flex-1 h-px bg-neutral-300" }
             }
 
             // OAuth buttons
             div {
-                class: "login-buttons",
-                style: "display: flex; flex-direction: column; gap: 0.75rem; width: 100%; max-width: 320px;",
+                class: "flex flex-col gap-3 w-full max-w-[320px]",
 
                 LoginButton {
                     provider: "github",
                     label: "Continue with GitHub",
-                    class: "login-btn github-btn",
+                    class: "flex items-center justify-center px-5 py-2.5 border-none rounded text-[0.9375rem] font-medium cursor-pointer transition-colors duration-150 font-sans bg-[#24292e] text-white hover:bg-[#2f363d] disabled:opacity-50 disabled:cursor-not-allowed",
                 }
 
                 LoginButton {
                     provider: "google",
                     label: "Continue with Google",
-                    class: "login-btn google-btn",
+                    class: "flex items-center justify-center px-5 py-2.5 border-none rounded text-[0.9375rem] font-medium cursor-pointer transition-colors duration-150 font-sans bg-[#4285f4] text-white hover:bg-[#357abd] disabled:opacity-50 disabled:cursor-not-allowed",
                 }
             }
 
             p {
-                style: "margin-top: 1.5rem; font-size: 0.875rem; color: #787774;",
+                class: "mt-6 text-sm text-neutral-600",
                 "Don't have an account? "
                 a {
+                    class: "text-primary-500 no-underline",
                     href: "/register",
-                    style: "color: #2383e2; text-decoration: none;",
                     "Sign up"
                 }
             }
-        }
-
-        style {
-            r#"
-            .auth-input {{
-                width: 100%;
-                padding: 0.625rem 0.75rem;
-                border: 1px solid #e3e2e0;
-                border-radius: 4px;
-                font-size: 0.9375rem;
-                color: #37352f;
-                background: #ffffff;
-                outline: none;
-                box-sizing: border-box;
-                font-family: inherit;
-            }}
-
-            .auth-input:focus {{
-                border-color: #2383e2;
-                box-shadow: 0 0 0 1px #2383e2;
-            }}
-
-            .local-btn {{
-                padding: 0.625rem 1.25rem;
-                background: #2383e2;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                font-size: 0.9375rem;
-                font-weight: 500;
-                cursor: pointer;
-                font-family: inherit;
-                transition: background-color 0.15s;
-            }}
-
-            .local-btn:hover:not(:disabled) {{
-                background: #1b6ec2;
-            }}
-
-            .local-btn:disabled {{
-                opacity: 0.5;
-                cursor: not-allowed;
-            }}
-
-            .login-btn {{
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 0.625rem 1.25rem;
-                border: none;
-                border-radius: 4px;
-                font-size: 0.9375rem;
-                font-weight: 500;
-                cursor: pointer;
-                transition: background-color 0.15s;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-            }}
-
-            .login-btn:hover {{
-                opacity: 0.9;
-            }}
-
-            .login-btn:disabled {{
-                opacity: 0.5;
-                cursor: not-allowed;
-            }}
-
-            .github-btn {{
-                background-color: #24292e;
-                color: white;
-            }}
-
-            .github-btn:hover:not(:disabled) {{
-                background-color: #2f363d;
-            }}
-
-            .google-btn {{
-                background-color: #4285f4;
-                color: white;
-            }}
-
-            .google-btn:hover:not(:disabled) {{
-                background-color: #357abd;
-            }}
-            "#
         }
     }
 }

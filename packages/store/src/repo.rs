@@ -368,6 +368,21 @@ impl<S: ObjectStore> Repository<S> {
         self.write_note_raw(&gitkeep_path, b"").await
     }
 
+    /// Rename a note: reads content from old_path, writes to new_path, deletes old_path.
+    pub async fn rename_note(&self, old_path: &str, new_path: &str) -> Option<Sha> {
+        // Read existing content
+        let note = self.get_note(old_path).await?;
+        // Write to new path
+        self.write_note(
+            new_path.trim_end_matches(&format!(".{}", ext_from_note_type(&note.r#type))),
+            &note.note,
+            &note.r#type,
+        )
+        .await;
+        // Delete old path
+        self.delete_note(old_path).await
+    }
+
     /// Read the `typednotes.toml` configuration from the repo root.
     pub async fn get_config(&self) -> TypedNotesConfig {
         let Some(tree) = self.get_root_tree().await else {

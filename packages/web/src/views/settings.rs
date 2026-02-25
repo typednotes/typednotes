@@ -1,32 +1,18 @@
 use dioxus::prelude::*;
 
-use store::{NamespaceInfo, Repository, TypedNoteInfo, TypedNotesConfig};
-use ui::{Sidebar, use_auth};
+use store::{NamespaceInfo, TypedNoteInfo, TypedNotesConfig};
+use ui::components::{Button, ButtonVariant, Input, Label, Textarea, TextareaVariant};
+use ui::{ThemeSignal, apply_theme};
 
-use crate::{Route, SidebarState};
-
-const NOTES_CSS: Asset = asset!("/assets/notes.css");
-
-fn make_repo() -> Repository<impl store::ObjectStore> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        Repository::new(store::IdbStore::new())
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        Repository::new(store::MemoryStore::new())
-    }
-}
+use super::make_repo;
 
 #[component]
 pub fn Settings() -> Element {
-    let mut notes = use_signal(Vec::<TypedNoteInfo>::new);
-    let mut namespaces = use_signal(Vec::<NamespaceInfo>::new);
+    let mut notes = use_context::<Signal<Vec<TypedNoteInfo>>>();
+    let mut namespaces = use_context::<Signal<Vec<NamespaceInfo>>>();
     let mut notes_root = use_signal(|| String::new());
-    let mut auto_sync_secs = use_signal(|| 30u32);
+    let mut auto_sync_secs = use_signal(|| 300u32);
     let mut save_status = use_signal(|| Option::<&str>::None);
-    let nav = use_navigator();
-    let auth = use_auth();
 
     // Git credentials state
     let mut git_remote_url = use_signal(String::new);
@@ -41,11 +27,9 @@ pub fn Settings() -> Element {
     let mut is_syncing = use_signal(|| false);
     let mut sync_log = use_signal(Vec::<String>::new);
 
-    // Load data on mount
+    // Load config + git credentials on mount
     let _loader = use_resource(move || async move {
         let repo = make_repo();
-        notes.set(repo.list_notes().await);
-        namespaces.set(repo.list_namespaces().await);
         let config = repo.get_config().await;
         notes_root.set(config.notes.root);
         auto_sync_secs.set(config.sync.auto_sync_interval_secs);
@@ -57,25 +41,6 @@ pub fn Settings() -> Element {
             ssh_public_key.set(creds.ssh_public_key);
         }
     });
-
-    let on_select_note = move |path: String| {
-        let encoded = path.replace('/', "~");
-        nav.push(Route::NoteDetail {
-            note_path: encoded,
-        });
-    };
-
-    let on_create_note = move |_ns: Option<String>| {
-        nav.push(Route::Notes {});
-    };
-
-    let on_create_namespace = move |_parent: Option<String>| {
-        nav.push(Route::Notes {});
-    };
-
-    let on_navigate_settings = move |_| {
-        // Already on settings
-    };
 
     let handle_save = move |_| {
         spawn(async move {
@@ -148,261 +113,225 @@ pub fn Settings() -> Element {
         });
     };
 
-    let mut sidebar_state = use_context::<Signal<SidebarState>>();
-    let mut is_resizing = use_signal(|| false);
-
-    let on_toggle_collapse = move |_| {
-        let mut st = sidebar_state.write();
-        st.collapsed = !st.collapsed;
-    };
-
-    let handle_mouse_move = move |evt: Event<MouseData>| {
-        if is_resizing() {
-            let x = evt.page_coordinates().x;
-            let new_width = x.max(120.0).min(600.0);
-            sidebar_state.write().width = new_width;
-        }
-    };
-
-    let handle_mouse_up = move |_| {
-        is_resizing.set(false);
-    };
-
-    let ss = sidebar_state();
-    let sidebar_width = if ss.collapsed { "48px".to_string() } else { format!("{}px", ss.width) };
-
     rsx! {
-        document::Stylesheet { href: NOTES_CSS }
-
         div {
-            class: "notes-layout",
-            onmousemove: handle_mouse_move,
-            onmouseup: handle_mouse_up,
+            class: "max-w-3xl mx-auto w-full px-6 py-8",
 
+            h1 { class: "text-[2rem] font-bold text-neutral-800 m-0 mb-8", "Settings" }
+
+            // Theme section
             div {
-                style: "width: {sidebar_width}; min-width: {sidebar_width}; display: flex; flex-shrink: 0;",
+                class: "mb-8",
+                h2 { class: "text-lg font-semibold text-neutral-800 dark:text-neutral-200 m-0 mb-4 pb-2 border-b border-neutral-300", "Theme" }
+                ThemeSelector {}
+            }
 
-                Sidebar {
-                    namespaces: namespaces(),
-                    notes: notes(),
-                    active_path: None::<String>,
-                    user: auth().user,
-                    on_select_note: on_select_note,
-                    on_create_note: on_create_note,
-                    on_create_namespace: on_create_namespace,
-                    on_navigate_settings: on_navigate_settings,
-                    collapsed: ss.collapsed,
-                    on_toggle_collapse: on_toggle_collapse,
+            // Repository Configuration section
+            div {
+                class: "mb-8",
+                h2 { class: "text-lg font-semibold text-neutral-800 dark:text-neutral-200 m-0 mb-4 pb-2 border-b border-neutral-300", "Repository Configuration" }
+
+                div {
+                    class: "mb-4",
+                    Label { html_for: "notes-root", "Notes root folder" }
+                    Input {
+                        id: "notes-root",
+                        class: "w-full mt-1.5",
+                        r#type: "text",
+                        placeholder: "e.g. notes, docs/notes",
+                        value: notes_root(),
+                        oninput: move |evt: FormEvent| {
+                            notes_root.set(evt.value());
+                            save_status.set(None);
+                        },
+                    }
+                    p {
+                        class: "text-xs text-neutral-600 mt-1",
+                        "Subfolder within the git repository where notes are stored. Leave empty for root."
+                    }
                 }
 
-                if !ss.collapsed {
-                    div {
-                        class: if is_resizing() { "sidebar-resize-handle active" } else { "sidebar-resize-handle" },
-                        onmousedown: move |_| is_resizing.set(true),
+                div {
+                    class: "mb-4",
+                    Label { html_for: "auto-sync", "Auto-sync interval (seconds)" }
+                    Input {
+                        id: "auto-sync",
+                        class: "w-full mt-1.5",
+                        r#type: "number",
+                        min: "0",
+                        max: "3600",
+                        value: "{auto_sync_secs()}",
+                        oninput: move |evt: FormEvent| {
+                            if let Ok(v) = evt.value().parse::<u32>() {
+                                auto_sync_secs.set(v);
+                                save_status.set(None);
+                            }
+                        },
+                    }
+                    p {
+                        class: "text-xs text-neutral-600 mt-1",
+                        "Automatically save and sync after this many seconds of editing. Set to 0 to disable."
+                    }
+                }
+
+                div {
+                    class: "flex gap-2 mt-5",
+                    Button {
+                        variant: ButtonVariant::Primary,
+                        onclick: handle_save,
+                        "Save"
+                    }
+                    if let Some(status) = save_status() {
+                        span {
+                            class: if status == "success" { "text-[0.8125rem] text-success ml-2" } else { "text-[0.8125rem] text-danger ml-2" },
+                            if status == "success" { "Saved" } else { "Error" }
+                        }
                     }
                 }
             }
 
+            // Git Sync section
             div {
-                class: "notes-main",
+                class: "mb-8",
+                h2 { class: "text-lg font-semibold text-neutral-800 m-0 mb-4 pb-2 border-b border-neutral-300", "Git Sync" }
 
                 div {
-                    class: "settings-content",
+                    class: "mb-4",
+                    Label { html_for: "git-remote", "Git remote URL" }
+                    Input {
+                        id: "git-remote",
+                        class: "w-full mt-1.5",
+                        r#type: "text",
+                        placeholder: "git@github.com:user/repo.git",
+                        value: git_remote_url(),
+                        oninput: move |evt: FormEvent| {
+                            git_remote_url.set(evt.value());
+                            git_save_status.set(None);
+                        },
+                    }
+                    p {
+                        class: "text-xs text-neutral-600 mt-1",
+                        "Remote git repository to sync notes with."
+                    }
+                }
 
-                    h1 { "Settings" }
+                div {
+                    class: "mb-4",
+                    Label { html_for: "git-branch", "Git branch" }
+                    Input {
+                        id: "git-branch",
+                        class: "w-full mt-1.5",
+                        r#type: "text",
+                        placeholder: "main",
+                        value: git_branch(),
+                        oninput: move |evt: FormEvent| {
+                            git_branch.set(evt.value());
+                            git_save_status.set(None);
+                        },
+                    }
+                    p {
+                        class: "text-xs text-neutral-600 mt-1",
+                        "Branch to sync with (e.g. main, master, notes)."
+                    }
+                }
 
+                div {
+                    class: "mb-4",
+                    Label { html_for: "ssh-key", "SSH Private Key" }
+                    Textarea {
+                        id: "ssh-key",
+                        variant: TextareaVariant::Outline,
+                        class: "w-full mt-1.5 font-mono text-[0.8125rem]",
+                        placeholder: "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+                        rows: 8,
+                        value: ssh_private_key(),
+                        oninput: move |evt: FormEvent| {
+                            ssh_private_key.set(evt.value());
+                            git_save_status.set(None);
+                        },
+                    }
+                    p {
+                        class: "text-xs text-neutral-600 mt-1",
+                        if ssh_public_key().is_some() {
+                            "A key is already stored. Leave blank to keep it."
+                        } else {
+                            "Paste your SSH private key. It will be encrypted on the server and never returned."
+                        }
+                    }
+                }
+
+                if let Some(pub_key) = ssh_public_key() {
                     div {
-                        class: "settings-section",
-                        h2 { "Repository Configuration" }
-
-                        div {
-                            class: "form-field",
-                            label { "Notes root folder" }
-                            input {
-                                r#type: "text",
-                                placeholder: "e.g. notes, docs/notes",
-                                value: notes_root(),
-                                oninput: move |evt| {
-                                    notes_root.set(evt.value());
-                                    save_status.set(None);
-                                },
-                            }
-                            p {
-                                class: "form-help",
-                                "Subfolder within the git repository where notes are stored. Leave empty for root."
-                            }
+                        class: "mb-4",
+                        Label { html_for: "ssh-pub-key", "SSH Public Key (add this to your git provider)" }
+                        Textarea {
+                            id: "ssh-pub-key",
+                            variant: TextareaVariant::Outline,
+                            class: "w-full mt-1.5 bg-neutral-100 font-mono text-[0.8125rem] text-neutral-600 cursor-default",
+                            readonly: true,
+                            rows: 3,
+                            value: pub_key,
                         }
+                    }
+                }
 
-                        div {
-                            class: "form-field",
-                            label { "Auto-sync interval (seconds)" }
-                            input {
-                                r#type: "number",
-                                min: "0",
-                                max: "3600",
-                                value: "{auto_sync_secs()}",
-                                oninput: move |evt| {
-                                    if let Ok(v) = evt.value().parse::<u32>() {
-                                        auto_sync_secs.set(v);
-                                        save_status.set(None);
-                                    }
-                                },
+                div {
+                    class: "flex gap-2 mt-5",
+                    Button {
+                        variant: ButtonVariant::Primary,
+                        onclick: handle_git_save,
+                        disabled: git_saving(),
+                        if git_saving() { "Saving..." } else { "Save Git Settings" }
+                    }
+                    if let Some(ref status) = git_save_status() {
+                        if status == "success" {
+                            span {
+                                class: "text-[0.8125rem] text-success ml-2",
+                                "Saved"
                             }
-                            p {
-                                class: "form-help",
-                                "Automatically save and sync after this many seconds of editing. Set to 0 to disable."
-                            }
-                        }
-
-                        div {
-                            class: "form-actions",
-                            button {
-                                class: "primary",
-                                onclick: handle_save,
-                                "Save"
-                            }
-                            if let Some(status) = save_status() {
-                                span {
-                                    class: "save-status {status}",
-                                    if status == "success" { "Saved" } else { "Error" }
-                                }
+                        } else {
+                            span {
+                                class: "text-[0.8125rem] text-danger ml-2",
+                                "{status}"
                             }
                         }
                     }
+                }
 
+                div {
+                    class: "flex gap-2 mt-5",
+                    Button {
+                        variant: ButtonVariant::Outline,
+                        onclick: handle_sync,
+                        disabled: is_syncing(),
+                        if is_syncing() { "Syncing..." } else { "Sync Now" }
+                    }
+                    if let Some(ref status) = sync_status() {
+                        span {
+                            class: if status.starts_with("Error") { "text-[0.8125rem] text-danger ml-2" } else { "text-[0.8125rem] text-success ml-2" },
+                            "{status}"
+                        }
+                    }
+                }
+
+                // Sync console (dark terminal style matching ActivityLogPanel)
+                if !sync_log().is_empty() {
                     div {
-                        class: "settings-section",
-                        h2 { "Git Sync" }
-
+                        class: "mt-4 rounded-md overflow-hidden border border-console-border",
                         div {
-                            class: "form-field",
-                            label { "Git remote URL" }
-                            input {
-                                r#type: "text",
-                                placeholder: "git@github.com:user/repo.git",
-                                value: git_remote_url(),
-                                oninput: move |evt| {
-                                    git_remote_url.set(evt.value());
-                                    git_save_status.set(None);
-                                },
-                            }
-                            p {
-                                class: "form-help",
-                                "Remote git repository to sync notes with."
+                            class: "flex items-center justify-between px-3 py-1.5 bg-console-header border-b border-console-border text-[0.6875rem] font-semibold uppercase tracking-wider text-[#cccccc]",
+                            span { "Sync Log" }
+                            Button {
+                                variant: ButtonVariant::Ghost,
+                                class: "text-[#888] text-[0.6875rem] px-1.5 py-0.5 hover:bg-console-border hover:text-console-text",
+                                onclick: move |_| sync_log.write().clear(),
+                                "Clear"
                             }
                         }
-
                         div {
-                            class: "form-field",
-                            label { "Git branch" }
-                            input {
-                                r#type: "text",
-                                placeholder: "main",
-                                value: git_branch(),
-                                oninput: move |evt| {
-                                    git_branch.set(evt.value());
-                                    git_save_status.set(None);
-                                },
-                            }
-                            p {
-                                class: "form-help",
-                                "Branch to sync with (e.g. main, master, notes)."
-                            }
-                        }
-
-                        div {
-                            class: "form-field",
-                            label { "SSH Private Key" }
-                            textarea {
-                                class: "ssh-key-textarea",
-                                placeholder: "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
-                                rows: 8,
-                                value: ssh_private_key(),
-                                oninput: move |evt| {
-                                    ssh_private_key.set(evt.value());
-                                    git_save_status.set(None);
-                                },
-                            }
-                            p {
-                                class: "form-help",
-                                if ssh_public_key().is_some() {
-                                    "A key is already stored. Leave blank to keep it."
-                                } else {
-                                    "Paste your SSH private key. It will be encrypted on the server and never returned."
-                                }
-                            }
-                        }
-
-                        if let Some(pub_key) = ssh_public_key() {
-                            div {
-                                class: "form-field",
-                                label { "SSH Public Key (add this to your git provider)" }
-                                textarea {
-                                    class: "ssh-key-textarea",
-                                    readonly: true,
-                                    rows: 3,
-                                    value: pub_key,
-                                }
-                            }
-                        }
-
-                        div {
-                            class: "form-actions",
-                            button {
-                                class: "primary",
-                                onclick: handle_git_save,
-                                disabled: git_saving(),
-                                if git_saving() { "Saving..." } else { "Save Git Settings" }
-                            }
-                            if let Some(ref status) = git_save_status() {
-                                if status == "success" {
-                                    span {
-                                        class: "save-status success",
-                                        "Saved"
-                                    }
-                                } else {
-                                    span {
-                                        class: "save-status error",
-                                        "{status}"
-                                    }
-                                }
-                            }
-                        }
-
-                        div {
-                            class: "form-actions",
-                            button {
-                                class: "secondary",
-                                onclick: handle_sync,
-                                disabled: is_syncing(),
-                                if is_syncing() { "Syncing..." } else { "Sync Now" }
-                            }
-                            if let Some(ref status) = sync_status() {
-                                span {
-                                    class: if status.starts_with("Error") { "save-status error" } else { "save-status success" },
-                                    "{status}"
-                                }
-                            }
-                        }
-
-                        // Sync console
-                        if !sync_log().is_empty() {
-                            div {
-                                class: "sync-console",
-                                div {
-                                    class: "sync-console-header",
-                                    span { "Sync Log" }
-                                    button {
-                                        onclick: move |_| sync_log.write().clear(),
-                                        "Clear"
-                                    }
-                                }
-                                div {
-                                    class: "sync-console-entries",
-                                    for entry in sync_log().iter() {
-                                        div { "{entry}" }
-                                    }
-                                }
+                            class: "max-h-[200px] overflow-y-auto px-3 py-2 font-mono text-xs leading-relaxed text-console-text bg-console-bg",
+                            for entry in sync_log().iter() {
+                                div { class: "py-px", "{entry}" }
                             }
                         }
                     }
@@ -424,4 +353,59 @@ fn current_time() -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn current_time() -> String {
     "00:00:00".to_string()
+}
+
+#[component]
+fn ThemeSelector() -> Element {
+    let mut theme = use_context::<ThemeSignal>();
+
+    let current = theme().unwrap_or_default();
+    let is_system = current.is_empty();
+    let is_light = current == "light";
+    let is_dark = current == "dark";
+
+    let radio_class = |active: bool| {
+        if active {
+            "flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 border-blue-500 bg-blue-50 dark:bg-blue-900/30 cursor-pointer"
+        } else {
+            "flex items-center gap-2 px-4 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-600 hover:border-neutral-400 cursor-pointer"
+        }
+    };
+
+    rsx! {
+        div {
+            class: "flex flex-wrap gap-3",
+            label {
+                class: radio_class(is_system),
+                onclick: move |_| {
+                    apply_theme(None);
+                    theme.set(None);
+                },
+                i { class: "fa-solid fa-circle-half-stroke text-sm" }
+                span { "System" }
+            }
+            label {
+                class: radio_class(is_light),
+                onclick: move |_| {
+                    apply_theme(Some("light"));
+                    theme.set(Some("light".to_string()));
+                },
+                i { class: "fa-solid fa-sun text-sm" }
+                span { "Light" }
+            }
+            label {
+                class: radio_class(is_dark),
+                onclick: move |_| {
+                    apply_theme(Some("dark"));
+                    theme.set(Some("dark".to_string()));
+                },
+                i { class: "fa-solid fa-moon text-sm" }
+                span { "Dark" }
+            }
+        }
+        p {
+            class: "text-xs text-neutral-600 dark:text-neutral-400 mt-2",
+            "Choose how TypedNotes appears. System follows your OS preference."
+        }
+    }
 }

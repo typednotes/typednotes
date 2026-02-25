@@ -84,16 +84,55 @@ Code is split into server and client via Cargo features:
 
 ## Dioxus 0.7 API (Important)
 
-See `AGENTS.md` for complete Dioxus 0.7 reference. Key points:
+**CRITICAL: Always consult https://dioxuslabs.com/learn/0.7/ before writing Dioxus code.** Follow the official documentation carefully — do not guess at APIs or patterns. See `AGENTS.md` for a local quick reference. Key points:
 
 - **No `cx`, `Scope`, or `use_state`** — these are removed in 0.7
 - Use `use_signal(|| value)` for local state, call like function to read: `count()`
 - Use `use_memo(move || ...)` for derived values
 - Use `use_resource` for async operations, `use_server_future` for fullstack (ensures server renders data before hydration)
 - Server functions use `#[post("/path")]` / `#[get("/path")]` macros
-- Assets: `asset!("/assets/file.png")` — paths relative to project root
+- Assets: `asset!("/assets/file.png")` — paths relative to package root; hashes filenames at build time
+- **`public/` directory**: Files in `packages/<pkg>/public/` are served as-is without hashing — use this for third-party assets with internal relative references (e.g., Font Awesome)
 - Router: `#[derive(Routable)]` enum with `#[route]` and `#[layout]` attributes
 - Context: `use_context_provider(|| value)` to provide, `use_context::<Type>()` to consume
+
+## UI Components (Dioxus Components Library)
+
+This project uses the official Dioxus components library (`dioxus-primitives` from https://github.com/DioxusLabs/components). **Always prefer these components over hand-rolled HTML elements.**
+
+- Components live in `packages/ui/src/components/` with their styles
+- Theme CSS: `packages/ui/assets/dx-components-theme.css` (loaded globally via `ui::DX_COMPONENTS_CSS`)
+- `ToastProvider` wraps the app in `packages/web/src/main.rs`
+
+**Available components** (import from `ui::components`):
+- `Button` with `ButtonVariant::{Primary, Secondary, Destructive, Outline, Ghost}`
+- `Input` — styled text input (use `oninput: move |evt: FormEvent| ...` for type inference)
+- `Textarea` with `TextareaVariant::{Default, Fade, Outline, Ghost}`
+- `Label` — accessible form label (`html_for` prop required)
+- `Select`, `SelectTrigger`, `SelectValue`, `SelectList`, `SelectOption` — accessible select
+- `Avatar`, `AvatarImage`, `AvatarFallback` with `AvatarImageSize::{Small, Medium, Large}`
+- `Badge` with `BadgeVariant::{Primary, Secondary, Destructive, Outline}`
+- `ToastProvider`, `use_toast()`, `ToastOptions` — toast notifications
+
+**Usage pattern:**
+```rust
+use ui::components::{Button, ButtonVariant, Input};
+
+rsx! {
+    Input {
+        class: "w-full",
+        r#type: "text",
+        placeholder: "Enter text...",
+        value: my_signal(),
+        oninput: move |evt: FormEvent| my_signal.set(evt.value()),
+    }
+    Button {
+        variant: ButtonVariant::Primary,
+        onclick: move |_| { /* ... */ },
+        "Click me"
+    }
+}
+```
 
 ## CI/CD
 

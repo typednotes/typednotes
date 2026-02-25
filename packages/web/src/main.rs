@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use ui::AuthProvider;
-use views::{Login, NoteDetail, Notes, Register, Settings};
+use views::{Login, NoteDetail, Notes, Register, Settings, SidebarLayout};
 
 mod views;
 
@@ -14,16 +14,16 @@ enum Route {
     Login {},
     #[route("/register")]
     Register {},
-    #[route("/notes")]
-    Notes {},
-    #[route("/notes/:note_path")]
-    NoteDetail { note_path: String },
-    #[route("/settings")]
-    Settings {},
+    #[layout(SidebarLayout)]
+        #[route("/notes")]
+        Notes {},
+        #[route("/notes/:note_path")]
+        NoteDetail { note_path: String },
+        #[route("/settings")]
+        Settings {},
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
-const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() {
     #[cfg(feature = "server")]
@@ -64,9 +64,14 @@ async fn launch_server() {
     // Create session store
     let session_store = PostgresStore::new(pool.clone());
 
+    // Detect production: IP=0.0.0.0 is set in container/production
+    let is_production = std::env::var("IP")
+        .map(|ip| ip == "0.0.0.0")
+        .unwrap_or(false);
+
     // Session layer configuration
     let session_layer = SessionManagerLayer::new(session_store)
-        .with_secure(false) // Set to true in production with HTTPS
+        .with_secure(is_production)
         .with_same_site(SameSite::Lax)
         .with_expiry(Expiry::OnInactivity(
             Duration::from_secs(60 * 60 * 24 * 7).try_into().unwrap(),
@@ -74,6 +79,8 @@ async fn launch_server() {
 
     // Build the Dioxus app with custom routes
     let router = axum::Router::new()
+        // Health check endpoint
+        .route("/healthz", get(|| async { "ok" }))
         // Add custom OAuth callback routes first
         .route("/auth/github/callback", get(github_callback))
         .route("/auth/google/callback", get(google_callback))
@@ -190,30 +197,25 @@ async fn google_callback(
 #[component]
 fn App() -> Element {
     use_context_provider(|| Signal::new(ui::ActivityLog::default()));
-    use_context_provider(|| Signal::new(SidebarState::default()));
+
+    // Theme context: None = system, Some("dark"), Some("light")
+    let mut theme: ui::ThemeSignal = use_context_provider(|| Signal::new(Option::<String>::None));
+    // Load persisted theme from localStorage on startup
+    use_effect(move || {
+        ui::load_theme_from_storage(&mut theme);
+    });
 
     rsx! {
         // Global app resources
         document::Link { rel: "icon", href: FAVICON }
-        document::Link { rel: "stylesheet", href: MAIN_CSS }
+        document::Link { rel: "stylesheet", href: ui::TAILWIND_CSS }
+        document::Link { rel: "stylesheet", href: ui::DX_COMPONENTS_CSS }
+        document::Link { rel: "stylesheet", href: "/fontawesome/css/all.min.css" }
 
         AuthProvider {
-            Router::<Route> {}
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct SidebarState {
-    pub width: f64,
-    pub collapsed: bool,
-}
-
-impl Default for SidebarState {
-    fn default() -> Self {
-        Self {
-            width: 240.0,
-            collapsed: false,
+            ui::components::ToastProvider {
+                Router::<Route> {}
+            }
         }
     }
 }

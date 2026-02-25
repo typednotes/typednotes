@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 dioxus = { workspace = true }
+dioxus-primitives = { git = "https://github.com/DioxusLabs/components" }
 api = { workspace = true }
 store = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }

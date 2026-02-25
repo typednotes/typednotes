@@ -1,19 +1,21 @@
 use dioxus::prelude::*;
 use store::TypedNoteInfo;
-use crate::activity_log_panel::ActivityLogToggle;
-
-const EDITOR_CSS: Asset = asset!("/assets/styling/note_editor.css");
+use crate::components::{Button, ButtonVariant, Input, Textarea, TextareaVariant};
 
 #[component]
 pub fn NoteEditor(
     note: TypedNoteInfo,
-    breadcrumb: Option<String>,
     on_save: EventHandler<String>,
     on_delete: EventHandler<()>,
-    #[props(default = 30)] auto_sync_interval_secs: u32,
+    #[props(default)] on_rename: EventHandler<String>,
+    #[props(default = 300)] auto_sync_interval_secs: u32,
 ) -> Element {
     let mut content = use_signal({
         let initial = note.note.clone();
+        move || initial
+    });
+    let mut title = use_signal({
+        let initial = note.name.clone();
         move || initial
     });
     let mut dirty = use_signal(|| false);
@@ -24,6 +26,20 @@ pub fn NoteEditor(
             dirty.set(false);
         }
     };
+
+    let handle_title_blur = move |_| {
+        let new_name = title().trim().to_string();
+        if !new_name.is_empty() && new_name != note.name {
+            on_rename.call(new_name);
+        }
+    };
+
+    // Save on unmount if dirty
+    use_drop(move || {
+        if dirty() {
+            on_save.call(content());
+        }
+    });
 
     // Auto-sync timer
     #[cfg(target_arch = "wasm32")]
@@ -46,58 +62,48 @@ pub fn NoteEditor(
     }
 
     rsx! {
-        document::Stylesheet { href: EDITOR_CSS }
-
         div {
-            class: "note-editor",
+            class: "flex flex-col h-full w-full px-6 py-6",
 
-            // Breadcrumb bar
+            // Title row: editable name + unsaved indicator + delete
             div {
-                class: "note-editor-breadcrumb",
-                div {
-                    class: "note-editor-breadcrumb-path",
-                    if let Some(ref bc) = breadcrumb {
-                        span { "{bc}" }
-                        span { " / " }
-                    }
-                    span { "{note.name}" }
+                class: "flex items-start justify-between gap-4 mb-4",
+                Input {
+                    class: "flex-1 text-2xl font-bold border-none bg-transparent p-0 shadow-none focus:ring-0",
+                    r#type: "text",
+                    value: title(),
+                    oninput: move |evt: FormEvent| title.set(evt.value()),
+                    onblur: handle_title_blur,
                 }
                 div {
-                    class: "note-editor-actions",
+                    class: "flex items-center gap-2 shrink-0 pt-1",
                     if dirty() {
                         span {
-                            class: "unsaved-indicator",
-                            "Unsaved changes"
+                            class: "text-[0.6875rem] text-neutral-600 italic",
+                            "Unsaved"
                         }
                     }
-                    ActivityLogToggle {}
-                    button {
-                        class: "danger",
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        class: "text-neutral-400 hover:text-danger p-1",
+                        title: "Delete note",
                         onclick: move |_| on_delete.call(()),
-                        "Delete"
+                        i { class: "fa-solid fa-trash text-sm" }
                     }
                 }
             }
 
-            // Content area
-            div {
-                class: "note-editor-body",
-                div {
-                    class: "note-editor-content",
-                    h1 {
-                        class: "note-editor-title",
-                        "{note.name}"
-                    }
-                    textarea {
-                        value: content(),
-                        placeholder: "Start writing...",
-                        oninput: move |evt| {
-                            content.set(evt.value());
-                            dirty.set(true);
-                        },
-                        onblur: handle_blur,
-                    }
-                }
+            // Content area — fills remaining space; parent pane scrolls
+            Textarea {
+                variant: TextareaVariant::Ghost,
+                class: "flex-1 w-full text-neutral-800 dark:text-neutral-200 p-0 font-sans text-base leading-[1.7] resize-none placeholder:text-neutral-400",
+                value: content(),
+                placeholder: "Start writing...",
+                oninput: move |evt: FormEvent| {
+                    content.set(evt.value());
+                    dirty.set(true);
+                },
+                onblur: handle_blur,
             }
         }
     }

@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
 use store::NamespaceInfo;
 
+use crate::components::{Button, ButtonVariant, Input, Label};
+
 /// Inline form for creating a new note.
 #[component]
 pub fn NewNoteDialog(
@@ -28,24 +30,28 @@ pub fn NewNoteDialog(
 
     rsx! {
         div {
-            class: "new-note-form",
-            h2 { "New Note" }
+            class: "p-6",
+            h2 { class: "m-0 mb-5 text-lg font-semibold text-neutral-800", "New Note" }
 
             div {
-                class: "form-field",
-                label { "Name" }
-                input {
+                class: "mb-4",
+                Label { html_for: "new-note-name", "Name" }
+                Input {
+                    id: "new-note-name",
+                    class: "w-full mt-1.5",
                     r#type: "text",
                     placeholder: "my-note",
                     value: name(),
-                    oninput: move |evt| name.set(evt.value()),
+                    oninput: move |evt: FormEvent| name.set(evt.value()),
                 }
             }
 
             div {
-                class: "form-field",
-                label { "Folder" }
+                class: "mb-4",
+                Label { html_for: "new-note-folder", "Folder" }
                 select {
+                    id: "new-note-folder",
+                    class: "w-full bg-white border border-neutral-300 rounded px-3 py-2 text-sm text-neutral-800 outline-none font-[inherit] mt-1.5 focus:border-primary-500 focus:shadow-[0_0_0_1px_var(--color-primary-500)]",
                     value: namespace(),
                     onchange: move |evt| namespace.set(evt.value()),
                     option { value: "", "/ (root)" }
@@ -60,9 +66,11 @@ pub fn NewNoteDialog(
             }
 
             div {
-                class: "form-field",
-                label { "Type" }
+                class: "mb-4",
+                Label { html_for: "new-note-type", "Type" }
                 select {
+                    id: "new-note-type",
+                    class: "w-full bg-white border border-neutral-300 rounded px-3 py-2 text-sm text-neutral-800 outline-none font-[inherit] mt-1.5 focus:border-primary-500 focus:shadow-[0_0_0_1px_var(--color-primary-500)]",
                     value: note_type(),
                     onchange: move |evt| note_type.set(evt.value()),
                     option { value: "markdown", "Markdown (.md)" }
@@ -71,14 +79,14 @@ pub fn NewNoteDialog(
             }
 
             div {
-                class: "form-actions",
-                button {
-                    class: "primary",
+                class: "flex gap-2 mt-5",
+                Button {
+                    variant: ButtonVariant::Primary,
                     onclick: handle_submit,
                     "Create"
                 }
-                button {
-                    class: "secondary",
+                Button {
+                    variant: ButtonVariant::Outline,
                     onclick: move |_| on_cancel.call(()),
                     "Cancel"
                 }

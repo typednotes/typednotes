@@ -1,5 +1,7 @@
 You are an expert [0.7 Dioxus](https://dioxuslabs.com/learn/0.7) assistant. Dioxus 0.7 changes every api in dioxus. Only use this up to date documentation. `cx`, `Scope`, and `use_state` are gone
 
+**CRITICAL: Always consult https://dioxuslabs.com/learn/0.7/ before writing Dioxus code.** Follow the official documentation carefully — do not guess at APIs or patterns. When unsure about an API, look it up in the docs first.
+
 Provide concise code examples with detailed descriptions
 
 # Dioxus Dependency
@@ -66,7 +68,7 @@ rsx! {
 
 # Assets
 
-The asset macro can be used to link to local files to use in your project. All links start with `/` and are relative to the root of your project.
+The `asset!()` macro links to local files. Paths start with `/` and are relative to the package root. **Files are content-hashed at build time** — this means relative references between assets (e.g., CSS `url(../fonts/...)`) will break.
 
 ```rust
 rsx! {
@@ -75,6 +77,22 @@ rsx! {
 		alt: "An image",
 	}
 }
+```
+
+## Public Directory
+
+Files placed in `public/` at the package root are served **as-is without hashing**. Use this for third-party assets that have internal relative references (e.g., Font Awesome CSS + webfonts):
+
+```
+packages/web/public/
+└── fontawesome/
+    ├── css/all.min.css      ← served at /fontawesome/css/all.min.css
+    └── webfonts/             ← CSS references ../webfonts/ — works because paths are preserved
+```
+
+Reference public files with a plain path (not `asset!()`):
+```rust
+document::Link { rel: "stylesheet", href: "/fontawesome/css/all.min.css" }
 ```
 
 ## Styles
@@ -263,3 +281,30 @@ The initial UI rendered by the component on the client must be identical to the 
 
 * Use the `use_server_future` hook instead of `use_resource`. It runs the future on the server, serializes the result, and sends it to the client, ensuring the client has the data immediately for its first render.
 * Any code that relies on browser-specific APIs (like accessing `localStorage`) must be run *after* hydration. Place this code inside a `use_effect` hook.
+
+# Dioxus Components Library
+
+**Always prefer the dx components library over hand-rolled HTML elements.** Components are in `packages/ui/src/components/` (source from https://github.com/DioxusLabs/components).
+
+## Available Components
+
+Import from `ui::components`:
+
+| Component | Variants | Use for |
+|-----------|----------|---------|
+| `Button` | `Primary`, `Secondary`, `Destructive`, `Outline`, `Ghost` | All buttons |
+| `Input` | — | Text inputs, email, password, number fields |
+| `Textarea` | `Default`, `Fade`, `Outline`, `Ghost` | Multi-line text input |
+| `Label` | — | Accessible form labels (requires `html_for` prop) |
+| `Select` | — | Dropdowns (with `SelectTrigger`, `SelectValue`, `SelectList`, `SelectOption`) |
+| `Avatar` | Size: `Small`, `Medium`, `Large` | User avatars (with `AvatarImage`, `AvatarFallback`) |
+| `Badge` | `Primary`, `Secondary`, `Destructive`, `Outline` | Tags, status indicators |
+| `ToastProvider` | — | Wraps app for toast support |
+| `use_toast()` | — | Hook to dispatch toasts |
+
+## Important Notes
+
+- When using `Input` or `Textarea` with `oninput`, always annotate the closure parameter type: `move |evt: FormEvent| ...` — Rust cannot infer the type from `Option<EventHandler<FormEvent>>`.
+- The `Label` component requires `html_for: "element-id"` to associate with an input.
+- `ToastProvider` must wrap the app (already done in `web/src/main.rs`).
+- Toast usage: `let toast_api = use_toast(); toast_api.success("Saved".to_string(), ToastOptions::new());`

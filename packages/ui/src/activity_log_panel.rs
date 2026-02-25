@@ -1,8 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::activity_log::{LogLevel, use_activity_log};
-
-const ACTIVITY_LOG_CSS: Asset = asset!("/assets/styling/activity_log.css");
+use crate::components::{Button, ButtonVariant};
 
 #[component]
 pub fn ActivityLogPanel() -> Element {
@@ -15,36 +14,38 @@ pub fn ActivityLogPanel() -> Element {
     let entries = log().entries.clone();
 
     rsx! {
-        document::Stylesheet { href: ACTIVITY_LOG_CSS }
-
         div {
-            class: "activity-log-panel",
+            class: "h-[200px] shrink-0 bg-console-bg text-console-text font-mono text-xs flex flex-col border-t border-console-border",
             div {
-                class: "activity-log-header",
+                class: "flex items-center justify-between px-3 py-1.5 bg-console-header border-b border-console-border text-[0.6875rem] font-semibold uppercase tracking-wider text-[#cccccc]",
                 span { "Activity Log" }
                 div {
-                    class: "activity-log-header-actions",
-                    button {
+                    class: "flex gap-2",
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        class: "text-[#888] text-[0.6875rem] px-1.5 py-0.5 hover:bg-console-border hover:text-console-text",
                         onclick: move |_| log.write().entries.clear(),
                         "Clear"
                     }
-                    button {
+                    Button {
+                        variant: ButtonVariant::Ghost,
+                        class: "text-[#888] text-[0.6875rem] px-1.5 py-0.5 hover:bg-console-border hover:text-console-text",
                         onclick: move |_| log.write().visible = false,
                         "Close"
                     }
                 }
             }
             div {
-                class: "activity-log-entries",
+                class: "flex-1 overflow-y-auto px-3 py-1.5",
                 for entry in entries.iter().rev() {
                     div {
                         class: match entry.level {
-                            LogLevel::Error => "activity-log-entry error",
-                            LogLevel::Warning => "activity-log-entry warning",
-                            LogLevel::Success => "activity-log-entry success",
-                            LogLevel::Info => "activity-log-entry info",
+                            LogLevel::Error => "py-0.5 leading-relaxed text-[#f48771]",
+                            LogLevel::Warning => "py-0.5 leading-relaxed text-warning",
+                            LogLevel::Success => "py-0.5 leading-relaxed text-[#89d185]",
+                            LogLevel::Info => "py-0.5 leading-relaxed text-[#9e9e9e]",
                         },
-                        span { class: "activity-log-time", "{entry.timestamp}" }
+                        span { class: "text-[#666] mr-2", "{entry.timestamp}" }
                         span { " {entry.message}" }
                     }
                 }
@@ -60,8 +61,13 @@ pub fn ActivityLogToggle() -> Element {
     let has_errors = log().entries.iter().any(|e| e.level == LogLevel::Error);
 
     rsx! {
-        button {
-            class: if has_errors { "activity-log-toggle has-errors" } else { "activity-log-toggle" },
+        Button {
+            variant: ButtonVariant::Ghost,
+            class: if has_errors {
+                "text-danger text-[0.6875rem] px-2 py-1 hover:bg-neutral-200 hover:text-neutral-800"
+            } else {
+                "text-neutral-600 text-[0.6875rem] px-2 py-1 hover:bg-neutral-200 hover:text-neutral-800"
+            },
             onclick: move |_| {
                 let visible = log().visible;
                 log.write().visible = !visible;

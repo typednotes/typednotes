@@ -31,3 +31,7 @@ infra/*_override.tf.json
 
 # SOPS decrypted files
 .decrypted~secrets.yaml
+
+# Node.js (Tailwind CSS)
+node_modules/
+package-lock.json
