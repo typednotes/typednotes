@@ -36,6 +36,11 @@ pub mod repo;
 mod memory;
 pub use memory::MemoryStore;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod file_store;
+#[cfg(not(target_arch = "wasm32"))]
+pub use file_store::FileStore;
+
 #[cfg(all(target_arch = "wasm32", feature = "web"))]
 mod idb;
 #[cfg(all(target_arch = "wasm32", feature = "web"))]

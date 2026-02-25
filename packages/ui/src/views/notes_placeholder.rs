@@ -1,7 +1,8 @@
 use dioxus::prelude::*;
 
+/// Empty state shown when no note is selected.
 #[component]
-pub fn Notes() -> Element {
+pub fn NotesPlaceholder() -> Element {
     rsx! {
         div {
             class: "flex-1 flex flex-col items-center justify-center text-neutral-600",

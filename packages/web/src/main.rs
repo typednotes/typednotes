@@ -55,8 +55,10 @@ async fn launch_server() {
         .await
         .expect("Failed to connect to database");
 
-    // Run migrations
+    // Run migrations (ignore versions already applied but missing from binary,
+    // which can happen during rollbacks or when migrations are renumbered)
     sqlx::migrate!("../api/migrations")
+        .set_ignore_missing(true)
         .run(pool)
         .await
         .expect("Failed to run migrations");

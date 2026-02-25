@@ -6400,6 +6400,7 @@ dependencies = [
  "api",
  "dioxus",
  "dioxus-primitives",
+ "dirs",
  "gloo-timers",
  "js-sys",
  "serde",

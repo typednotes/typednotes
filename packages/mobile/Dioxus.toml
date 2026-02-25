@@ -1,0 +1,3 @@
+[application]
+name = "TypedNotes"
+default_platform = "mobile"

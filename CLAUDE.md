@@ -72,7 +72,7 @@ Code is split into server and client via Cargo features:
 
 - PostgreSQL via SQLx with compile-time query verification
 - Connection pool: lazy singleton via `OnceCell` in `api/src/db/pool.rs`, configured from `DATABASE_URL`
-- Migrations live in `packages/api/migrations/` and are run on server startup + available via `make migrate-run`
+- Migrations live in `packages/api/migrations/` and are **automatically run on server startup** (the server is the sole migration runner in production). `make migrate-run` is a dev convenience only — avoid using it against the production DB
 - Install sqlx-cli: `cargo install sqlx-cli --no-default-features --features postgres,rustls`
 
 ## Secrets Management

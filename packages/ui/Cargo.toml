@@ -12,9 +12,13 @@ serde = { version = "1.0", features = ["derive"] }
 tracing = "0.1"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = ["Window", "Location"] }
+web-sys = { version = "0.3", features = ["Window", "Location", "console"] }
 js-sys = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dirs = "6"
+
 [features]
 server = ["api/server"]
+web = ["store/web"]

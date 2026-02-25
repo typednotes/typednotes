@@ -4,6 +4,11 @@ use dioxus::prelude::*;
 
 pub mod components;
 
+mod repo;
+pub use repo::make_repo;
+
+pub mod views;
+
 pub const DX_COMPONENTS_CSS: Asset = asset!("/assets/dx-components-theme.css");
 pub const TAILWIND_CSS: Asset = asset!("/assets/tailwind.css");
 
