@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:bookworm AS builder
+FROM rust:latest AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -32,12 +32,12 @@ RUN npm install tailwindcss @tailwindcss/cli && \
 # Build the fullstack app
 RUN dx bundle --fullstack --release --debug-symbols=false
 
-# Runtime stage
-FROM debian:bookworm-slim
+# Derive runtime from the same distro as the builder so glibc always matches
+FROM debian:trixie-slim
 
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libssl3 \
+    libssl3t64 \
     openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
