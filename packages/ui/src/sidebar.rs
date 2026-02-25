@@ -12,6 +12,12 @@ use crate::components::{
     SidebarMenuButtonSize, SidebarMenuItem, SidebarMenuSub, SidebarMenuSubButton,
     SidebarMenuSubItem, SidebarRail, SidebarSeparator,
 };
+use crate::Icon;
+use crate::icons::{
+    FaFolderPlus, FaPlus, FaList, FaFolderTree, FaGear, FaTerminal,
+    FaFolder, FaFileLines, FaArrowLeft, FaChevronRight,
+    FaCircleHalfStroke, FaMoon, FaSun, FaRightFromBracket,
+};
 
 #[derive(Clone, Copy, PartialEq)]
 enum ViewMode {
@@ -79,13 +85,13 @@ pub fn AppSidebar(
                     class: "sidebar-icon-btn",
                     title: "New folder",
                     onclick: move |_| on_create_namespace.call(None),
-                    i { class: "fa-solid fa-folder-plus" }
+                    Icon { icon: FaFolderPlus }
                 }
                 button {
                     class: "sidebar-icon-btn",
                     title: "New note",
                     onclick: move |_| on_create_note.call(None),
-                    i { class: "fa-solid fa-plus" }
+                    Icon { icon: FaPlus }
                 }
             }
         }
@@ -110,12 +116,10 @@ pub fn AppSidebar(
                                 view_mode.set(ViewMode::Tree);
                             }
                         },
-                        i {
-                            class: if view_mode() == ViewMode::Tree {
-                                "fa-solid fa-list text-[0.625rem]"
-                            } else {
-                                "fa-solid fa-folder-tree text-[0.625rem]"
-                            }
+                        if view_mode() == ViewMode::Tree {
+                            Icon { icon: FaList, width: 10, height: 10 }
+                        } else {
+                            Icon { icon: FaFolderTree, width: 10, height: 10 }
                         }
                     }
                 }
@@ -171,7 +175,7 @@ pub fn AppSidebar(
                             button {
                                 onclick: move |_| on_navigate_settings.call(()),
                                 ..attrs,
-                                i { class: "fa-solid fa-gear" }
+                                Icon { icon: FaGear }
                                 span { "Settings" }
                             }
                         },
@@ -183,7 +187,7 @@ pub fn AppSidebar(
                         tooltip: rsx! { "Activity Log" },
                         as: move |attrs: Vec<Attribute>| rsx! {
                             div { ..attrs,
-                                i { class: "fa-solid fa-terminal" }
+                                Icon { icon: FaTerminal }
                                 span { class: "flex items-center gap-2",
                                     ActivityLogToggle {}
                                 }
@@ -281,7 +285,7 @@ fn NamespaceNode(
                                 SidebarMenuButton {
                                     attributes: attrs,
                                     tooltip: rsx! { "{namespace_name}" },
-                                    i { class: "fa-solid fa-folder text-xs" }
+                                    Icon { icon: FaFolder, width: 12, height: 12 }
                                     span { "{namespace_name}" }
                                 }
                             }
@@ -302,7 +306,7 @@ fn NamespaceNode(
                                     },
                                     title: "New note in folder",
                                     ..attrs,
-                                    i { class: "fa-solid fa-plus" }
+                                    Icon { icon: FaPlus }
                                 }
                             }
                         }
@@ -361,7 +365,7 @@ fn NoteItem(
                         button {
                             onclick: move |_| on_select_note.call(path.clone()),
                             ..attrs,
-                            i { class: "fa-solid fa-file-lines text-xs" }
+                            Icon { icon: FaFileLines, width: 12, height: 12 }
                             span { "{note_name}" }
                             Badge {
                                 variant: BadgeVariant::Secondary,
@@ -397,7 +401,7 @@ fn NoteSubItem(
                         button {
                             onclick: move |_| on_select_note.call(path.clone()),
                             ..attrs,
-                            i { class: "fa-solid fa-file-lines text-xs" }
+                            Icon { icon: FaFileLines, width: 12, height: 12 }
                             span { "{note_name}" }
                         }
                     }
@@ -454,7 +458,7 @@ fn FlatExplorerView(
                                     button {
                                         onclick: move |_| on_navigate_up.call(()),
                                         ..attrs,
-                                        i { class: "fa-solid fa-arrow-left text-xs" }
+                                        Icon { icon: FaArrowLeft, width: 12, height: 12 }
                                         span {
                                             class: "text-xs opacity-70",
                                             {
@@ -495,9 +499,9 @@ fn FlatExplorerView(
                                             button {
                                                 onclick: move |_| on_navigate_into.call(ns_path.clone()),
                                                 ..attrs,
-                                                i { class: "fa-solid fa-folder text-xs" }
+                                                Icon { icon: FaFolder, width: 12, height: 12 }
                                                 span { "{ns_name}" }
-                                                i { class: "fa-solid fa-chevron-right text-[0.5rem] ml-auto opacity-40" }
+                                                Icon { icon: FaChevronRight, width: 8, height: 8, class: "ml-auto opacity-40" }
                                             }
                                         }
                                     }
@@ -527,7 +531,7 @@ fn FlatExplorerView(
                                                 button {
                                                     onclick: move |_| on_select_note.call(path.clone()),
                                                     ..attrs,
-                                                    i { class: "fa-solid fa-file-lines text-xs" }
+                                                    Icon { icon: FaFileLines, width: 12, height: 12 }
                                                     span { "{note_name}" }
                                                     Badge {
                                                         variant: BadgeVariant::Secondary,
@@ -559,11 +563,11 @@ pub type ThemeSignal = Signal<Option<String>>;
 fn ThemeToggleItem() -> Element {
     let theme = use_context::<ThemeSignal>();
 
-    let (icon, label) = match theme().as_deref() {
-        None => ("fa-solid fa-circle-half-stroke", "Theme: System"),
-        Some("dark") => ("fa-solid fa-moon", "Theme: Dark"),
-        Some("light") => ("fa-solid fa-sun", "Theme: Light"),
-        _ => ("fa-solid fa-circle-half-stroke", "Theme: System"),
+    let (icon, label): (Element, &str) = match theme().as_deref() {
+        None => (rsx! { Icon { icon: FaCircleHalfStroke } }, "Theme: System"),
+        Some("dark") => (rsx! { Icon { icon: FaMoon } }, "Theme: Dark"),
+        Some("light") => (rsx! { Icon { icon: FaSun } }, "Theme: Light"),
+        _ => (rsx! { Icon { icon: FaCircleHalfStroke } }, "Theme: System"),
     };
 
     rsx! {
@@ -584,7 +588,7 @@ fn ThemeToggleItem() -> Element {
                             theme.set(next);
                         },
                         ..attrs,
-                        i { class: "{icon}" }
+                        {icon.clone()}
                         span { "{label}" }
                     }
                 }
@@ -656,7 +660,7 @@ fn LogoutItem() -> Element {
                         }
                     },
                     ..attrs,
-                    i { class: "fa-solid fa-right-from-bracket" }
+                    Icon { icon: FaRightFromBracket }
                     span { "Log out" }
                 }
             },

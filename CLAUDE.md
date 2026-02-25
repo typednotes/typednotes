@@ -92,7 +92,8 @@ Code is split into server and client via Cargo features:
 - Use `use_resource` for async operations, `use_server_future` for fullstack (ensures server renders data before hydration)
 - Server functions use `#[post("/path")]` / `#[get("/path")]` macros
 - Assets: `asset!("/assets/file.png")` — paths relative to package root; hashes filenames at build time
-- **`public/` directory**: Files in `packages/<pkg>/public/` are served as-is without hashing — use this for third-party assets with internal relative references (e.g., Font Awesome)
+- **`public/` directory**: Files in `packages/<pkg>/public/` are served as-is without hashing — use this for third-party assets with internal relative references
+- **Icons**: Use `dioxus-free-icons` (Font Awesome solid set) via `ui::Icon` and `ui::icons::*` — inline SVGs, no external CSS needed. Example: `Icon { icon: FaGear, width: 14, height: 14 }`
 - Router: `#[derive(Routable)]` enum with `#[route]` and `#[layout]` attributes
 - Context: `use_context_provider(|| value)` to provide, `use_context::<Type>()` to consume
 

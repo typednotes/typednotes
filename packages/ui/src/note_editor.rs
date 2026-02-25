@@ -1,6 +1,8 @@
 use dioxus::prelude::*;
 use store::TypedNoteInfo;
 use crate::components::{Button, ButtonVariant, Input, Textarea, TextareaVariant};
+use crate::Icon;
+use crate::icons::FaTrashCan;
 
 #[component]
 pub fn NoteEditor(
@@ -88,7 +90,7 @@ pub fn NoteEditor(
                         class: "text-neutral-400 hover:text-danger p-1",
                         title: "Delete note",
                         onclick: move |_| on_delete.call(()),
-                        i { class: "fa-solid fa-trash text-sm" }
+                        Icon { icon: FaTrashCan, width: 14, height: 14 }
                     }
                 }
             }

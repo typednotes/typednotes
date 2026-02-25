@@ -4,6 +4,12 @@ use dioxus::prelude::*;
 
 pub mod components;
 
+// Re-export icon library
+pub use dioxus_free_icons::Icon;
+pub mod icons {
+    pub use dioxus_free_icons::icons::fa_solid_icons::*;
+}
+
 mod repo;
 pub use repo::make_repo;
 

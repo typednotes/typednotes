@@ -36,7 +36,6 @@ fn App() -> Element {
     rsx! {
         document::Link { rel: "stylesheet", href: ui::TAILWIND_CSS }
         document::Link { rel: "stylesheet", href: ui::DX_COMPONENTS_CSS }
-        document::Link { rel: "stylesheet", href: "/fontawesome/css/all.min.css" }
         ui::components::ToastProvider {
             Router::<Route> {}
         }

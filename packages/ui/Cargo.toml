@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 dioxus = { workspace = true }
 dioxus-primitives = { git = "https://github.com/DioxusLabs/components" }
+dioxus-free-icons = { version = "0.10", features = ["font-awesome-solid", "font-awesome-brands"] }
 api = { workspace = true }
 store = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }

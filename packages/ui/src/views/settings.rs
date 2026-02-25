@@ -4,6 +4,8 @@ use store::{NamespaceInfo, TypedNoteInfo, TypedNotesConfig};
 use crate::components::{Button, ButtonVariant, Input, Label, Textarea, TextareaVariant};
 use crate::{ThemeSignal, apply_theme};
 use crate::make_repo;
+use crate::Icon;
+use crate::icons::{FaCircleHalfStroke, FaSun, FaMoon};
 
 /// Shared settings view.
 ///
@@ -399,7 +401,7 @@ fn ThemeSelector() -> Element {
                     apply_theme(None);
                     theme.set(None);
                 },
-                i { class: "fa-solid fa-circle-half-stroke text-sm" }
+                Icon { icon: FaCircleHalfStroke, width: 14, height: 14 }
                 span { "System" }
             }
             label {
@@ -408,7 +410,7 @@ fn ThemeSelector() -> Element {
                     apply_theme(Some("light"));
                     theme.set(Some("light".to_string()));
                 },
-                i { class: "fa-solid fa-sun text-sm" }
+                Icon { icon: FaSun, width: 14, height: 14 }
                 span { "Light" }
             }
             label {
@@ -417,7 +419,7 @@ fn ThemeSelector() -> Element {
                     apply_theme(Some("dark"));
                     theme.set(Some("dark".to_string()));
                 },
-                i { class: "fa-solid fa-moon text-sm" }
+                Icon { icon: FaMoon, width: 14, height: 14 }
                 span { "Dark" }
             }
         }

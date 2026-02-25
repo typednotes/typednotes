@@ -212,7 +212,6 @@ fn App() -> Element {
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: ui::TAILWIND_CSS }
         document::Link { rel: "stylesheet", href: ui::DX_COMPONENTS_CSS }
-        document::Link { rel: "stylesheet", href: "/fontawesome/css/all.min.css" }
 
         AuthProvider {
             ui::components::ToastProvider {
