@@ -286,6 +286,7 @@ fn NamespaceNode(
     rsx! {
         Collapsible {
             default_open: true,
+            keep_mounted: true,
             SidebarMenuItem {
                 CollapsibleTrigger {
                     as: {
