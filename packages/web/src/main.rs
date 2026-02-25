@@ -57,8 +57,9 @@ async fn launch_server() {
 
     // Run migrations (ignore versions already applied but missing from binary,
     // which can happen during rollbacks or when migrations are renumbered)
-    sqlx::migrate!("../api/migrations")
-        .set_ignore_missing(true)
+    let mut migrator = sqlx::migrate!("../api/migrations");
+    migrator.set_ignore_missing(true);
+    migrator
         .run(pool)
         .await
         .expect("Failed to run migrations");
