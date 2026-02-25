@@ -442,10 +442,14 @@ fn FlatExplorerView(
         SlideDir::None => "",
     };
 
+    // Key on the namespace so the animated div is recreated (restarting the CSS animation)
+    let ns_key = current_namespace.as_deref().unwrap_or("__root__");
+
     rsx! {
         div {
             class: "overflow-hidden",
             div {
+                key: "{ns_key}",
                 class: "{anim_class}",
                 // Breadcrumb / back button
                 if current_namespace.is_some() {
