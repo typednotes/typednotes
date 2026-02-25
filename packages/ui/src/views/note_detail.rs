@@ -1,9 +1,8 @@
 use dioxus::prelude::*;
 
-use store::{NamespaceInfo, TypedNoteInfo};
 use crate::components::{use_toast, ToastOptions};
-use crate::{NoteEditor, LogLevel, log_activity, use_activity_log};
-use crate::make_repo;
+use crate::{NoteEditor, NoteTree, use_note_tree, LogLevel, log_activity, use_activity_log, use_auth};
+use crate::make_repo_for_user;
 
 /// Shared note detail view.
 ///
@@ -33,18 +32,19 @@ pub fn NoteDetailView(
         path_signal.set(note_path.clone());
     }
 
-    let mut notes = use_context::<Signal<Vec<TypedNoteInfo>>>();
-    let mut namespaces = use_context::<Signal<Vec<NamespaceInfo>>>();
-    let mut current_note = use_signal(|| Option::<TypedNoteInfo>::None);
+    let mut tree = use_note_tree();
+    let mut current_note = use_signal(|| Option::<store::TypedNoteInfo>::None);
     let mut auto_sync_secs = use_signal(|| 300u32);
     let mut activity_log = use_activity_log();
     let toast_api = use_toast();
+    let auth = use_auth();
 
     // Load current note and optionally refresh from remote
     let _loader = use_resource(move || {
         let path = path_signal();
         async move {
-            let repo = make_repo();
+            let user_id = auth().user.as_ref().map(|u| u.id.clone());
+            let repo = make_repo_for_user(user_id.as_deref());
             current_note.set(repo.get_note(&path).await);
             let config = repo.get_config().await;
             auto_sync_secs.set(config.sync.auto_sync_interval_secs);
@@ -54,7 +54,8 @@ pub fn NoteDetailView(
                     log_activity(&mut activity_log, LogLevel::Info, &format!("Pulling latest for {path}..."));
                     match api::pull_notes().await {
                         Ok(remote_files) => {
-                            let repo = make_repo();
+                            let user_id = auth().user.as_ref().map(|u| u.id.clone());
+                            let repo = make_repo_for_user(user_id.as_deref());
                             for file in &remote_files {
                                 let ext = file.path.rsplit('.').next().unwrap_or("md");
                                 let note_type = store::models::note_type_from_ext(ext);
@@ -63,8 +64,8 @@ pub fn NoteDetailView(
                             }
                             if !remote_files.is_empty() {
                                 current_note.set(repo.get_note(&path).await);
-                                notes.set(repo.list_notes().await);
-                                namespaces.set(repo.list_namespaces().await);
+                                let user_id = auth().user.as_ref().map(|u| u.id.clone());
+                                tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
                             }
                             log_activity(&mut activity_log, LogLevel::Success, &format!("Pulled {} notes", remote_files.len()));
                         }
@@ -80,7 +81,8 @@ pub fn NoteDetailView(
     let handle_save = move |content: String| {
         let path = path_signal();
         spawn(async move {
-            let repo = make_repo();
+            let user_id = auth().user.as_ref().map(|u| u.id.clone());
+            let repo = make_repo_for_user(user_id.as_deref());
             if let Some(note) = current_note() {
                 let stem = path.trim_end_matches(&format!(
                     ".{}",
@@ -88,7 +90,7 @@ pub fn NoteDetailView(
                 ));
                 repo.write_note(stem, &content, &note.r#type).await;
                 current_note.set(repo.get_note(&path).await);
-                notes.set(repo.list_notes().await);
+                tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
                 log_activity(&mut activity_log, LogLevel::Info, &format!("Saved {path}"));
                 toast_api.success("Saved".to_string(), ToastOptions::new());
 
@@ -126,11 +128,11 @@ pub fn NoteDetailView(
                     return;
                 }
 
-                let repo = make_repo();
+                let user_id = auth().user.as_ref().map(|u| u.id.clone());
+                let repo = make_repo_for_user(user_id.as_deref());
                 repo.rename_note(&old_path, &new_path).await;
                 current_note.set(repo.get_note(&new_path).await);
-                notes.set(repo.list_notes().await);
-                namespaces.set(repo.list_namespaces().await);
+                tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
 
                 path_signal.set(new_path.clone());
                 log_activity(&mut activity_log, LogLevel::Info, &format!("Renamed to {new_path}"));
@@ -144,10 +146,10 @@ pub fn NoteDetailView(
     let handle_delete = move |_| {
         let path = path_signal();
         spawn(async move {
-            let repo = make_repo();
+            let user_id = auth().user.as_ref().map(|u| u.id.clone());
+            let repo = make_repo_for_user(user_id.as_deref());
             repo.delete_note(&path).await;
-            notes.set(repo.list_notes().await);
-            namespaces.set(repo.list_namespaces().await);
+            tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
             log_activity(&mut activity_log, LogLevel::Info, &format!("Deleted {path}"));
 
             if enable_git_sync {

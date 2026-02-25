@@ -1,15 +1,15 @@
 use dioxus::prelude::*;
 
-use store::{NamespaceInfo, TypedNoteInfo};
 use crate::components::{Button, ButtonVariant, Input, Label, use_toast, ToastOptions};
 use crate::{
     ActivityLogPanel, AppSidebar, NewNoteDialog, use_auth,
+    NoteTree,
     LogLevel, log_activity, use_activity_log,
     SidebarProvider, SidebarInset, SidebarTrigger,
     SidebarCollapsible, SidebarVariant, use_sidebar,
 };
 use crate::components::sidebar::SidebarLayout as SidebarShell;
-use crate::make_repo;
+use crate::{make_repo_for_user};
 
 use super::ModalOverlay;
 
@@ -31,28 +31,37 @@ pub fn SidebarLayoutView(
     #[props(default)]
     enable_git_pull: bool,
 ) -> Element {
-    let mut notes: Signal<Vec<TypedNoteInfo>> = use_context_provider(|| Signal::new(Vec::new()));
-    let mut namespaces: Signal<Vec<NamespaceInfo>> = use_context_provider(|| Signal::new(Vec::new()));
+    let mut tree: Signal<NoteTree> = use_context_provider(|| Signal::new(NoteTree::default()));
 
     let mut show_new_note = use_signal(|| false);
     let mut new_note_namespace = use_signal(|| Option::<String>::None);
     let mut show_new_namespace = use_signal(|| false);
     let mut new_ns_name = use_signal(|| String::new());
+    let mut show_delete_ns = use_signal(|| false);
+    let mut delete_ns_path = use_signal(|| String::new());
     let auth = use_auth();
     let mut activity_log = use_activity_log();
 
     // Load notes/namespaces from store + optional background git pull
     let _loader = use_resource(move || async move {
-        let repo = make_repo();
-        notes.set(repo.list_notes().await);
-        namespaces.set(repo.list_namespaces().await);
+        let user_id = auth().user.as_ref().map(|u| u.id.clone());
+
+        // Migrate legacy unscoped DB into user-scoped DB on first login (web only)
+        #[cfg(all(target_arch = "wasm32", feature = "web"))]
+        if let Some(ref uid) = user_id {
+            let idb = store::IdbStore::with_namespace(Some(uid));
+            idb.migrate_from_legacy_if_needed().await;
+        }
+
+        tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
 
         if enable_git_pull {
             spawn(async move {
                 log_activity(&mut activity_log, LogLevel::Info, "Pulling from git...");
                 match api::pull_notes().await {
                     Ok(remote_files) => {
-                        let repo = make_repo();
+                        let user_id = auth().user.as_ref().map(|u| u.id.clone());
+                        let repo = make_repo_for_user(user_id.as_deref());
                         let count = remote_files.len();
                         for file in &remote_files {
                             let ext = file.path.rsplit('.').next().unwrap_or("md");
@@ -61,8 +70,8 @@ pub fn SidebarLayoutView(
                             repo.write_note(stem, &file.content, note_type).await;
                         }
                         if !remote_files.is_empty() {
-                            notes.set(repo.list_notes().await);
-                            namespaces.set(repo.list_namespaces().await);
+                            let user_id = auth().user.as_ref().map(|u| u.id.clone());
+                            tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
                         }
                         log_activity(&mut activity_log, LogLevel::Success, &format!("Pulled {count} notes"));
                     }
@@ -75,6 +84,50 @@ pub fn SidebarLayoutView(
             });
         }
     });
+
+    // Periodic sync timer (web only): pull remote changes at the configured interval
+    #[cfg(target_arch = "wasm32")]
+    {
+        use_effect(move || {
+            if !enable_git_pull {
+                return;
+            }
+            spawn(async move {
+                // Read sync interval from config
+                let user_id = auth().user.as_ref().map(|u| u.id.clone());
+                let repo = make_repo_for_user(user_id.as_deref());
+                let config = repo.get_config().await;
+                let interval_secs = config.sync.auto_sync_interval_secs;
+                if interval_secs == 0 {
+                    return;
+                }
+                loop {
+                    gloo_timers::future::sleep(std::time::Duration::from_secs(interval_secs as u64)).await;
+                    log_activity(&mut activity_log, LogLevel::Info, "Periodic pull...");
+                    match api::pull_notes().await {
+                        Ok(remote_files) => {
+                            let user_id = auth().user.as_ref().map(|u| u.id.clone());
+                            let repo = make_repo_for_user(user_id.as_deref());
+                            for file in &remote_files {
+                                let ext = file.path.rsplit('.').next().unwrap_or("md");
+                                let note_type = store::models::note_type_from_ext(ext);
+                                let stem = file.path.trim_end_matches(&format!(".{ext}"));
+                                repo.write_note(stem, &file.content, note_type).await;
+                            }
+                            if !remote_files.is_empty() {
+                                let user_id = auth().user.as_ref().map(|u| u.id.clone());
+                                tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
+                            }
+                            log_activity(&mut activity_log, LogLevel::Success, &format!("Periodic pull: {} notes", remote_files.len()));
+                        }
+                        Err(e) => {
+                            log_activity(&mut activity_log, LogLevel::Warning, &format!("Periodic pull: {e}"));
+                        }
+                    }
+                }
+            });
+        });
+    }
 
     // Sidebar callbacks
     let on_select_note = move |path: String| {
@@ -98,6 +151,11 @@ pub fn SidebarLayoutView(
         use_sidebar().set_open_mobile(false);
     };
 
+    let on_delete_namespace = move |path: String| {
+        delete_ns_path.set(path);
+        show_delete_ns.set(true);
+    };
+
     let on_settings = move |_| {
         show_new_note.set(false);
         show_new_namespace.set(false);
@@ -114,10 +172,10 @@ pub fn SidebarLayoutView(
                 } else {
                     name
                 };
-                let repo = make_repo();
+                let user_id = auth().user.as_ref().map(|u| u.id.clone());
+                let repo = make_repo_for_user(user_id.as_deref());
                 repo.write_note(&path, "", &note_type).await;
-                notes.set(repo.list_notes().await);
-                namespaces.set(repo.list_namespaces().await);
+                tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
                 show_new_note.set(false);
                 let ext = store::models::ext_from_note_type(&note_type);
                 let full_path = format!("{path}.{ext}");
@@ -133,13 +191,57 @@ pub fn SidebarLayoutView(
             return;
         }
         spawn(async move {
-            let repo = make_repo();
+            let user_id = auth().user.as_ref().map(|u| u.id.clone());
+            let repo = make_repo_for_user(user_id.as_deref());
             repo.create_namespace(&name).await;
-            notes.set(repo.list_notes().await);
-            namespaces.set(repo.list_namespaces().await);
+            tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
             show_new_namespace.set(false);
             toast.success("Folder created".to_string(), ToastOptions::new());
+            // Sync namespace to remote
+            if enable_git_pull {
+                let _ = api::sync_namespace(name).await;
+            }
         });
+    };
+
+    // Handle confirming namespace deletion
+    let handle_confirm_delete_ns = move |_| {
+        let path = delete_ns_path();
+        spawn(async move {
+            let user_id = auth().user.as_ref().map(|u| u.id.clone());
+            let repo = make_repo_for_user(user_id.as_deref());
+            repo.delete_namespace(&path).await;
+            tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
+            show_delete_ns.set(false);
+            toast.success("Folder deleted".to_string(), ToastOptions::new());
+            // Sync deletion to remote
+            if enable_git_pull {
+                match api::delete_namespace_remote(path.clone()).await {
+                    Ok(()) => {
+                        log_activity(&mut activity_log, LogLevel::Success, &format!("Deleted remote folder {path}"));
+                    }
+                    Err(e) => {
+                        log_activity(&mut activity_log, LogLevel::Error, &format!("Delete folder sync error: {e}"));
+                    }
+                }
+            }
+        });
+    };
+
+    // Count items inside the namespace to show in the confirmation dialog
+    let delete_ns_note_count = {
+        let t = tree();
+        let path = delete_ns_path();
+        t.notes.iter().filter(|n| {
+            n.namespace.as_ref().map_or(false, |ns| ns == &path || ns.starts_with(&format!("{path}/")))
+        }).count()
+    };
+    let delete_ns_sub_count = {
+        let t = tree();
+        let path = delete_ns_path();
+        t.namespaces.iter().filter(|ns| {
+            ns.parent.as_ref().map_or(false, |p| p == &path || p.starts_with(&format!("{path}/")))
+        }).count()
     };
 
     rsx! {
@@ -148,13 +250,14 @@ pub fn SidebarLayoutView(
                 variant: SidebarVariant::Inset,
                 collapsible: SidebarCollapsible::Offcanvas,
                 AppSidebar {
-                    namespaces: namespaces(),
-                    notes: notes(),
+                    namespaces: tree().namespaces,
+                    notes: tree().notes,
                     active_path: active_path,
                     user: auth().user,
                     on_select_note: on_select_note,
                     on_create_note: on_create_note,
                     on_create_namespace: on_create_namespace,
+                    on_delete_namespace: on_delete_namespace,
                     on_navigate_settings: on_settings,
                 }
             }
@@ -182,7 +285,7 @@ pub fn SidebarLayoutView(
             ModalOverlay {
                 on_close: move |_| show_new_note.set(false),
                 NewNoteDialog {
-                    namespaces: namespaces(),
+                    namespaces: tree().namespaces,
                     default_namespace: new_note_namespace(),
                     on_create: handle_create_note,
                     on_cancel: move |_| show_new_note.set(false),
@@ -217,6 +320,40 @@ pub fn SidebarLayoutView(
                         Button {
                             variant: ButtonVariant::Outline,
                             onclick: move |_| show_new_namespace.set(false),
+                            "Cancel"
+                        }
+                    }
+                }
+            }
+        }
+        if show_delete_ns() {
+            ModalOverlay {
+                on_close: move |_| show_delete_ns.set(false),
+                div {
+                    class: "p-6",
+                    h2 { class: "m-0 mb-5 text-lg font-semibold text-neutral-800", "Delete Folder" }
+                    p {
+                        class: "text-sm text-neutral-600 mb-2",
+                        "Delete folder "
+                        strong { "{delete_ns_path()}" }
+                        " and all its contents?"
+                    }
+                    if delete_ns_note_count > 0 || delete_ns_sub_count > 0 {
+                        p {
+                            class: "text-xs text-neutral-500 mb-4",
+                            "This folder contains {delete_ns_note_count} note(s) and {delete_ns_sub_count} sub-folder(s)."
+                        }
+                    }
+                    div {
+                        class: "flex gap-2 mt-5",
+                        Button {
+                            variant: ButtonVariant::Destructive,
+                            onclick: handle_confirm_delete_ns,
+                            "Delete"
+                        }
+                        Button {
+                            variant: ButtonVariant::Outline,
+                            onclick: move |_| show_delete_ns.set(false),
                             "Cancel"
                         }
                     }

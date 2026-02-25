@@ -17,6 +17,7 @@ use crate::icons::{
     FaFolderPlus, FaPlus, FaList, FaFolderTree, FaGear, FaTerminal,
     FaFolder, FaFileLines, FaArrowLeft, FaChevronRight,
     FaCircleHalfStroke, FaMoon, FaSun, FaRightFromBracket,
+    FaTrashCan,
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -43,11 +44,13 @@ pub fn AppSidebar(
     on_select_note: EventHandler<String>,
     on_create_note: EventHandler<Option<String>>,
     on_create_namespace: EventHandler<Option<String>>,
+    on_delete_namespace: EventHandler<String>,
     on_navigate_settings: EventHandler<()>,
 ) -> Element {
     let mut view_mode = use_signal(|| ViewMode::Tree);
     let mut flat_namespace = use_signal(|| Option::<String>::None);
     let mut slide_dir = use_signal(|| SlideDir::None);
+    let mut nav_counter = use_signal(|| 0u32);
 
     rsx! {
         // ── Header: user info + action buttons ──
@@ -132,19 +135,23 @@ pub fn AppSidebar(
                             on_select_note: on_select_note,
                             on_create_note: on_create_note,
                             on_create_namespace: on_create_namespace,
+                            on_delete_namespace: on_delete_namespace,
                         }
                     }
                 } else {
                     FlatExplorerView {
+                        nav_counter: nav_counter(),
                         current_namespace: flat_namespace(),
                         slide_dir: slide_dir(),
                         namespaces: namespaces.clone(),
                         notes: notes.clone(),
                         active_path: active_path.clone(),
                         on_select_note: on_select_note,
+                        on_delete_namespace: on_delete_namespace,
                         on_navigate_into: move |ns: String| {
                             slide_dir.set(SlideDir::Right);
                             flat_namespace.set(Some(ns));
+                            nav_counter += 1;
                         },
                         on_navigate_up: move |_| {
                             slide_dir.set(SlideDir::Left);
@@ -156,6 +163,7 @@ pub fn AppSidebar(
                                     flat_namespace.set(None);
                                 }
                             }
+                            nav_counter += 1;
                         },
                     }
                 }
@@ -220,6 +228,7 @@ fn ExplorerTree(
     on_select_note: EventHandler<String>,
     on_create_note: EventHandler<Option<String>>,
     on_create_namespace: EventHandler<Option<String>>,
+    on_delete_namespace: EventHandler<String>,
 ) -> Element {
     let root_namespaces: Vec<&NamespaceInfo> =
         namespaces.iter().filter(|ns| ns.parent.is_none()).collect();
@@ -237,6 +246,7 @@ fn ExplorerTree(
                 on_select_note: on_select_note,
                 on_create_note: on_create_note,
                 on_create_namespace: on_create_namespace,
+                on_delete_namespace: on_delete_namespace,
             }
         }
 
@@ -260,6 +270,7 @@ fn NamespaceNode(
     on_select_note: EventHandler<String>,
     on_create_note: EventHandler<Option<String>>,
     on_create_namespace: EventHandler<Option<String>>,
+    on_delete_namespace: EventHandler<String>,
 ) -> Element {
     let child_namespaces: Vec<&NamespaceInfo> = all_namespaces
         .iter()
@@ -287,6 +298,26 @@ fn NamespaceNode(
                                     tooltip: rsx! { "{namespace_name}" },
                                     Icon { icon: FaFolder, width: 12, height: 12 }
                                     span { "{namespace_name}" }
+                                }
+                            }
+                        }
+                    },
+                }
+                SidebarMenuAction {
+                    show_on_hover: true,
+                    as: {
+                        let ns_path2 = ns_path.clone();
+                        move |attrs: Vec<Attribute>| {
+                            let ns_path2 = ns_path2.clone();
+                            rsx! {
+                                button {
+                                    onclick: move |evt: Event<MouseData>| {
+                                        evt.stop_propagation();
+                                        on_delete_namespace.call(ns_path2.clone());
+                                    },
+                                    title: "Delete folder",
+                                    ..attrs,
+                                    Icon { icon: FaTrashCan }
                                 }
                             }
                         }
@@ -324,6 +355,7 @@ fn NamespaceNode(
                                 on_select_note: on_select_note,
                                 on_create_note: on_create_note,
                                 on_create_namespace: on_create_namespace,
+                                on_delete_namespace: on_delete_namespace,
                             }
                         }
                         for note in child_notes {
@@ -417,12 +449,14 @@ fn NoteSubItem(
 
 #[component]
 fn FlatExplorerView(
+    nav_counter: u32,
     current_namespace: Option<String>,
     slide_dir: SlideDir,
     namespaces: Vec<NamespaceInfo>,
     notes: Vec<TypedNoteInfo>,
     active_path: Option<String>,
     on_select_note: EventHandler<String>,
+    on_delete_namespace: EventHandler<String>,
     on_navigate_into: EventHandler<String>,
     on_navigate_up: EventHandler<()>,
 ) -> Element {
@@ -442,14 +476,11 @@ fn FlatExplorerView(
         SlideDir::None => "",
     };
 
-    // Key on the namespace so the animated div is recreated (restarting the CSS animation)
-    let ns_key = current_namespace.as_deref().unwrap_or("__root__");
-
     rsx! {
         div {
             class: "overflow-hidden",
             div {
-                key: "{ns_key}",
+                key: "{nav_counter}",
                 class: "{anim_class}",
                 // Breadcrumb / back button
                 if current_namespace.is_some() {
@@ -506,6 +537,26 @@ fn FlatExplorerView(
                                                 Icon { icon: FaFolder, width: 12, height: 12 }
                                                 span { "{ns_name}" }
                                                 Icon { icon: FaChevronRight, width: 8, height: 8, class: "ml-auto opacity-40" }
+                                            }
+                                        }
+                                    }
+                                },
+                            }
+                            SidebarMenuAction {
+                                show_on_hover: true,
+                                as: {
+                                    let ns_path = ns.path.clone();
+                                    move |attrs: Vec<Attribute>| {
+                                        let ns_path = ns_path.clone();
+                                        rsx! {
+                                            button {
+                                                onclick: move |evt: Event<MouseData>| {
+                                                    evt.stop_propagation();
+                                                    on_delete_namespace.call(ns_path.clone());
+                                                },
+                                                title: "Delete folder",
+                                                ..attrs,
+                                                Icon { icon: FaTrashCan }
                                             }
                                         }
                                     }

@@ -33,36 +33,119 @@ use crate::repo::ObjectStore;
 use rexie::{ObjectStore as RexieObjectStore, Rexie, TransactionMode};
 use wasm_bindgen::JsValue;
 
-const DB_NAME: &str = "typednotes";
+const DEFAULT_DB_NAME: &str = "typednotes";
 const DB_VERSION: u32 = 1;
 const OBJECTS_STORE: &str = "objects";
 const REFS_STORE: &str = "refs";
 
 /// IndexedDB-backed ObjectStore for web platform.
+///
+/// Each instance is scoped to a specific database name. When a user namespace
+/// is provided, the database is named `"typednotes-<namespace>"`, giving each
+/// user their own isolated IndexedDB database.
 #[derive(Clone)]
 pub struct IdbStore {
-    // We open the database on each operation because Rexie doesn't implement Clone.
-    // This is cheap since IndexedDB caches open connections.
+    db_name: String,
 }
 
 impl IdbStore {
+    /// Create an unscoped store using the default `"typednotes"` database.
     pub fn new() -> Self {
-        Self {}
+        Self::with_namespace(None)
     }
 
-    async fn open_db() -> Result<Rexie, rexie::Error> {
-        Rexie::builder(DB_NAME)
+    /// Create a store scoped to an optional user namespace.
+    ///
+    /// - `Some("user-uuid")` → database `"typednotes-user-uuid"`
+    /// - `None` → database `"typednotes"` (default, backwards-compatible)
+    pub fn with_namespace(namespace: Option<&str>) -> Self {
+        let db_name = match namespace {
+            Some(ns) => format!("{DEFAULT_DB_NAME}-{ns}"),
+            None => DEFAULT_DB_NAME.to_string(),
+        };
+        Self { db_name }
+    }
+
+    async fn open_db(&self) -> Result<Rexie, rexie::Error> {
+        Rexie::builder(&self.db_name)
             .version(DB_VERSION)
             .add_object_store(RexieObjectStore::new(OBJECTS_STORE))
             .add_object_store(RexieObjectStore::new(REFS_STORE))
             .build()
             .await
     }
+
+    /// Migrate data from the legacy unscoped DB if the scoped DB is empty.
+    ///
+    /// Called once after login to seamlessly transfer existing notes into the
+    /// user's scoped database. Only runs when:
+    /// 1. This store is scoped (not the default DB name)
+    /// 2. The scoped DB has no HEAD ref yet
+    /// 3. The legacy DB has data to migrate
+    pub async fn migrate_from_legacy_if_needed(&self) {
+        // Only migrate if we're using a scoped (non-default) DB
+        if self.db_name == DEFAULT_DB_NAME {
+            return;
+        }
+
+        // Check if scoped DB already has a HEAD → skip if yes
+        if self.get_ref("HEAD").await.is_some() {
+            return;
+        }
+
+        // Open legacy DB
+        let legacy = IdbStore::new();
+        let Some(legacy_head) = legacy.get_ref("HEAD").await else {
+            return; // Nothing to migrate
+        };
+
+        // Open legacy DB to read all objects
+        let Ok(legacy_db) = legacy.open_db().await else {
+            return;
+        };
+
+        // Read all objects from legacy store
+        let objects = {
+            let Ok(tx) = legacy_db.transaction(&[OBJECTS_STORE], TransactionMode::ReadOnly) else {
+                return;
+            };
+            let Ok(store) = tx.store(OBJECTS_STORE) else {
+                return;
+            };
+            let Ok(entries) = store.get_all(None, None, None, None).await else {
+                return;
+            };
+            entries
+        };
+
+        // Write all objects into scoped DB
+        let Ok(scoped_db) = self.open_db().await else {
+            return;
+        };
+        {
+            let Ok(tx) = scoped_db.transaction(&[OBJECTS_STORE], TransactionMode::ReadWrite) else {
+                return;
+            };
+            let Ok(store) = tx.store(OBJECTS_STORE) else {
+                return;
+            };
+            for (key, value) in &objects {
+                let _ = store.put(value, Some(key)).await;
+            }
+            let _ = tx.done().await;
+        }
+
+        // Copy HEAD ref
+        self.set_ref("HEAD", &legacy_head).await;
+
+        // Delete legacy database
+        let _ = Rexie::delete(DEFAULT_DB_NAME).await;
+    }
 }
 
 impl ObjectStore for IdbStore {
     async fn get(&self, sha: &Sha) -> Option<Vec<u8>> {
-        let db = Self::open_db().await.ok()?;
+        let db = self.open_db().await.ok()?;
         let tx = db
             .transaction(&[OBJECTS_STORE], TransactionMode::ReadOnly)
             .ok()?;
@@ -77,7 +160,7 @@ impl ObjectStore for IdbStore {
     }
 
     async fn put(&self, sha: &Sha, data: Vec<u8>) {
-        let Ok(db) = Self::open_db().await else {
+        let Ok(db) = self.open_db().await else {
             return;
         };
         let Ok(tx) = db.transaction(&[OBJECTS_STORE], TransactionMode::ReadWrite) else {
@@ -94,7 +177,7 @@ impl ObjectStore for IdbStore {
     }
 
     async fn get_ref(&self, name: &str) -> Option<Sha> {
-        let db = Self::open_db().await.ok()?;
+        let db = self.open_db().await.ok()?;
         let tx = db
             .transaction(&[REFS_STORE], TransactionMode::ReadOnly)
             .ok()?;
@@ -109,7 +192,7 @@ impl ObjectStore for IdbStore {
     }
 
     async fn set_ref(&self, name: &str, sha: &Sha) {
-        let Ok(db) = Self::open_db().await else {
+        let Ok(db) = self.open_db().await else {
             return;
         };
         let Ok(tx) = db.transaction(&[REFS_STORE], TransactionMode::ReadWrite) else {

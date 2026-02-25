@@ -11,7 +11,7 @@ pub mod icons {
 }
 
 mod repo;
-pub use repo::make_repo;
+pub use repo::{make_repo, make_repo_for_user};
 
 pub mod views;
 
@@ -35,6 +35,9 @@ pub use new_note_dialog::NewNoteDialog;
 
 pub mod activity_log;
 pub use activity_log::{ActivityLog, LogLevel, log_activity, use_activity_log};
+
+mod note_tree;
+pub use note_tree::{NoteTree, use_note_tree};
 
 mod activity_log_panel;
 pub use activity_log_panel::{ActivityLogPanel, ActivityLogToggle};

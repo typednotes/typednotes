@@ -587,6 +587,104 @@ pub async fn delete_note_remote(path: String) -> Result<(), ServerFnError> {
     Err(ServerFnError::new("Server only"))
 }
 
+/// Delete a namespace (directory) from the git remote: fetch, delete in memory, push.
+#[cfg(feature = "server")]
+#[post("/api/git/delete-namespace", session: tower_sessions::Session)]
+pub async fn delete_namespace_remote(path: String) -> Result<(), ServerFnError> {
+    let (_user_id, remote_url, ssh_key_pem, branch) = get_user_git_context(&session).await?;
+
+    let mem = store::MemoryStore::new();
+    let repo = store::Repository::new(mem.clone());
+
+    // Fetch
+    let mem2 = mem.clone();
+    let url = remote_url.clone();
+    let key = ssh_key_pem.clone();
+    let branch2 = branch.clone();
+    tokio::task::spawn_blocking(move || git_transport::fetch(&mem2, &url, &key, Some(&branch2)))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .map_err(|e| ServerFnError::new(e))?;
+
+    let pre_shas: std::collections::HashSet<String> =
+        mem.all_object_shas().into_iter().collect();
+
+    // Delete namespace in memory
+    repo.delete_namespace(&path).await;
+
+    let new_shas: Vec<String> = mem
+        .all_object_shas()
+        .into_iter()
+        .filter(|s| !pre_shas.contains(s))
+        .collect();
+
+    // Push
+    let mem2 = mem.clone();
+    tokio::task::spawn_blocking(move || {
+        git_transport::push(&mem2, &remote_url, &ssh_key_pem, &branch, &new_shas)
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+    .map_err(|e| ServerFnError::new(e))?;
+
+    Ok(())
+}
+
+#[cfg(not(feature = "server"))]
+#[post("/api/git/delete-namespace")]
+pub async fn delete_namespace_remote(path: String) -> Result<(), ServerFnError> {
+    Err(ServerFnError::new("Server only"))
+}
+
+/// Sync a namespace (directory) to the git remote: fetch, create in memory, push.
+#[cfg(feature = "server")]
+#[post("/api/git/sync-namespace", session: tower_sessions::Session)]
+pub async fn sync_namespace(path: String) -> Result<(), ServerFnError> {
+    let (_user_id, remote_url, ssh_key_pem, branch) = get_user_git_context(&session).await?;
+
+    let mem = store::MemoryStore::new();
+    let repo = store::Repository::new(mem.clone());
+
+    // Fetch
+    let mem2 = mem.clone();
+    let url = remote_url.clone();
+    let key = ssh_key_pem.clone();
+    let branch2 = branch.clone();
+    tokio::task::spawn_blocking(move || git_transport::fetch(&mem2, &url, &key, Some(&branch2)))
+        .await
+        .map_err(|e| ServerFnError::new(e.to_string()))?
+        .map_err(|e| ServerFnError::new(e))?;
+
+    let pre_shas: std::collections::HashSet<String> =
+        mem.all_object_shas().into_iter().collect();
+
+    // Create namespace in memory
+    repo.create_namespace(&path).await;
+
+    let new_shas: Vec<String> = mem
+        .all_object_shas()
+        .into_iter()
+        .filter(|s| !pre_shas.contains(s))
+        .collect();
+
+    // Push
+    let mem2 = mem.clone();
+    tokio::task::spawn_blocking(move || {
+        git_transport::push(&mem2, &remote_url, &ssh_key_pem, &branch, &new_shas)
+    })
+    .await
+    .map_err(|e| ServerFnError::new(e.to_string()))?
+    .map_err(|e| ServerFnError::new(e))?;
+
+    Ok(())
+}
+
+#[cfg(not(feature = "server"))]
+#[post("/api/git/sync-namespace")]
+pub async fn sync_namespace(path: String) -> Result<(), ServerFnError> {
+    Err(ServerFnError::new("Server only"))
+}
+
 /// Pull all notes from the git remote.
 #[cfg(feature = "server")]
 #[get("/api/git/pull", session: tower_sessions::Session)]

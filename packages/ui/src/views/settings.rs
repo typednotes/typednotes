@@ -1,9 +1,9 @@
 use dioxus::prelude::*;
 
-use store::{NamespaceInfo, TypedNoteInfo, TypedNotesConfig};
+use store::TypedNotesConfig;
 use crate::components::{Button, ButtonVariant, Input, Label, Textarea, TextareaVariant};
-use crate::{ThemeSignal, apply_theme};
-use crate::make_repo;
+use crate::{ThemeSignal, apply_theme, NoteTree, use_note_tree, use_auth};
+use crate::make_repo_for_user;
 use crate::Icon;
 use crate::icons::{FaCircleHalfStroke, FaSun, FaMoon};
 
@@ -19,8 +19,7 @@ pub fn SettingsView(
     #[props(default = true)]
     show_theme: bool,
 ) -> Element {
-    let mut notes = use_context::<Signal<Vec<TypedNoteInfo>>>();
-    let mut namespaces = use_context::<Signal<Vec<NamespaceInfo>>>();
+    let mut tree = use_note_tree();
     let mut notes_root = use_signal(|| String::new());
     let mut auto_sync_secs = use_signal(|| 300u32);
     let mut save_status = use_signal(|| Option::<&str>::None);
@@ -38,9 +37,12 @@ pub fn SettingsView(
     let mut is_syncing = use_signal(|| false);
     let mut sync_log = use_signal(Vec::<String>::new);
 
+    let auth = use_auth();
+
     // Load config + optional git credentials on mount
     let _loader = use_resource(move || async move {
-        let repo = make_repo();
+        let user_id = auth().user.as_ref().map(|u| u.id.clone());
+        let repo = make_repo_for_user(user_id.as_deref());
         let config = repo.get_config().await;
         notes_root.set(config.notes.root);
         auto_sync_secs.set(config.sync.auto_sync_interval_secs);
@@ -56,7 +58,8 @@ pub fn SettingsView(
 
     let handle_save = move |_| {
         spawn(async move {
-            let repo = make_repo();
+            let user_id = auth().user.as_ref().map(|u| u.id.clone());
+            let repo = make_repo_for_user(user_id.as_deref());
             let config = TypedNotesConfig::new(notes_root()).with_sync_interval(auto_sync_secs());
             repo.set_config(&config).await;
             save_status.set(Some("success"));
@@ -102,7 +105,8 @@ pub fn SettingsView(
                     let count = remote_files.len();
                     sync_log.write().push(format!("[{}] Received {count} files from remote", current_time()));
 
-                    let repo = make_repo();
+                    let user_id = auth().user.as_ref().map(|u| u.id.clone());
+                    let repo = make_repo_for_user(user_id.as_deref());
                     for file in &remote_files {
                         let ext = file.path.rsplit('.').next().unwrap_or("md");
                         let note_type = store::models::note_type_from_ext(ext);
@@ -110,8 +114,7 @@ pub fn SettingsView(
                         repo.write_note(stem, &file.content, note_type).await;
                     }
                     if !remote_files.is_empty() {
-                        notes.set(repo.list_notes().await);
-                        namespaces.set(repo.list_namespaces().await);
+                        tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
                     }
                     sync_log.write().push(format!("[{}] Sync complete: {count} notes imported", current_time()));
                     sync_status.set(Some(format!("Synced {count} notes")));

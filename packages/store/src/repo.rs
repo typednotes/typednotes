@@ -368,6 +368,71 @@ impl<S: ObjectStore> Repository<S> {
         self.write_note_raw(&gitkeep_path, b"").await
     }
 
+    /// Delete a namespace (directory) and everything inside it.
+    /// Removes the directory entry from the parent tree and commits.
+    pub async fn delete_namespace(&self, path: &str) -> Option<Sha> {
+        let root_tree = self.get_root_tree().await?;
+
+        let new_root = self.remove_subtree(&root_tree, path).await;
+        let (tree_sha, tree_raw) = hash_tree(&new_root);
+        self.store.put(&tree_sha, tree_raw).await;
+
+        let parent = self.get_head().await;
+        let commit = Commit {
+            tree: tree_sha,
+            parent,
+            author: "TypedNotes <notes@typednotes.com>".to_string(),
+            message: format!("Delete namespace {path}"),
+            timestamp: current_timestamp(),
+        };
+        let (commit_sha, commit_raw) = hash_commit(&commit);
+        self.store.put(&commit_sha, commit_raw).await;
+        self.store.set_ref("HEAD", &commit_sha).await;
+
+        Some(commit_sha)
+    }
+
+    /// Remove a directory entry at the given path from the tree.
+    fn remove_subtree<'a>(
+        &'a self,
+        tree: &'a Tree,
+        path: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Tree> + 'a>> {
+        Box::pin(async move {
+            let parts: Vec<&str> = path.splitn(2, '/').collect();
+            let mut entries: Vec<TreeEntry> = tree.entries.clone();
+
+            match parts.as_slice() {
+                [dir_name] => {
+                    // Leaf: remove the directory entry (mode "40000")
+                    entries.retain(|e| !(e.name == *dir_name && e.mode == "40000"));
+                }
+                [dir, rest] => {
+                    // Intermediate: recurse into subtree
+                    if let Some(entry) = entries.iter().find(|e| e.name == *dir && e.mode == "40000")
+                    {
+                        if let Some(raw) = self.store.get(&entry.sha).await {
+                            if let Some(sub_tree) = parse_tree(&raw) {
+                                let new_sub = self.remove_subtree(&sub_tree, rest).await;
+                                let (sub_sha, sub_raw) = hash_tree(&new_sub);
+                                self.store.put(&sub_sha, sub_raw).await;
+
+                                if let Some(existing) =
+                                    entries.iter_mut().find(|e| e.name == *dir)
+                                {
+                                    existing.sha = sub_sha;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            Tree { entries }
+        })
+    }
+
     /// Rename a note: reads content from old_path, writes to new_path, deletes old_path.
     pub async fn rename_note(&self, old_path: &str, new_path: &str) -> Option<Sha> {
         // Read existing content
