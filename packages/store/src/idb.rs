@@ -112,7 +112,7 @@ impl IdbStore {
             let Ok(store) = tx.store(OBJECTS_STORE) else {
                 return;
             };
-            let Ok(entries) = store.get_all(None, None, None, None).await else {
+            let Ok(entries) = store.scan(None, None, None, None).await else {
                 return;
             };
             entries

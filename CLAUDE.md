@@ -9,11 +9,11 @@ TypedNotes is a cross-platform note-taking application built with Dioxus 0.7.1 t
 ## Build Commands
 
 ```bash
-# Serve for development (run from package directory)
-cd packages/web && dx serve        # Web (fullstack with server)
-cd packages/desktop && dx serve    # Desktop (webview)
-cd packages/mobile && dx serve --platform android  # Android
-cd packages/mobile && dx serve --platform ios      # iOS
+# Serve for development (run from workspace root)
+dx serve                                        # Web (fullstack with server, default member)
+dx serve --package desktop                      # Desktop (webview)
+dx serve --package mobile --platform android    # Android
+dx serve --package mobile --platform ios        # iOS
 
 # Production bundle (used in Docker build)
 dx bundle --fullstack --release --debug-symbols=false
