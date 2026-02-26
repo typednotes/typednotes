@@ -292,14 +292,17 @@ pub async fn save_git_credentials(
         Some(git_remote_url.trim().to_string())
     };
 
-    // If SSH key provided, encrypt it and extract public key
+    // If SSH key provided, normalise line endings, encrypt, and extract public key
     let (encrypted_key, nonce, public_key) = if let Some(ref key_pem) = ssh_private_key {
-        if key_pem.trim().is_empty() {
+        let normalised = key_pem.replace('\r', "");
+        let normalised = normalised.trim();
+        if normalised.is_empty() {
             (None, None, None)
         } else {
-            let pub_key = crypto::extract_public_key(key_pem)
+            let with_newline = format!("{normalised}\n");
+            let pub_key = crypto::extract_public_key(&with_newline)
                 .map_err(|e| ServerFnError::new(e))?;
-            let (enc, n) = crypto::encrypt_ssh_key(key_pem.as_bytes())
+            let (enc, n) = crypto::encrypt_ssh_key(with_newline.as_bytes())
                 .map_err(|e| ServerFnError::new(e))?;
             (Some(enc), Some(n), Some(pub_key))
         }

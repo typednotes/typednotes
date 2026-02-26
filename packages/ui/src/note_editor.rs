@@ -1,6 +1,7 @@
 use dioxus::prelude::*;
 use store::TypedNoteInfo;
 use crate::components::{Button, ButtonVariant, Input, Textarea, TextareaVariant};
+use crate::markdown_editor::MarkdownEditor;
 use crate::Icon;
 use crate::icons::FaTrashCan;
 
@@ -98,16 +99,32 @@ pub fn NoteEditor(
             }
 
             // Content area — fills remaining space; parent pane scrolls
-            Textarea {
-                variant: TextareaVariant::Ghost,
-                class: "flex-1 w-full p-0 font-sans text-base leading-[1.7] resize-none",
-                value: content(),
-                placeholder: "Start writing...",
-                oninput: move |evt: FormEvent| {
-                    content.set(evt.value());
-                    dirty.set(true);
-                },
-                onblur: handle_blur,
+            if note.r#type == "markdown" {
+                MarkdownEditor {
+                    content: content,
+                    on_change: move |_: String| {
+                        dirty.set(true);
+                    },
+                    on_blur: move |_| {
+                        if dirty() {
+                            on_save.call(content());
+                            dirty.set(false);
+                        }
+                    },
+                    placeholder: "Start writing...".to_string(),
+                }
+            } else {
+                Textarea {
+                    variant: TextareaVariant::Ghost,
+                    class: "flex-1 w-full p-0 font-sans text-base leading-[1.7] resize-none",
+                    value: content(),
+                    placeholder: "Start writing...",
+                    oninput: move |evt: FormEvent| {
+                        content.set(evt.value());
+                        dirty.set(true);
+                    },
+                    onblur: handle_blur,
+                }
             }
         }
     }

@@ -286,6 +286,8 @@ fn ssh_opts(key_path: &std::path::Path) -> Vec<String> {
         "-i".into(),
         key_path.to_string_lossy().into_owned(),
         "-o".into(),
+        "IdentitiesOnly=yes".into(),
+        "-o".into(),
         "StrictHostKeyChecking=no".into(),
         "-o".into(),
         "UserKnownHostsFile=/dev/null".into(),
@@ -336,12 +338,19 @@ fn parse_ssh_url(url: &str) -> Result<(String, String, String), String> {
 
 /// Write the PEM key to a temp file with mode 0600. The file is deleted when
 /// the returned `NamedTempFile` is dropped.
+///
+/// Normalises the key text first: strips `\r`, trims whitespace, and ensures a
+/// trailing newline — SSH is very picky about PEM formatting.
 fn write_ssh_key(ssh_key_pem: &str) -> Result<tempfile::NamedTempFile, String> {
     use std::os::unix::fs::PermissionsExt;
+    let normalised = ssh_key_pem.replace('\r', "");
+    let normalised = normalised.trim();
     let mut tmp =
         tempfile::NamedTempFile::new().map_err(|e| format!("create key tempfile: {e}"))?;
-    tmp.write_all(ssh_key_pem.as_bytes())
+    tmp.write_all(normalised.as_bytes())
         .map_err(|e| format!("write key: {e}"))?;
+    tmp.write_all(b"\n")
+        .map_err(|e| format!("write trailing newline: {e}"))?;
     tmp.flush().map_err(|e| format!("flush key: {e}"))?;
     std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o600))
         .map_err(|e| format!("chmod key: {e}"))?;

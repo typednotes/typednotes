@@ -30,6 +30,9 @@ pub use sidebar::{AppSidebar, ThemeSignal, load_theme_from_storage, apply_theme}
 mod note_editor;
 pub use note_editor::NoteEditor;
 
+pub mod markdown_editor;
+pub use markdown_editor::MarkdownEditor;
+
 mod new_note_dialog;
 pub use new_note_dialog::NewNoteDialog;
 
