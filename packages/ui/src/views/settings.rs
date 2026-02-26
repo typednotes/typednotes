@@ -7,6 +7,8 @@ use crate::make_repo_for_user;
 use crate::Icon;
 use crate::icons::{FaCircleHalfStroke, FaSun, FaMoon};
 
+const VIEWS_CSS: Asset = asset!("/src/views/views.css");
+
 /// Shared settings view.
 ///
 /// Platform packages control which sections are visible via props.
@@ -129,16 +131,17 @@ pub fn SettingsView(
     };
 
     rsx! {
+        document::Link { rel: "stylesheet", href: VIEWS_CSS }
         div {
-            class: "max-w-3xl mx-auto w-full px-6 py-8",
+            class: "view-page max-w-3xl mx-auto w-full",
 
-            h1 { class: "text-[2rem] font-bold text-neutral-800 m-0 mb-8", "Settings" }
+            h1 { class: "view-title", "Settings" }
 
             // Theme section
             if show_theme {
                 div {
                     class: "mb-8",
-                    h2 { class: "text-lg font-semibold text-neutral-800 dark:text-neutral-200 m-0 mb-4 pb-2 border-b border-neutral-300", "Theme" }
+                    h2 { class: "view-section-title", "Theme" }
                     ThemeSelector {}
                 }
             }
@@ -146,7 +149,7 @@ pub fn SettingsView(
             // Repository Configuration section
             div {
                 class: "mb-8",
-                h2 { class: "text-lg font-semibold text-neutral-800 dark:text-neutral-200 m-0 mb-4 pb-2 border-b border-neutral-300", "Repository Configuration" }
+                h2 { class: "view-section-title", "Repository Configuration" }
 
                 div {
                     class: "mb-4",
@@ -163,7 +166,7 @@ pub fn SettingsView(
                         },
                     }
                     p {
-                        class: "text-xs text-neutral-600 mt-1",
+                        class: "view-muted",
                         "Subfolder within the repository where notes are stored. Leave empty for root."
                     }
                 }
@@ -186,7 +189,7 @@ pub fn SettingsView(
                         },
                     }
                     p {
-                        class: "text-xs text-neutral-600 mt-1",
+                        class: "view-muted",
                         if show_git_sync {
                             "Automatically save and sync after this many seconds of editing. Set to 0 to disable."
                         } else {
@@ -215,7 +218,7 @@ pub fn SettingsView(
             if show_git_sync {
                 div {
                     class: "mb-8",
-                    h2 { class: "text-lg font-semibold text-neutral-800 m-0 mb-4 pb-2 border-b border-neutral-300", "Git Sync" }
+                    h2 { class: "view-section-title", "Git Sync" }
 
                     div {
                         class: "mb-4",
@@ -232,7 +235,7 @@ pub fn SettingsView(
                             },
                         }
                         p {
-                            class: "text-xs text-neutral-600 mt-1",
+                            class: "view-muted",
                             "Remote git repository to sync notes with."
                         }
                     }
@@ -252,7 +255,7 @@ pub fn SettingsView(
                             },
                         }
                         p {
-                            class: "text-xs text-neutral-600 mt-1",
+                            class: "view-muted",
                             "Branch to sync with (e.g. main, master, notes)."
                         }
                     }
@@ -273,7 +276,7 @@ pub fn SettingsView(
                             },
                         }
                         p {
-                            class: "text-xs text-neutral-600 mt-1",
+                            class: "view-muted",
                             if ssh_public_key().is_some() {
                                 "A key is already stored. Leave blank to keep it."
                             } else {
@@ -289,7 +292,7 @@ pub fn SettingsView(
                             Textarea {
                                 id: "ssh-pub-key",
                                 variant: TextareaVariant::Outline,
-                                class: "w-full mt-1.5 bg-neutral-100 font-mono text-[0.8125rem] text-neutral-600 cursor-default",
+                                class: "w-full mt-1.5 font-mono text-[0.8125rem] settings-pub-key",
                                 readonly: true,
                                 rows: 3,
                                 value: pub_key,
@@ -338,22 +341,27 @@ pub fn SettingsView(
 
                     // Sync console
                     if !sync_log().is_empty() {
-                        div {
-                            class: "mt-4 rounded-md overflow-hidden border border-console-border",
-                            div {
-                                class: "flex items-center justify-between px-3 py-1.5 bg-console-header border-b border-console-border text-[0.6875rem] font-semibold uppercase tracking-wider text-[#cccccc]",
-                                span { "Sync Log" }
-                                Button {
-                                    variant: ButtonVariant::Ghost,
-                                    class: "text-[#888] text-[0.6875rem] px-1.5 py-0.5 hover:bg-console-border hover:text-console-text",
-                                    onclick: move |_| sync_log.write().clear(),
-                                    "Clear"
-                                }
-                            }
-                            div {
-                                class: "max-h-[200px] overflow-y-auto px-3 py-2 font-mono text-xs leading-relaxed text-console-text bg-console-bg",
-                                for entry in sync_log().iter() {
-                                    div { class: "py-px", "{entry}" }
+                        {
+                            let log_css: Asset = asset!("/src/views/log_panel.css");
+                            rsx! {
+                                document::Link { rel: "stylesheet", href: log_css }
+                                div {
+                                    class: "log-panel mt-4 rounded-md max-h-[200px]",
+                                    div {
+                                        class: "log-panel-header",
+                                        span { "Sync Log" }
+                                        button {
+                                            class: "log-panel-action",
+                                            onclick: move |_| sync_log.write().clear(),
+                                            "Clear"
+                                        }
+                                    }
+                                    div {
+                                        class: "log-panel-body",
+                                        for entry in sync_log().iter() {
+                                            div { class: "log-panel-entry log-entry-info", "{entry}" }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -389,9 +397,9 @@ fn ThemeSelector() -> Element {
 
     let radio_class = |active: bool| {
         if active {
-            "flex items-center gap-2 px-4 py-2.5 rounded-lg border-2 border-blue-500 bg-blue-50 dark:bg-blue-900/30 cursor-pointer"
+            "theme-card theme-card-active"
         } else {
-            "flex items-center gap-2 px-4 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-600 hover:border-neutral-400 cursor-pointer"
+            "theme-card"
         }
     };
 
@@ -427,7 +435,7 @@ fn ThemeSelector() -> Element {
             }
         }
         p {
-            class: "text-xs text-neutral-600 dark:text-neutral-400 mt-2",
+            class: "view-muted mt-2",
             "Choose how TypedNotes appears. System follows your OS preference."
         }
     }

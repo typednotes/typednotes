@@ -1,3 +1,4 @@
+@layer components {
 .separator {
   background-color: var(--light, var(--primary-color-6)) var(--dark, var(--primary-color-7));
 }
@@ -10,4 +11,5 @@
 .separator[data-orientation="vertical"] {
   width: 1px;
   height: 100%;
+}
 }

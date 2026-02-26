@@ -1,3 +1,4 @@
+@layer components {
 .badge-example {
   display: flex;
   align-items: center;
@@ -39,4 +40,5 @@
 .badge[data-style="destructive"] {
   background-color: var(--primary-error-color);
   color: var(--contrast-error-color);
+}
 }

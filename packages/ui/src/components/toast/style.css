@@ -1,3 +1,4 @@
+@layer components {
 .toast-container {
   position: fixed;
   z-index: 9999;
@@ -182,4 +183,5 @@
 
 .toast-close:hover {
   color: var(--secondary-color-1);
+}
 }

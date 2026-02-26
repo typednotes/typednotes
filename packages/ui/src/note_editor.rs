@@ -4,6 +4,8 @@ use crate::components::{Button, ButtonVariant, Input, Textarea, TextareaVariant}
 use crate::Icon;
 use crate::icons::FaTrashCan;
 
+const VIEWS_CSS: Asset = asset!("/src/views/views.css");
+
 #[component]
 pub fn NoteEditor(
     note: TypedNoteInfo,
@@ -64,8 +66,9 @@ pub fn NoteEditor(
     }
 
     rsx! {
+        document::Link { rel: "stylesheet", href: VIEWS_CSS }
         div {
-            class: "flex flex-col h-full w-full px-6 py-6",
+            class: "editor-container",
 
             // Title row: editable name + unsaved indicator + delete
             div {
@@ -81,13 +84,12 @@ pub fn NoteEditor(
                     class: "flex items-center gap-2 shrink-0 pt-1",
                     if dirty() {
                         span {
-                            class: "text-[0.6875rem] text-neutral-600 italic",
+                            class: "editor-unsaved",
                             "Unsaved"
                         }
                     }
                     Button {
                         variant: ButtonVariant::Ghost,
-                        class: "text-neutral-400 hover:text-danger p-1",
                         title: "Delete note",
                         onclick: move |_| on_delete.call(()),
                         Icon { icon: FaTrashCan, width: 14, height: 14 }
@@ -98,7 +100,7 @@ pub fn NoteEditor(
             // Content area — fills remaining space; parent pane scrolls
             Textarea {
                 variant: TextareaVariant::Ghost,
-                class: "flex-1 w-full text-neutral-800 dark:text-neutral-200 p-0 font-sans text-base leading-[1.7] resize-none placeholder:text-neutral-400",
+                class: "flex-1 w-full p-0 font-sans text-base leading-[1.7] resize-none",
                 value: content(),
                 placeholder: "Start writing...",
                 oninput: move |evt: FormEvent| {

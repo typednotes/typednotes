@@ -15,7 +15,7 @@ use crate::components::{
 use crate::Icon;
 use crate::icons::{
     FaFolderPlus, FaPlus, FaList, FaFolderTree, FaGear, FaTerminal,
-    FaFolder, FaFileLines, FaArrowLeft, FaChevronRight,
+    FaFolder, FaFileLines, FaCaretLeft, FaCaretRight,
     FaCircleHalfStroke, FaMoon, FaSun, FaRightFromBracket,
     FaTrashCan,
 };
@@ -33,6 +33,13 @@ enum SlideDir {
     Right,
 }
 
+/// Item being dragged in the sidebar.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DragItem {
+    Note { path: String },
+    Namespace { path: String },
+}
+
 /// The application-specific sidebar content (VS Code-style explorer).
 /// Placed inside a `SidebarProvider` + `SidebarLayout` in the platform layouts.
 #[component]
@@ -46,11 +53,20 @@ pub fn AppSidebar(
     on_create_namespace: EventHandler<Option<String>>,
     on_delete_namespace: EventHandler<String>,
     on_navigate_settings: EventHandler<()>,
+    /// Called when a note is dragged into a namespace: (note_path, target_namespace).
+    /// target_namespace is None for root.
+    #[props(default)]
+    on_move_note: EventHandler<(String, Option<String>)>,
+    /// Called when a namespace is dragged into another namespace: (ns_path, target_namespace).
+    /// target_namespace is None for root.
+    #[props(default)]
+    on_move_namespace: EventHandler<(String, Option<String>)>,
 ) -> Element {
-    let mut view_mode = use_signal(|| ViewMode::Tree);
+    let mut view_mode = use_signal(|| ViewMode::Flat);
     let mut flat_namespace = use_signal(|| Option::<String>::None);
     let mut slide_dir = use_signal(|| SlideDir::None);
     let mut nav_counter = use_signal(|| 0u32);
+    let drag_item: Signal<Option<DragItem>> = use_signal(|| None);
 
     rsx! {
         // ── Header: user info + action buttons ──
@@ -86,14 +102,28 @@ pub fn AppSidebar(
                 class: "flex items-center gap-1",
                 button {
                     class: "sidebar-icon-btn",
-                    title: "New folder",
-                    onclick: move |_| on_create_namespace.call(None),
+                    title: "New namespace",
+                    onclick: move |_| {
+                        let ns = if view_mode() == ViewMode::Flat {
+                            flat_namespace()
+                        } else {
+                            None
+                        };
+                        on_create_namespace.call(ns);
+                    },
                     Icon { icon: FaFolderPlus }
                 }
                 button {
                     class: "sidebar-icon-btn",
                     title: "New note",
-                    onclick: move |_| on_create_note.call(None),
+                    onclick: move |_| {
+                        let ns = if view_mode() == ViewMode::Flat {
+                            flat_namespace()
+                        } else {
+                            None
+                        };
+                        on_create_note.call(ns);
+                    },
                     Icon { icon: FaPlus }
                 }
             }
@@ -136,6 +166,9 @@ pub fn AppSidebar(
                             on_create_note: on_create_note,
                             on_create_namespace: on_create_namespace,
                             on_delete_namespace: on_delete_namespace,
+                            drag_item: drag_item,
+                            on_move_note: on_move_note,
+                            on_move_namespace: on_move_namespace,
                         }
                     }
                 } else {
@@ -148,6 +181,9 @@ pub fn AppSidebar(
                         active_path: active_path.clone(),
                         on_select_note: on_select_note,
                         on_delete_namespace: on_delete_namespace,
+                        drag_item: drag_item,
+                        on_move_note: on_move_note,
+                        on_move_namespace: on_move_namespace,
                         on_navigate_into: move |ns: String| {
                             slide_dir.set(SlideDir::Right);
                             flat_namespace.set(Some(ns));
@@ -194,9 +230,19 @@ pub fn AppSidebar(
                         size: SidebarMenuButtonSize::Sm,
                         tooltip: rsx! { "Activity Log" },
                         as: move |attrs: Vec<Attribute>| rsx! {
-                            div { ..attrs,
+                            button {
+                                onclick: move |_| {
+                                    let mut log = crate::use_activity_log();
+                                    let visible = log().visible;
+                                    log.write().visible = !visible;
+                                },
+                                ..attrs,
                                 Icon { icon: FaTerminal }
-                                span { class: "flex items-center gap-2",
+                                span {
+                                    display: "flex",
+                                    align_items: "center",
+                                    gap: "0.5rem",
+                                    "Activity Log"
                                     ActivityLogToggle {}
                                 }
                             }
@@ -229,11 +275,16 @@ fn ExplorerTree(
     on_create_note: EventHandler<Option<String>>,
     on_create_namespace: EventHandler<Option<String>>,
     on_delete_namespace: EventHandler<String>,
+    drag_item: Signal<Option<DragItem>>,
+    on_move_note: EventHandler<(String, Option<String>)>,
+    on_move_namespace: EventHandler<(String, Option<String>)>,
 ) -> Element {
     let root_namespaces: Vec<&NamespaceInfo> =
         namespaces.iter().filter(|ns| ns.parent.is_none()).collect();
     let root_notes: Vec<&TypedNoteInfo> =
         notes.iter().filter(|n| n.namespace.is_none()).collect();
+
+    let mut root_drag_counter = use_signal(|| 0i32);
 
     rsx! {
         for ns in root_namespaces {
@@ -247,6 +298,9 @@ fn ExplorerTree(
                 on_create_note: on_create_note,
                 on_create_namespace: on_create_namespace,
                 on_delete_namespace: on_delete_namespace,
+                drag_item: drag_item,
+                on_move_note: on_move_note,
+                on_move_namespace: on_move_namespace,
             }
         }
 
@@ -256,6 +310,33 @@ fn ExplorerTree(
                 note: note.clone(),
                 active_path: active_path.clone(),
                 on_select_note: on_select_note,
+                drag_item: drag_item,
+            }
+        }
+
+        // Root drop zone — drop items here to move to root
+        div {
+            class: "sidebar-drop-root",
+            "data-drag-over": if root_drag_counter() > 0 { "true" } else { "false" },
+            ondragover: move |evt: Event<DragData>| {
+                evt.prevent_default();
+            },
+            ondragenter: move |_| root_drag_counter += 1,
+            ondragleave: move |_| root_drag_counter -= 1,
+            ondrop: move |evt: Event<DragData>| {
+                evt.prevent_default();
+                root_drag_counter.set(0);
+                if let Some(item) = drag_item() {
+                    match item {
+                        DragItem::Note { path } => on_move_note.call((path, None)),
+                        DragItem::Namespace { path } => on_move_namespace.call((path, None)),
+                    }
+                }
+                drag_item.set(None);
+            },
+            div {
+                class: "px-2 py-1 text-xs opacity-30",
+                "/ (root)"
             }
         }
     }
@@ -271,6 +352,9 @@ fn NamespaceNode(
     on_create_note: EventHandler<Option<String>>,
     on_create_namespace: EventHandler<Option<String>>,
     on_delete_namespace: EventHandler<String>,
+    drag_item: Signal<Option<DragItem>>,
+    on_move_note: EventHandler<(String, Option<String>)>,
+    on_move_namespace: EventHandler<(String, Option<String>)>,
 ) -> Element {
     let child_namespaces: Vec<&NamespaceInfo> = all_namespaces
         .iter()
@@ -282,8 +366,43 @@ fn NamespaceNode(
         .collect();
 
     let ns_path = namespace.path.clone();
+    let mut drag_counter = use_signal(|| 0i32);
 
     rsx! {
+        // Wrapper div for drag events (components can't receive event handlers directly)
+        div {
+            draggable: "true",
+            class: if drag_counter() > 0 { "sidebar-drop-active" } else { "" },
+            ondragstart: {
+                let ns_path = ns_path.clone();
+                move |_| {
+                    drag_item.set(Some(DragItem::Namespace { path: ns_path.clone() }));
+                }
+            },
+            ondragend: move |_| drag_item.set(None),
+            ondragover: move |evt: Event<DragData>| {
+                evt.prevent_default();
+            },
+            ondragenter: move |_| drag_counter += 1,
+            ondragleave: move |_| drag_counter -= 1,
+            ondrop: {
+                let target_ns = ns_path.clone();
+                move |evt: Event<DragData>| {
+                    evt.prevent_default();
+                    drag_counter.set(0);
+                    if let Some(item) = drag_item() {
+                        match item {
+                            DragItem::Note { path } => on_move_note.call((path, Some(target_ns.clone()))),
+                            DragItem::Namespace { path } => {
+                                if path != target_ns && !target_ns.starts_with(&format!("{path}/")) {
+                                    on_move_namespace.call((path, Some(target_ns.clone())));
+                                }
+                            }
+                        }
+                    }
+                    drag_item.set(None);
+                }
+            },
         Collapsible {
             default_open: true,
             keep_mounted: true,
@@ -316,7 +435,7 @@ fn NamespaceNode(
                                         evt.stop_propagation();
                                         on_delete_namespace.call(ns_path2.clone());
                                     },
-                                    title: "Delete folder",
+                                    title: "Delete namespace",
                                     ..attrs,
                                     Icon { icon: FaTrashCan }
                                 }
@@ -334,9 +453,29 @@ fn NamespaceNode(
                                 button {
                                     onclick: move |evt: Event<MouseData>| {
                                         evt.stop_propagation();
+                                        on_create_namespace.call(Some(ns_path.clone()));
+                                    },
+                                    title: "New sub-namespace",
+                                    ..attrs,
+                                    Icon { icon: FaFolderPlus }
+                                }
+                            }
+                        }
+                    },
+                }
+                SidebarMenuAction {
+                    show_on_hover: true,
+                    as: {
+                        let ns_path = ns_path.clone();
+                        move |attrs: Vec<Attribute>| {
+                            let ns_path = ns_path.clone();
+                            rsx! {
+                                button {
+                                    onclick: move |evt: Event<MouseData>| {
+                                        evt.stop_propagation();
                                         on_create_note.call(Some(ns_path.clone()));
                                     },
-                                    title: "New note in folder",
+                                    title: "New note in namespace",
                                     ..attrs,
                                     Icon { icon: FaPlus }
                                 }
@@ -357,6 +496,9 @@ fn NamespaceNode(
                                 on_create_note: on_create_note,
                                 on_create_namespace: on_create_namespace,
                                 on_delete_namespace: on_delete_namespace,
+                                drag_item: drag_item,
+                                on_move_note: on_move_note,
+                                on_move_namespace: on_move_namespace,
                             }
                         }
                         for note in child_notes {
@@ -365,12 +507,14 @@ fn NamespaceNode(
                                 note: note.clone(),
                                 active_path: active_path.clone(),
                                 on_select_note: on_select_note,
+                                drag_item: drag_item,
                             }
                         }
                     }
                 }
             }
         }
+        } // close wrapper div
     }
 }
 
@@ -379,35 +523,44 @@ fn NoteItem(
     note: TypedNoteInfo,
     active_path: Option<String>,
     on_select_note: EventHandler<String>,
+    drag_item: Signal<Option<DragItem>>,
 ) -> Element {
     let is_active = active_path.as_ref() == Some(&note.path);
     let path = note.path.clone();
+    let path_for_drag = path.clone();
     let note_name = note.name.clone();
     let note_type = note.r#type.clone();
 
     rsx! {
-        SidebarMenuItem {
-            SidebarMenuButton {
-                is_active: is_active,
-                tooltip: rsx! { "{note_name}" },
-                as: move |attrs: Vec<Attribute>| {
-                    let path = path.clone();
-                    let note_name = note_name.clone();
-                    let note_type = note_type.clone();
-                    rsx! {
-                        button {
-                            onclick: move |_| on_select_note.call(path.clone()),
-                            ..attrs,
-                            Icon { icon: FaFileLines, width: 12, height: 12 }
-                            span { "{note_name}" }
-                            Badge {
-                                variant: BadgeVariant::Secondary,
-                                class: "ml-auto text-[0.625rem]",
-                                "{note_type}"
+        div {
+            draggable: "true",
+            ondragstart: move |_| {
+                drag_item.set(Some(DragItem::Note { path: path_for_drag.clone() }));
+            },
+            ondragend: move |_| drag_item.set(None),
+            SidebarMenuItem {
+                SidebarMenuButton {
+                    is_active: is_active,
+                    tooltip: rsx! { "{note_name}" },
+                    as: move |attrs: Vec<Attribute>| {
+                        let path = path.clone();
+                        let note_name = note_name.clone();
+                        let note_type = note_type.clone();
+                        rsx! {
+                            button {
+                                onclick: move |_| on_select_note.call(path.clone()),
+                                ..attrs,
+                                Icon { icon: FaFileLines, width: 12, height: 12 }
+                                span { "{note_name}" }
+                                Badge {
+                                    variant: BadgeVariant::Secondary,
+                                    class: "ml-auto text-[0.625rem]",
+                                    "{note_type}"
+                                }
                             }
                         }
-                    }
-                },
+                    },
+                }
             }
         }
     }
@@ -418,14 +571,22 @@ fn NoteSubItem(
     note: TypedNoteInfo,
     active_path: Option<String>,
     on_select_note: EventHandler<String>,
+    drag_item: Signal<Option<DragItem>>,
 ) -> Element {
     let is_active = active_path.as_ref() == Some(&note.path);
     let path = note.path.clone();
+    let path_for_drag = path.clone();
     let note_name = note.name.clone();
 
     rsx! {
-        SidebarMenuSubItem {
-            SidebarMenuSubButton {
+        div {
+            draggable: "true",
+            ondragstart: move |_| {
+                drag_item.set(Some(DragItem::Note { path: path_for_drag.clone() }));
+            },
+            ondragend: move |_| drag_item.set(None),
+            SidebarMenuSubItem {
+                SidebarMenuSubButton {
                 is_active: is_active,
                 as: move |attrs: Vec<Attribute>| {
                     let path = path.clone();
@@ -441,6 +602,7 @@ fn NoteSubItem(
                 },
             }
         }
+        } // close wrapper div
     }
 }
 
@@ -458,6 +620,9 @@ fn FlatExplorerView(
     active_path: Option<String>,
     on_select_note: EventHandler<String>,
     on_delete_namespace: EventHandler<String>,
+    drag_item: Signal<Option<DragItem>>,
+    on_move_note: EventHandler<(String, Option<String>)>,
+    on_move_namespace: EventHandler<(String, Option<String>)>,
     on_navigate_into: EventHandler<String>,
     on_navigate_up: EventHandler<()>,
 ) -> Element {
@@ -471,11 +636,26 @@ fn FlatExplorerView(
         .filter(|n| n.namespace.as_deref() == current_namespace.as_deref())
         .collect();
 
+    let suffix = if nav_counter % 2 == 0 { "a" } else { "b" };
     let anim_class = match slide_dir {
-        SlideDir::Right => "flat-view-enter-right",
-        SlideDir::Left => "flat-view-enter-left",
-        SlideDir::None => "",
+        SlideDir::Right => format!("flat-view-enter-right-{suffix}"),
+        SlideDir::Left => format!("flat-view-enter-left-{suffix}"),
+        SlideDir::None => String::new(),
     };
+
+    let mut breadcrumb_drag_counter = use_signal(|| 0i32);
+
+    // Pre-compute parent namespace and breadcrumb label before rsx closures
+    let parent_namespace = current_namespace.as_deref().and_then(|ns| {
+        ns.rfind('/').map(|pos| ns[..pos].to_string())
+    });
+    let breadcrumb_label = current_namespace.as_deref().map(|label| {
+        if let Some(pos) = label.rfind('/') {
+            format!("../{}", &label[pos+1..])
+        } else {
+            format!("/ {label}")
+        }
+    });
 
     rsx! {
         div {
@@ -483,31 +663,56 @@ fn FlatExplorerView(
             div {
                 key: "{nav_counter}",
                 class: "{anim_class}",
-                // Breadcrumb / back button
-                if current_namespace.is_some() {
-                    SidebarMenu {
-                        SidebarMenuItem {
-                            SidebarMenuButton {
-                                size: SidebarMenuButtonSize::Sm,
-                                tooltip: rsx! { "Go up" },
-                                as: move |attrs: Vec<Attribute>| rsx! {
-                                    button {
-                                        onclick: move |_| on_navigate_up.call(()),
-                                        ..attrs,
-                                        Icon { icon: FaArrowLeft, width: 12, height: 12 }
-                                        span {
-                                            class: "text-xs opacity-70",
-                                            {
-                                                let label = current_namespace.as_deref().unwrap_or("");
-                                                if let Some(pos) = label.rfind('/') {
-                                                    format!("../{}", &label[pos+1..])
-                                                } else {
-                                                    format!("/ {label}")
-                                                }
+                // Breadcrumb / back button (also a drop target for moving to parent)
+                if breadcrumb_label.is_some() {
+                    div {
+                        class: if breadcrumb_drag_counter() > 0 { "sidebar-drop-active" } else { "" },
+                        ondragover: move |evt: Event<DragData>| {
+                            evt.prevent_default();
+                        },
+                        ondragenter: move |_| breadcrumb_drag_counter += 1,
+                        ondragleave: move |_| breadcrumb_drag_counter -= 1,
+                        ondrop: {
+                            let parent = parent_namespace.clone();
+                            move |evt: Event<DragData>| {
+                                evt.prevent_default();
+                                breadcrumb_drag_counter.set(0);
+                                if let Some(item) = drag_item() {
+                                    match item {
+                                        DragItem::Note { path } => on_move_note.call((path, parent.clone())),
+                                        DragItem::Namespace { path } => {
+                                            if parent.as_ref() != Some(&path) {
+                                                on_move_namespace.call((path, parent.clone()));
                                             }
                                         }
                                     }
-                                },
+                                }
+                                drag_item.set(None);
+                            }
+                        },
+                        SidebarMenu {
+                            SidebarMenuItem {
+                                SidebarMenuButton {
+                                    size: SidebarMenuButtonSize::Sm,
+                                    tooltip: rsx! { "Go up" },
+                                    as: {
+                                        let label = breadcrumb_label.clone().unwrap_or_default();
+                                        move |attrs: Vec<Attribute>| {
+                                            let label = label.clone();
+                                            rsx! {
+                                                button {
+                                                    onclick: move |_| on_navigate_up.call(()),
+                                                    ..attrs,
+                                                    Icon { icon: FaCaretLeft, width: 10, height: 10 }
+                                                    span {
+                                                        class: "text-xs opacity-70",
+                                                        "{label}"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
+                                }
                             }
                         }
                     }
@@ -521,47 +726,20 @@ fn FlatExplorerView(
                 SidebarMenu {
                     // Namespace folders
                     for ns in child_namespaces {
-                        SidebarMenuItem {
-                            key: "{ns.path}",
-                            SidebarMenuButton {
-                                tooltip: rsx! { "{ns.name}" },
-                                as: {
-                                    let ns_path = ns.path.clone();
-                                    let ns_name = ns.name.clone();
-                                    move |attrs: Vec<Attribute>| {
-                                        let ns_path = ns_path.clone();
-                                        let ns_name = ns_name.clone();
-                                        rsx! {
-                                            button {
-                                                onclick: move |_| on_navigate_into.call(ns_path.clone()),
-                                                ..attrs,
-                                                Icon { icon: FaFolder, width: 12, height: 12 }
-                                                span { "{ns_name}" }
-                                                Icon { icon: FaChevronRight, width: 8, height: 8, class: "ml-auto opacity-40" }
-                                            }
-                                        }
-                                    }
-                                },
-                            }
-                            SidebarMenuAction {
-                                show_on_hover: true,
-                                as: {
-                                    let ns_path = ns.path.clone();
-                                    move |attrs: Vec<Attribute>| {
-                                        let ns_path = ns_path.clone();
-                                        rsx! {
-                                            button {
-                                                onclick: move |evt: Event<MouseData>| {
-                                                    evt.stop_propagation();
-                                                    on_delete_namespace.call(ns_path.clone());
-                                                },
-                                                title: "Delete folder",
-                                                ..attrs,
-                                                Icon { icon: FaTrashCan }
-                                            }
-                                        }
-                                    }
-                                },
+                        {
+                            let ns_path = ns.path.clone();
+                            let ns_name = ns.name.clone();
+                            rsx! {
+                                FlatNsItem {
+                                    key: "{ns_path}",
+                                    ns_path: ns_path,
+                                    ns_name: ns_name,
+                                    drag_item: drag_item,
+                                    on_navigate_into: on_navigate_into,
+                                    on_delete_namespace: on_delete_namespace,
+                                    on_move_note: on_move_note,
+                                    on_move_namespace: on_move_namespace,
+                                }
                             }
                         }
                     }
@@ -573,38 +751,139 @@ fn FlatExplorerView(
                             let path = note.path.clone();
                             let note_name = note.name.clone();
                             let note_type = note.r#type.clone();
+                            let path_for_drag = path.clone();
                             rsx! {
-                                SidebarMenuItem {
+                                div {
                                     key: "{path}",
-                                    SidebarMenuButton {
-                                        is_active: is_active,
-                                        tooltip: rsx! { "{note_name}" },
-                                        as: move |attrs: Vec<Attribute>| {
-                                            let path = path.clone();
-                                            let note_name = note_name.clone();
-                                            let note_type = note_type.clone();
-                                            rsx! {
-                                                button {
-                                                    onclick: move |_| on_select_note.call(path.clone()),
-                                                    ..attrs,
-                                                    Icon { icon: FaFileLines, width: 12, height: 12 }
-                                                    span { "{note_name}" }
-                                                    Badge {
-                                                        variant: BadgeVariant::Secondary,
-                                                        class: "ml-auto text-[0.625rem]",
-                                                        "{note_type}"
+                                    draggable: "true",
+                                    ondragstart: move |_| {
+                                        drag_item.set(Some(DragItem::Note { path: path_for_drag.clone() }));
+                                    },
+                                    ondragend: move |_| drag_item.set(None),
+                                    SidebarMenuItem {
+                                        SidebarMenuButton {
+                                            is_active: is_active,
+                                            tooltip: rsx! { "{note_name}" },
+                                            as: move |attrs: Vec<Attribute>| {
+                                                let path = path.clone();
+                                                let note_name = note_name.clone();
+                                                let note_type = note_type.clone();
+                                                rsx! {
+                                                    button {
+                                                        onclick: move |_| on_select_note.call(path.clone()),
+                                                        ..attrs,
+                                                        Icon { icon: FaFileLines, width: 12, height: 12 }
+                                                        span { "{note_name}" }
+                                                        Badge {
+                                                            variant: BadgeVariant::Secondary,
+                                                            class: "ml-auto text-[0.625rem]",
+                                                            "{note_type}"
+                                                        }
                                                     }
                                                 }
-                                            }
-                                        },
-                                    }
-                                }
+                                            },
+                                        }
+                                    } // close SidebarMenuItem
+                                } // close wrapper div
                             }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/// A single namespace row in the flat view — drag source + drop target.
+#[component]
+fn FlatNsItem(
+    ns_path: String,
+    ns_name: String,
+    drag_item: Signal<Option<DragItem>>,
+    on_navigate_into: EventHandler<String>,
+    on_delete_namespace: EventHandler<String>,
+    on_move_note: EventHandler<(String, Option<String>)>,
+    on_move_namespace: EventHandler<(String, Option<String>)>,
+) -> Element {
+    let mut drag_counter = use_signal(|| 0i32);
+
+    rsx! {
+        div {
+            draggable: "true",
+            class: if drag_counter() > 0 { "sidebar-drop-active" } else { "" },
+            ondragstart: {
+                let ns_path = ns_path.clone();
+                move |_| {
+                    drag_item.set(Some(DragItem::Namespace { path: ns_path.clone() }));
+                }
+            },
+            ondragend: move |_| drag_item.set(None),
+            ondragover: move |evt: Event<DragData>| {
+                evt.prevent_default();
+            },
+            ondragenter: move |_| drag_counter += 1,
+            ondragleave: move |_| drag_counter -= 1,
+            ondrop: {
+                let target_ns = ns_path.clone();
+                move |evt: Event<DragData>| {
+                    evt.prevent_default();
+                    drag_counter.set(0);
+                    if let Some(item) = drag_item() {
+                        match item {
+                            DragItem::Note { path } => on_move_note.call((path, Some(target_ns.clone()))),
+                            DragItem::Namespace { path } => {
+                                if path != target_ns && !target_ns.starts_with(&format!("{path}/")) {
+                                    on_move_namespace.call((path, Some(target_ns.clone())));
+                                }
+                            }
+                        }
+                    }
+                    drag_item.set(None);
+                }
+            },
+            SidebarMenuItem {
+                SidebarMenuButton {
+                    tooltip: rsx! { "{ns_name}" },
+                    as: {
+                        let ns_path = ns_path.clone();
+                        let ns_name = ns_name.clone();
+                        move |attrs: Vec<Attribute>| {
+                            let ns_path = ns_path.clone();
+                            let ns_name = ns_name.clone();
+                            rsx! {
+                                button {
+                                    onclick: move |_| on_navigate_into.call(ns_path.clone()),
+                                    ..attrs,
+                                    Icon { icon: FaFolder, width: 12, height: 12 }
+                                    span { "{ns_name}" }
+                                    Icon { icon: FaCaretRight, width: 10, height: 10, class: "ml-auto opacity-40" }
+                                }
+                            }
+                        }
+                    },
+                }
+                SidebarMenuAction {
+                show_on_hover: true,
+                as: {
+                    let ns_path = ns_path.clone();
+                    move |attrs: Vec<Attribute>| {
+                        let ns_path = ns_path.clone();
+                        rsx! {
+                            button {
+                                onclick: move |evt: Event<MouseData>| {
+                                    evt.stop_propagation();
+                                    on_delete_namespace.call(ns_path.clone());
+                                },
+                                title: "Delete namespace",
+                                ..attrs,
+                                Icon { icon: FaTrashCan }
+                            }
+                        }
+                    }
+                },
+            }
+        }
+        } // close wrapper div
     }
 }
 

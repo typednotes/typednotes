@@ -23,6 +23,7 @@ impl TextareaVariant {
 
 #[component]
 pub fn Textarea(
+    #[props(default)] class: String,
     oninput: Option<EventHandler<FormEvent>>,
     onchange: Option<EventHandler<FormEvent>>,
     oninvalid: Option<EventHandler<FormEvent>>,
@@ -50,7 +51,7 @@ pub fn Textarea(
     rsx! {
         document::Link { rel: "stylesheet", href: asset!("./style.css") }
         textarea {
-            class: "textarea",
+            class: "textarea {class}",
             "data-slot": "textarea",
             "data-style": variant.class(),
             oninput: move |e| _ = oninput.map(|callback| callback(e)),

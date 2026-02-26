@@ -12,8 +12,17 @@ pub fn NewNoteDialog(
     on_cancel: EventHandler<()>,
 ) -> Element {
     let mut name = use_signal(|| String::new());
-    let mut namespace = use_signal(move || default_namespace.unwrap_or_default());
+    let mut namespace = use_signal(|| String::new());
     let mut note_type = use_signal(|| "markdown".to_string());
+
+    // Sync default_namespace prop into the signal each time the dialog mounts.
+    // use_effect re-runs when the captured prop value changes.
+    {
+        let init_ns = default_namespace.clone().unwrap_or_default();
+        use_effect(move || {
+            namespace.set(init_ns.clone());
+        });
+    }
 
     let handle_submit = move |_| {
         let n = name().trim().to_string();
@@ -30,15 +39,14 @@ pub fn NewNoteDialog(
 
     rsx! {
         div {
-            class: "p-6",
-            h2 { class: "m-0 mb-5 text-lg font-semibold text-neutral-800", "New Note" }
+            class: "modal-body",
+            h2 { class: "modal-title", "New Note" }
 
             div {
-                class: "mb-4",
+                class: "modal-field",
                 Label { html_for: "new-note-name", "Name" }
                 Input {
                     id: "new-note-name",
-                    class: "w-full mt-1.5",
                     r#type: "text",
                     placeholder: "my-note",
                     value: name(),
@@ -47,11 +55,11 @@ pub fn NewNoteDialog(
             }
 
             div {
-                class: "mb-4",
-                Label { html_for: "new-note-folder", "Folder" }
+                class: "modal-field",
+                Label { html_for: "new-note-namespace", "Namespace" }
                 select {
-                    id: "new-note-folder",
-                    class: "w-full bg-white border border-neutral-300 rounded px-3 py-2 text-sm text-neutral-800 outline-none font-[inherit] mt-1.5 focus:border-primary-500 focus:shadow-[0_0_0_1px_var(--color-primary-500)]",
+                    id: "new-note-namespace",
+                    class: "modal-select",
                     value: namespace(),
                     onchange: move |evt| namespace.set(evt.value()),
                     option { value: "", "/ (root)" }
@@ -66,11 +74,11 @@ pub fn NewNoteDialog(
             }
 
             div {
-                class: "mb-4",
+                class: "modal-field",
                 Label { html_for: "new-note-type", "Type" }
                 select {
                     id: "new-note-type",
-                    class: "w-full bg-white border border-neutral-300 rounded px-3 py-2 text-sm text-neutral-800 outline-none font-[inherit] mt-1.5 focus:border-primary-500 focus:shadow-[0_0_0_1px_var(--color-primary-500)]",
+                    class: "modal-select",
                     value: note_type(),
                     onchange: move |evt| note_type.set(evt.value()),
                     option { value: "markdown", "Markdown (.md)" }
@@ -79,7 +87,7 @@ pub fn NewNoteDialog(
             }
 
             div {
-                class: "flex gap-2 mt-5",
+                class: "modal-actions",
                 Button {
                     variant: ButtonVariant::Primary,
                     onclick: handle_submit,

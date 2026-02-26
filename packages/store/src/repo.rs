@@ -448,6 +448,27 @@ impl<S: ObjectStore> Repository<S> {
         self.delete_note(old_path).await
     }
 
+    /// Move a namespace and all its contents to a new parent path.
+    /// `new_path` is the full new namespace path (e.g. "A/B" to move B under A).
+    pub async fn move_namespace(&self, old_path: &str, new_path: &str) -> Option<Sha> {
+        // 1. Move all notes under old_path
+        let all_notes = self.list_notes().await;
+        for note in &all_notes {
+            let prefix = format!("{old_path}/");
+            if note.path.starts_with(&prefix) {
+                let relative = &note.path[prefix.len()..];
+                let dest = format!("{new_path}/{relative}");
+                self.rename_note(&note.path, &dest).await;
+            }
+        }
+
+        // 2. Create the new namespace (ensures .gitkeep exists)
+        self.create_namespace(new_path).await;
+
+        // 3. Delete the old namespace
+        self.delete_namespace(old_path).await
+    }
+
     /// Read the `typednotes.toml` configuration from the repo root.
     pub async fn get_config(&self) -> TypedNotesConfig {
         let Some(tree) = self.get_root_tree().await else {

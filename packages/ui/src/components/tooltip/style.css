@@ -1,3 +1,4 @@
+@layer components {
 /* Tooltip Styles */
 .tooltip {
   position: relative;
@@ -147,4 +148,5 @@
 
 .tooltip-content[data-state="open"] {
   display: block;
+}
 }

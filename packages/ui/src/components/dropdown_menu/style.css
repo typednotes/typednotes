@@ -1,3 +1,4 @@
+@layer components {
 /* Dropdown Menu Styles */
 .dropdown-menu {
   position: relative;
@@ -103,4 +104,5 @@
   background: var(--dark, var(--primary-color-7))
     var(--light, var(--primary-color-4));
   color: var(--secondary-color-1);
+}
 }

@@ -6,12 +6,14 @@ use crate::{
     NoteTree,
     LogLevel, log_activity, use_activity_log,
     SidebarProvider, SidebarInset, SidebarTrigger,
-    SidebarCollapsible, SidebarVariant, use_sidebar,
+    SidebarCollapsible, SidebarVariant,
 };
 use crate::components::sidebar::SidebarLayout as SidebarShell;
 use crate::{make_repo_for_user};
 
 use super::ModalOverlay;
+
+const VIEWS_CSS: Asset = asset!("/src/views/views.css");
 
 /// Shared sidebar layout view.
 ///
@@ -39,6 +41,10 @@ pub fn SidebarLayoutView(
     let mut new_ns_name = use_signal(|| String::new());
     let mut show_delete_ns = use_signal(|| false);
     let mut delete_ns_path = use_signal(|| String::new());
+    // Move confirmation state
+    let mut show_move_confirm = use_signal(|| false);
+    let mut move_ns_from = use_signal(|| String::new());
+    let mut move_ns_to = use_signal(|| Option::<String>::None);
     let auth = use_auth();
     let mut activity_log = use_activity_log();
 
@@ -140,7 +146,6 @@ pub fn SidebarLayoutView(
         new_note_namespace.set(ns);
         show_new_note.set(true);
         show_new_namespace.set(false);
-        use_sidebar().set_open_mobile(false);
     };
 
     let on_create_namespace = move |parent: Option<String>| {
@@ -148,7 +153,6 @@ pub fn SidebarLayoutView(
         new_ns_name.set(prefix);
         show_new_namespace.set(true);
         show_new_note.set(false);
-        use_sidebar().set_open_mobile(false);
     };
 
     let on_delete_namespace = move |path: String| {
@@ -179,6 +183,7 @@ pub fn SidebarLayoutView(
                 show_new_note.set(false);
                 let ext = store::models::ext_from_note_type(&note_type);
                 let full_path = format!("{path}.{ext}");
+                log_activity(&mut activity_log, LogLevel::Info, &format!("Created note {full_path}"));
                 toast.success("Note created".to_string(), ToastOptions::new());
                 on_navigate_note.call(full_path);
             });
@@ -196,10 +201,19 @@ pub fn SidebarLayoutView(
             repo.create_namespace(&name).await;
             tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
             show_new_namespace.set(false);
-            toast.success("Folder created".to_string(), ToastOptions::new());
+            log_activity(&mut activity_log, LogLevel::Info, &format!("Created namespace {name}"));
+            toast.success("Namespace created".to_string(), ToastOptions::new());
             // Sync namespace to remote
             if enable_git_pull {
-                let _ = api::sync_namespace(name).await;
+                log_activity(&mut activity_log, LogLevel::Info, &format!("Syncing namespace {name}..."));
+                match api::sync_namespace(name.clone()).await {
+                    Ok(()) => {
+                        log_activity(&mut activity_log, LogLevel::Success, &format!("Synced namespace {name}"));
+                    }
+                    Err(e) => {
+                        log_activity(&mut activity_log, LogLevel::Error, &format!("Namespace sync error: {e}"));
+                    }
+                }
             }
         });
     };
@@ -213,18 +227,70 @@ pub fn SidebarLayoutView(
             repo.delete_namespace(&path).await;
             tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
             show_delete_ns.set(false);
-            toast.success("Folder deleted".to_string(), ToastOptions::new());
+            log_activity(&mut activity_log, LogLevel::Info, &format!("Deleted namespace {path}"));
+            toast.success("Namespace deleted".to_string(), ToastOptions::new());
             // Sync deletion to remote
             if enable_git_pull {
+                log_activity(&mut activity_log, LogLevel::Info, &format!("Syncing deletion of {path}..."));
                 match api::delete_namespace_remote(path.clone()).await {
                     Ok(()) => {
-                        log_activity(&mut activity_log, LogLevel::Success, &format!("Deleted remote folder {path}"));
+                        log_activity(&mut activity_log, LogLevel::Success, &format!("Deleted remote namespace {path}"));
                     }
                     Err(e) => {
-                        log_activity(&mut activity_log, LogLevel::Error, &format!("Delete folder sync error: {e}"));
+                        log_activity(&mut activity_log, LogLevel::Error, &format!("Delete namespace sync error: {e}"));
                     }
                 }
             }
+        });
+    };
+
+    // Handle moving a note via drag-and-drop
+    let on_move_note = move |(note_path, target_ns): (String, Option<String>)| {
+        spawn(async move {
+            let user_id = auth().user.as_ref().map(|u| u.id.clone());
+            let repo = make_repo_for_user(user_id.as_deref());
+            let note_name = note_path.rsplit('/').next().unwrap_or(&note_path);
+            let new_path = match target_ns {
+                Some(ref ns) => format!("{ns}/{note_name}"),
+                None => note_name.to_string(),
+            };
+            if new_path == note_path {
+                return;
+            }
+            repo.rename_note(&note_path, &new_path).await;
+            tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
+            log_activity(&mut activity_log, LogLevel::Info, &format!("Moved {note_path} -> {new_path}"));
+            toast.success("Note moved".to_string(), ToastOptions::new());
+        });
+    };
+
+    // Handle moving a namespace via drag-and-drop (shows confirmation)
+    let on_move_namespace = move |(ns_path, target_ns): (String, Option<String>)| {
+        let ns_name = ns_path.rsplit('/').next().unwrap_or(&ns_path).to_string();
+        let new_path = match target_ns {
+            Some(ref ns) => format!("{ns}/{ns_name}"),
+            None => ns_name,
+        };
+        if new_path == ns_path {
+            return;
+        }
+        move_ns_from.set(ns_path);
+        move_ns_to.set(Some(new_path));
+        show_move_confirm.set(true);
+    };
+
+    // Handle confirmed namespace move
+    let handle_confirm_move_ns = move |_| {
+        let from = move_ns_from();
+        let to = move_ns_to().unwrap_or_default();
+        show_move_confirm.set(false);
+        spawn(async move {
+            let user_id = auth().user.as_ref().map(|u| u.id.clone());
+            let repo = make_repo_for_user(user_id.as_deref());
+            repo.move_namespace(&from, &to).await;
+            tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
+            log_activity(&mut activity_log, LogLevel::Info, &format!("Moved namespace {from} -> {to}"));
+            toast.success("Namespace moved".to_string(), ToastOptions::new());
         });
     };
 
@@ -259,13 +325,16 @@ pub fn SidebarLayoutView(
                     on_create_namespace: on_create_namespace,
                     on_delete_namespace: on_delete_namespace,
                     on_navigate_settings: on_settings,
+                    on_move_note: on_move_note,
+                    on_move_namespace: on_move_namespace,
                 }
             }
 
             SidebarInset {
+                document::Link { rel: "stylesheet", href: VIEWS_CSS }
                 // Top header with sidebar trigger
                 header {
-                    class: "flex items-center gap-2 px-4 py-2 border-b border-neutral-200",
+                    class: "view-header-bar",
                     SidebarTrigger {}
                     span { class: "text-sm font-semibold", "TypedNotes" }
                 }
@@ -296,22 +365,21 @@ pub fn SidebarLayoutView(
             ModalOverlay {
                 on_close: move |_| show_new_namespace.set(false),
                 div {
-                    class: "p-6",
-                    h2 { class: "m-0 mb-5 text-lg font-semibold text-neutral-800", "New Folder" }
+                    class: "modal-body",
+                    h2 { class: "modal-title", "New Namespace" }
                     div {
-                        class: "mb-4",
-                        Label { html_for: "new-folder-name", "Folder name" }
+                        class: "modal-field",
+                        Label { html_for: "new-ns-name", "Name" }
                         Input {
-                            id: "new-folder-name",
-                            class: "w-full mt-1.5",
+                            id: "new-ns-name",
                             r#type: "text",
-                            placeholder: "my-folder",
+                            placeholder: "my-namespace",
                             value: new_ns_name(),
                             oninput: move |evt: FormEvent| new_ns_name.set(evt.value()),
                         }
                     }
                     div {
-                        class: "flex gap-2 mt-5",
+                        class: "modal-actions",
                         Button {
                             variant: ButtonVariant::Primary,
                             onclick: handle_create_namespace,
@@ -330,22 +398,22 @@ pub fn SidebarLayoutView(
             ModalOverlay {
                 on_close: move |_| show_delete_ns.set(false),
                 div {
-                    class: "p-6",
-                    h2 { class: "m-0 mb-5 text-lg font-semibold text-neutral-800", "Delete Folder" }
+                    class: "modal-body",
+                    h2 { class: "modal-title", "Delete Namespace" }
                     p {
-                        class: "text-sm text-neutral-600 mb-2",
-                        "Delete folder "
+                        class: "modal-text",
+                        "Delete namespace "
                         strong { "{delete_ns_path()}" }
                         " and all its contents?"
                     }
                     if delete_ns_note_count > 0 || delete_ns_sub_count > 0 {
                         p {
-                            class: "text-xs text-neutral-500 mb-4",
-                            "This folder contains {delete_ns_note_count} note(s) and {delete_ns_sub_count} sub-folder(s)."
+                            class: "modal-detail",
+                            "This namespace contains {delete_ns_note_count} note(s) and {delete_ns_sub_count} sub-namespace(s)."
                         }
                     }
                     div {
-                        class: "flex gap-2 mt-5",
+                        class: "modal-actions",
                         Button {
                             variant: ButtonVariant::Destructive,
                             onclick: handle_confirm_delete_ns,
@@ -354,6 +422,40 @@ pub fn SidebarLayoutView(
                         Button {
                             variant: ButtonVariant::Outline,
                             onclick: move |_| show_delete_ns.set(false),
+                            "Cancel"
+                        }
+                    }
+                }
+            }
+        }
+        if show_move_confirm() {
+            ModalOverlay {
+                on_close: move |_| show_move_confirm.set(false),
+                div {
+                    class: "modal-body",
+                    h2 { class: "modal-title", "Move Namespace" }
+                    p {
+                        class: "modal-text",
+                        "Move "
+                        strong { "{move_ns_from()}" }
+                        " to "
+                        strong { "{move_ns_to().unwrap_or_default()}" }
+                        "?"
+                    }
+                    p {
+                        class: "modal-detail",
+                        "All notes and sub-namespaces will be moved."
+                    }
+                    div {
+                        class: "modal-actions",
+                        Button {
+                            variant: ButtonVariant::Primary,
+                            onclick: handle_confirm_move_ns,
+                            "Move"
+                        }
+                        Button {
+                            variant: ButtonVariant::Outline,
+                            onclick: move |_| show_move_confirm.set(false),
                             "Cancel"
                         }
                     }

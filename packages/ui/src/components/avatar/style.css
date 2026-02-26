@@ -1,3 +1,4 @@
+@layer components {
 .avatar-item {
     display: flex;
     flex-direction: column;
@@ -97,4 +98,5 @@
 .avatar[data-state="error"] .avatar-fallback {
     background: var(--primary-color-3);
     color: var(--secondary-color-4);
+}
 }

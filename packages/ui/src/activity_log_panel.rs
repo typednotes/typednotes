@@ -1,7 +1,9 @@
 use dioxus::prelude::*;
 
 use crate::activity_log::{LogLevel, use_activity_log};
-use crate::components::{Button, ButtonVariant};
+use crate::components::{Badge, BadgeVariant};
+
+const LOG_PANEL_CSS: Asset = asset!("/src/views/log_panel.css");
 
 #[component]
 pub fn ActivityLogPanel() -> Element {
@@ -14,39 +16,40 @@ pub fn ActivityLogPanel() -> Element {
     let entries = log().entries.clone();
 
     rsx! {
+        document::Link { rel: "stylesheet", href: LOG_PANEL_CSS }
         div {
-            class: "h-[200px] shrink-0 bg-console-bg text-console-text font-mono text-xs flex flex-col border-t border-console-border",
+            class: "log-panel",
+            height: "200px",
+            flex_shrink: "0",
             div {
-                class: "flex items-center justify-between px-3 py-1.5 bg-console-header border-b border-console-border text-[0.6875rem] font-semibold uppercase tracking-wider text-[#cccccc]",
+                class: "log-panel-header",
                 span { "Activity Log" }
                 div {
-                    class: "flex gap-2",
-                    Button {
-                        variant: ButtonVariant::Ghost,
-                        class: "text-[#888] text-[0.6875rem] px-1.5 py-0.5 hover:bg-console-border hover:text-console-text",
+                    class: "log-panel-actions",
+                    button {
+                        class: "log-panel-action",
                         onclick: move |_| log.write().entries.clear(),
                         "Clear"
                     }
-                    Button {
-                        variant: ButtonVariant::Ghost,
-                        class: "text-[#888] text-[0.6875rem] px-1.5 py-0.5 hover:bg-console-border hover:text-console-text",
+                    button {
+                        class: "log-panel-action",
                         onclick: move |_| log.write().visible = false,
                         "Close"
                     }
                 }
             }
             div {
-                class: "flex-1 overflow-y-auto px-3 py-1.5",
+                class: "log-panel-body",
                 for entry in entries.iter().rev() {
                     div {
                         class: match entry.level {
-                            LogLevel::Error => "py-0.5 leading-relaxed text-[#f48771]",
-                            LogLevel::Warning => "py-0.5 leading-relaxed text-warning",
-                            LogLevel::Success => "py-0.5 leading-relaxed text-[#89d185]",
-                            LogLevel::Info => "py-0.5 leading-relaxed text-[#9e9e9e]",
+                            LogLevel::Error => "log-panel-entry log-entry-error",
+                            LogLevel::Warning => "log-panel-entry log-entry-warning",
+                            LogLevel::Success => "log-panel-entry log-entry-success",
+                            LogLevel::Info => "log-panel-entry log-entry-info",
                         },
-                        span { class: "text-[#666] mr-2", "{entry.timestamp}" }
-                        span { " {entry.message}" }
+                        span { class: "log-panel-timestamp", "{entry.timestamp}" }
+                        span { "{entry.message}" }
                     }
                 }
             }
@@ -56,27 +59,14 @@ pub fn ActivityLogPanel() -> Element {
 
 #[component]
 pub fn ActivityLogToggle() -> Element {
-    let mut log = use_activity_log();
+    let log = use_activity_log();
     let count = log().entries.len();
-    let has_errors = log().entries.iter().any(|e| e.level == LogLevel::Error);
 
     rsx! {
-        Button {
-            variant: ButtonVariant::Ghost,
-            class: if has_errors {
-                "text-danger text-[0.6875rem] px-2 py-1 hover:bg-neutral-200 hover:text-neutral-800"
-            } else {
-                "text-neutral-600 text-[0.6875rem] px-2 py-1 hover:bg-neutral-200 hover:text-neutral-800"
-            },
-            onclick: move |_| {
-                let visible = log().visible;
-                log.write().visible = !visible;
-            },
-            title: "Activity log",
-            if count > 0 {
+        if count > 0 {
+            Badge {
+                variant: BadgeVariant::Primary,
                 "{count}"
-            } else {
-                "Log"
             }
         }
     }

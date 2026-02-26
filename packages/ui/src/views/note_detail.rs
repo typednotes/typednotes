@@ -4,6 +4,8 @@ use crate::components::{use_toast, ToastOptions};
 use crate::{NoteEditor, NoteTree, use_note_tree, LogLevel, log_activity, use_activity_log, use_auth};
 use crate::make_repo_for_user;
 
+const VIEWS_CSS: Asset = asset!("/src/views/views.css");
+
 /// Shared note detail view.
 ///
 /// Loads, edits, saves, renames, and deletes a note. Platform packages provide
@@ -188,9 +190,10 @@ pub fn NoteDetailView(
                 }
             }
         } else {
+            document::Link { rel: "stylesheet", href: VIEWS_CSS }
             div {
-                class: "flex-1 flex flex-col items-center justify-center text-neutral-600",
-                h2 { class: "m-0 mb-2 font-normal text-neutral-800 text-lg", "Loading..." }
+                class: "view-placeholder",
+                h2 { "Loading..." }
             }
         }
     }

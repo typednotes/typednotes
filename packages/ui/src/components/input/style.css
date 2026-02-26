@@ -1,3 +1,4 @@
+@layer components {
 /* Input Styles */
 .input {
   position: relative;
@@ -30,10 +31,13 @@
   cursor: not-allowed;
 }
 
-.input:hover:not(:disabled),
-.input:focus-visible {
+.input:hover:not(:disabled) {
   background: var(--light, var(--primary-color-4))
     var(--dark, color-mix(in oklab, #FFFFFF26 50%, transparent));
   color: var(--secondary-color-1);
+}
+
+.input:focus-visible {
   outline: none;
+}
 }

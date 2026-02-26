@@ -1,10 +1,13 @@
 use dioxus::prelude::*;
 
+const VIEWS_CSS: Asset = asset!("/src/views/views.css");
+
 #[component]
 pub fn Navbar(children: Element) -> Element {
     rsx! {
+        document::Link { rel: "stylesheet", href: VIEWS_CSS }
         div {
-            class: "flex flex-row px-4 py-3 border-b border-neutral-300 bg-white [&_a]:text-neutral-800 [&_a]:mr-5 [&_a]:no-underline [&_a]:text-sm [&_a]:transition-colors [&_a]:duration-150 [&_a:hover]:text-primary-500 [&_a:hover]:cursor-pointer",
+            class: "navbar",
             {children}
         }
     }

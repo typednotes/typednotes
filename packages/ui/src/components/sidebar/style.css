@@ -1,3 +1,4 @@
+@layer components {
 /* TODO: abstract as Utility class */
 .sr-only {
   position: absolute;
@@ -555,7 +556,15 @@
 }
 
 .sidebar-menu-item:has(.sidebar-menu-action[data-sidebar="menu-action"]) .sidebar-menu-button[data-sidebar="menu-button"] {
-  padding-right: 2rem;
+  padding-right: 4.5rem;
+}
+
+.sidebar-menu-action[data-sidebar="menu-action"]:nth-last-of-type(2) {
+  right: 1.75rem;
+}
+
+.sidebar-menu-action[data-sidebar="menu-action"]:nth-last-of-type(3) {
+  right: 3.25rem;
 }
 
 .sidebar-menu-action[data-sidebar="menu-action"] {
@@ -703,7 +712,9 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  padding: 0.125rem 0.625rem;
+  max-height: 100vh;
+  overflow: hidden;
+  padding: 0.125rem 0 0.125rem 0.625rem;
   border-left: 1px solid var(--sidebar-border);
   margin: 0 0 0 0.75rem;
   gap: 0.25rem;
@@ -811,24 +822,18 @@
   pointer-events: none;
 }
 
-/* Flat view slide animations */
-.flat-view-enter-right {
-  animation: slide-in-from-right 200ms ease-out;
-}
+/* Flat view slide animations — two identical keyframe pairs with
+   alternating class names (-a/-b) so the browser restarts the
+   animation when nav_counter toggles even/odd. */
+.flat-view-enter-right-a { animation: slide-in-right-a 200ms ease-out; }
+.flat-view-enter-right-b { animation: slide-in-right-b 200ms ease-out; }
+.flat-view-enter-left-a  { animation: slide-in-left-a  200ms ease-out; }
+.flat-view-enter-left-b  { animation: slide-in-left-b  200ms ease-out; }
 
-.flat-view-enter-left {
-  animation: slide-in-from-left 200ms ease-out;
-}
-
-@keyframes slide-in-from-right {
-  from { transform: translateX(100%); }
-  to   { transform: translateX(0); }
-}
-
-@keyframes slide-in-from-left {
-  from { transform: translateX(-100%); }
-  to   { transform: translateX(0); }
-}
+@keyframes slide-in-right-a { from { transform: translateX(100%); }  to { transform: translateX(0); } }
+@keyframes slide-in-right-b { from { transform: translateX(100%); }  to { transform: translateX(0); } }
+@keyframes slide-in-left-a  { from { transform: translateX(-100%); } to { transform: translateX(0); } }
+@keyframes slide-in-left-b  { from { transform: translateX(-100%); } to { transform: translateX(0); } }
 
 /* App-specific sidebar utilities */
 .sidebar-icon-btn {
@@ -851,4 +856,17 @@
 .sidebar-icon-btn:hover {
   background: var(--sidebar-accent);
   opacity: 1;
+}
+
+/* Drag-and-drop visual feedback */
+.sidebar-drop-active .sidebar-menu-button[data-sidebar="menu-button"] {
+  outline: 2px solid var(--focused-border-color);
+  outline-offset: -2px;
+}
+
+.sidebar-drop-root[data-drag-over="true"] {
+  outline: 2px solid var(--focused-border-color);
+  outline-offset: -2px;
+  border-radius: 0.375rem;
+}
 }

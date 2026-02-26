@@ -23,7 +23,7 @@ enum Route {
         Settings {},
 }
 
-const FAVICON: Asset = asset!("/assets/favicon.ico");
+const FAVICON: Asset = asset!("/assets/favicon.png");
 
 fn main() {
     #[cfg(feature = "server")]
@@ -210,6 +210,7 @@ fn App() -> Element {
 
     rsx! {
         // Global app resources
+        document::Title { "TypedNotes" }
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: ui::TAILWIND_CSS }
         document::Link { rel: "stylesheet", href: ui::DX_COMPONENTS_CSS }

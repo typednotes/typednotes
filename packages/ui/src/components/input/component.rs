@@ -2,6 +2,7 @@ use dioxus::prelude::*;
 
 #[component]
 pub fn Input(
+    #[props(default)] class: String,
     oninput: Option<EventHandler<FormEvent>>,
     onchange: Option<EventHandler<FormEvent>>,
     oninvalid: Option<EventHandler<FormEvent>>,
@@ -28,7 +29,7 @@ pub fn Input(
     rsx! {
         document::Link { rel: "stylesheet", href: asset!("./style.css") }
         input {
-            class: "input",
+            class: "input {class}",
             oninput: move |e| _ = oninput.map(|callback| callback(e)),
             onchange: move |e| _ = onchange.map(|callback| callback(e)),
             oninvalid: move |e| _ = oninvalid.map(|callback| callback(e)),
