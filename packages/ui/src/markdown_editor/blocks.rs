@@ -15,6 +15,22 @@ pub enum BlockKind {
 }
 
 impl BlockKind {
+    /// Does Enter split this block into two AST blocks?
+    pub fn enter_splits(&self) -> bool {
+        matches!(
+            self,
+            BlockKind::Heading(_) | BlockKind::Paragraph | BlockKind::ThematicBreak
+        )
+    }
+
+    /// Is this block inherently multi-line? (Enter inserts `<br>` within it)
+    pub fn is_multiline(&self) -> bool {
+        matches!(
+            self,
+            BlockKind::CodeBlock | BlockKind::MathBlock | BlockKind::BlockQuote | BlockKind::Table
+        )
+    }
+
     pub fn css_class(&self) -> &'static str {
         match self {
             BlockKind::Heading(1) => "md-h1",
@@ -40,6 +56,28 @@ pub struct MdBlock {
     pub source_range: Range<usize>,
     pub source: String,
     pub rendered_html: String,
+}
+
+/// Detect the list marker from a list-item source line and return the next marker.
+/// E.g. `"- foo"` → `"- "`, `"1. foo"` → `"2. "`.
+pub fn detect_list_marker(source: &str) -> String {
+    let trimmed = source.trim_start();
+    let indent = &source[..source.len() - trimmed.len()];
+    if trimmed.starts_with("- ") {
+        format!("{indent}- ")
+    } else if trimmed.starts_with("* ") {
+        format!("{indent}* ")
+    } else if trimmed.starts_with("+ ") {
+        format!("{indent}+ ")
+    } else if let Some(dot) = trimmed.find(". ") {
+        if let Ok(n) = trimmed[..dot].parse::<u32>() {
+            format!("{indent}{}. ", n + 1)
+        } else {
+            format!("{indent}- ")
+        }
+    } else {
+        format!("{indent}- ")
+    }
 }
 
 /// Render a markdown block source to HTML, emitting data-math attributes for KaTeX.

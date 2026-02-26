@@ -40,11 +40,15 @@ pub fn NoteDetailView(
     let mut activity_log = use_activity_log();
     let toast_api = use_toast();
     let auth = use_auth();
+    let mut load_generation: Signal<u64> = use_signal(|| 0);
 
     // Load current note and optionally refresh from remote
     let _loader = use_resource(move || {
         let path = path_signal();
         async move {
+            load_generation += 1;
+            let gen = load_generation();
+
             let user_id = auth().user.as_ref().map(|u| u.id.clone());
             let repo = make_repo_for_user(user_id.as_deref());
             current_note.set(repo.get_note(&path).await);
@@ -65,6 +69,8 @@ pub fn NoteDetailView(
                                 repo.write_note(stem, &file.content, note_type).await;
                             }
                             if !remote_files.is_empty() {
+                                // Guard: only update if still on the same note
+                                if load_generation() != gen { return; }
                                 current_note.set(repo.get_note(&path).await);
                                 let user_id = auth().user.as_ref().map(|u| u.id.clone());
                                 tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
@@ -91,7 +97,8 @@ pub fn NoteDetailView(
                     store::models::ext_from_note_type(&note.r#type)
                 ));
                 repo.write_note(stem, &content, &note.r#type).await;
-                current_note.set(repo.get_note(&path).await);
+                // Don't re-fetch: the editor's content Signal is already up to date.
+                // Re-fetching would change the SHA → change the key → remount the editor.
                 tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
                 log_activity(&mut activity_log, LogLevel::Info, &format!("Saved {path}"));
                 toast_api.success("Saved".to_string(), ToastOptions::new());

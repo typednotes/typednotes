@@ -28,6 +28,7 @@
   padding: 1px 0;
   border-radius: 3px;
   transition: background-color 120ms ease;
+  overflow: hidden;
 }
 
 .md-block-active {
@@ -108,6 +109,7 @@
 .md-block-inactive h5,
 .md-block-inactive h6 {
   margin: 0;
+  padding: 0;
   font-size: inherit;
   font-weight: inherit;
   line-height: inherit;
@@ -115,6 +117,7 @@
 
 .md-block-inactive p {
   margin: 0;
+  padding: 0;
 }
 
 .md-block-inactive strong {
