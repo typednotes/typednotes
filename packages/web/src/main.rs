@@ -23,7 +23,7 @@ enum Route {
         Settings {},
 }
 
-const FAVICON: Asset = asset!("/assets/favicon.png");
+const FAVICON: Asset = asset!("/assets/favicon.ico");
 
 fn main() {
     #[cfg(feature = "server")]
