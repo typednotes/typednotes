@@ -58,6 +58,21 @@ impl FileStore {
     }
 }
 
+impl FileStore {
+    /// Delete a user-scoped store directory (`<base>/typednotes/<user_id>/`).
+    pub fn delete_scoped(base: &std::path::Path, user_id: &str) {
+        let scoped = base.join(user_id);
+        let _ = std::fs::remove_dir_all(scoped);
+    }
+
+    /// Delete anonymous store data (objects/ and refs/ directly under `<base>/typednotes/`),
+    /// without removing user-scoped subdirectories.
+    pub fn delete_anonymous(base: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(base.join("objects"));
+        let _ = std::fs::remove_dir_all(base.join("refs"));
+    }
+}
+
 impl ObjectStore for FileStore {
     async fn get(&self, sha: &Sha) -> Option<Vec<u8>> {
         std::fs::read(self.object_path(sha)).ok()

@@ -17,8 +17,9 @@ use crate::icons::{
     FaFolderPlus, FaPlus, FaList, FaFolderTree, FaGear, FaTerminal,
     FaFolder, FaFileLines, FaCaretLeft, FaCaretRight,
     FaCircleHalfStroke, FaMoon, FaSun, FaRightFromBracket,
-    FaTrashCan,
+    FaTrashCan, FaArrowRightToBracket,
 };
+use crate::OnlineIndicator;
 
 #[derive(Clone, Copy, PartialEq)]
 enum ViewMode {
@@ -53,6 +54,12 @@ pub fn AppSidebar(
     on_create_namespace: EventHandler<Option<String>>,
     on_delete_namespace: EventHandler<String>,
     on_navigate_settings: EventHandler<()>,
+    /// Called when user clicks "Sign in" (anonymous mode).
+    #[props(default)]
+    on_navigate_login: EventHandler<()>,
+    /// Called when user clicks "Detach" (wipe local data).
+    #[props(default)]
+    on_detach: EventHandler<()>,
     /// Called when a note is dragged into a namespace: (note_path, target_namespace).
     /// target_namespace is None for root.
     #[props(default)]
@@ -61,12 +68,17 @@ pub fn AppSidebar(
     /// target_namespace is None for root.
     #[props(default)]
     on_move_namespace: EventHandler<(String, Option<String>)>,
+    /// Called when a namespace is renamed inline: (old_path, new_name).
+    #[props(default)]
+    on_rename_namespace: EventHandler<(String, String)>,
 ) -> Element {
     let mut view_mode = use_signal(|| ViewMode::Flat);
     let mut flat_namespace = use_signal(|| Option::<String>::None);
     let mut slide_dir = use_signal(|| SlideDir::None);
     let mut nav_counter = use_signal(|| 0u32);
     let drag_item: Signal<Option<DragItem>> = use_signal(|| None);
+    // Holds the path of the namespace currently being renamed inline
+    let renaming: Signal<Option<String>> = use_signal(|| None);
 
     rsx! {
         // ── Header: user info + action buttons ──
@@ -97,6 +109,7 @@ pub fn AppSidebar(
                         "TypedNotes"
                     }
                 }
+                OnlineIndicator {}
             }
             div {
                 class: "flex items-center gap-1",
@@ -169,6 +182,8 @@ pub fn AppSidebar(
                             drag_item: drag_item,
                             on_move_note: on_move_note,
                             on_move_namespace: on_move_namespace,
+                            renaming: renaming,
+                            on_rename_namespace: on_rename_namespace,
                         }
                     }
                 } else {
@@ -184,6 +199,8 @@ pub fn AppSidebar(
                         drag_item: drag_item,
                         on_move_note: on_move_note,
                         on_move_namespace: on_move_namespace,
+                        renaming: renaming,
+                        on_rename_namespace: on_rename_namespace,
                         on_navigate_into: move |ns: String| {
                             slide_dir.set(SlideDir::Right);
                             flat_namespace.set(Some(ns));
@@ -252,8 +269,17 @@ pub fn AppSidebar(
                 SidebarMenuItem {
                     ThemeToggleItem {}
                 }
-                SidebarMenuItem {
-                    LogoutItem {}
+                if user.is_some() {
+                    SidebarMenuItem {
+                        DetachItem { on_detach: on_detach }
+                    }
+                    SidebarMenuItem {
+                        LogoutItem {}
+                    }
+                } else {
+                    SidebarMenuItem {
+                        LoginItem { on_navigate_login: on_navigate_login }
+                    }
                 }
             }
         }
@@ -278,6 +304,8 @@ fn ExplorerTree(
     drag_item: Signal<Option<DragItem>>,
     on_move_note: EventHandler<(String, Option<String>)>,
     on_move_namespace: EventHandler<(String, Option<String>)>,
+    renaming: Signal<Option<String>>,
+    on_rename_namespace: EventHandler<(String, String)>,
 ) -> Element {
     let root_namespaces: Vec<&NamespaceInfo> =
         namespaces.iter().filter(|ns| ns.parent.is_none()).collect();
@@ -301,6 +329,8 @@ fn ExplorerTree(
                 drag_item: drag_item,
                 on_move_note: on_move_note,
                 on_move_namespace: on_move_namespace,
+                renaming: renaming,
+                on_rename_namespace: on_rename_namespace,
             }
         }
 
@@ -355,6 +385,8 @@ fn NamespaceNode(
     drag_item: Signal<Option<DragItem>>,
     on_move_note: EventHandler<(String, Option<String>)>,
     on_move_namespace: EventHandler<(String, Option<String>)>,
+    renaming: Signal<Option<String>>,
+    on_rename_namespace: EventHandler<(String, String)>,
 ) -> Element {
     let child_namespaces: Vec<&NamespaceInfo> = all_namespaces
         .iter()
@@ -367,6 +399,8 @@ fn NamespaceNode(
 
     let ns_path = namespace.path.clone();
     let mut drag_counter = use_signal(|| 0i32);
+    let mut rename_value = use_signal(|| namespace.name.clone());
+    let is_renaming = renaming().as_ref() == Some(&ns_path);
 
     rsx! {
         // Wrapper div for drag events (components can't receive event handlers directly)
@@ -407,17 +441,74 @@ fn NamespaceNode(
             default_open: true,
             keep_mounted: true,
             SidebarMenuItem {
+                if is_renaming {
+                    // Inline rename input (raw <input> for onmounted support)
+                    {
+                        let orig_name = namespace.name.clone();
+                        let orig_name2 = orig_name.clone();
+                        rsx! {
+                            div {
+                                class: "flex items-center gap-1 px-2 py-1",
+                                Icon { icon: FaFolder, width: 12, height: 12 }
+                                input {
+                                    class: "flex-1 text-sm h-6 bg-transparent border border-current/20 rounded px-1 outline-none",
+                                    r#type: "text",
+                                    value: rename_value(),
+                                    oninput: move |evt: FormEvent| rename_value.set(evt.value()),
+                                    onkeydown: {
+                                        let ns_path = ns_path.clone();
+                                        let orig_name = orig_name.clone();
+                                        move |evt: Event<KeyboardData>| {
+                                            if evt.key() == Key::Enter {
+                                                let new_name = rename_value().trim().to_string();
+                                                if !new_name.is_empty() && new_name != orig_name {
+                                                    on_rename_namespace.call((ns_path.clone(), new_name));
+                                                }
+                                                renaming.set(None);
+                                            } else if evt.key() == Key::Escape {
+                                                rename_value.set(orig_name.clone());
+                                                renaming.set(None);
+                                            }
+                                        }
+                                    },
+                                    onmounted: move |evt: Event<MountedData>| async move {
+                                        let _ = evt.set_focus(true).await;
+                                    },
+                                    onfocusout: {
+                                        let ns_path = ns_path.clone();
+                                        move |_| {
+                                            let new_name = rename_value().trim().to_string();
+                                            if !new_name.is_empty() && new_name != orig_name2 {
+                                                on_rename_namespace.call((ns_path.clone(), new_name));
+                                            }
+                                            renaming.set(None);
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                    }
+                } else {
                 CollapsibleTrigger {
                     as: {
                         let namespace_name = namespace.name.clone();
+                        let ns_path_dbl = ns_path.clone();
                         move |attrs: Vec<Attribute>| {
                             let namespace_name = namespace_name.clone();
+                            let ns_path_dbl = ns_path_dbl.clone();
                             rsx! {
                                 SidebarMenuButton {
                                     attributes: attrs,
                                     tooltip: rsx! { "{namespace_name}" },
                                     Icon { icon: FaFolder, width: 12, height: 12 }
-                                    span { "{namespace_name}" }
+                                    span {
+                                        ondoubleclick: move |evt: Event<MouseData>| {
+                                            evt.stop_propagation();
+                                            rename_value.set(namespace_name.clone());
+                                            renaming.set(Some(ns_path_dbl.clone()));
+                                        },
+                                        "{namespace_name}"
+                                    }
                                 }
                             }
                         }
@@ -499,6 +590,8 @@ fn NamespaceNode(
                                 drag_item: drag_item,
                                 on_move_note: on_move_note,
                                 on_move_namespace: on_move_namespace,
+                                renaming: renaming,
+                                on_rename_namespace: on_rename_namespace,
                             }
                         }
                         for note in child_notes {
@@ -512,6 +605,7 @@ fn NamespaceNode(
                         }
                     }
                 }
+                } // close else (not renaming)
             }
         }
         } // close wrapper div
@@ -623,6 +717,8 @@ fn FlatExplorerView(
     drag_item: Signal<Option<DragItem>>,
     on_move_note: EventHandler<(String, Option<String>)>,
     on_move_namespace: EventHandler<(String, Option<String>)>,
+    renaming: Signal<Option<String>>,
+    on_rename_namespace: EventHandler<(String, String)>,
     on_navigate_into: EventHandler<String>,
     on_navigate_up: EventHandler<()>,
 ) -> Element {
@@ -739,6 +835,8 @@ fn FlatExplorerView(
                                     on_delete_namespace: on_delete_namespace,
                                     on_move_note: on_move_note,
                                     on_move_namespace: on_move_namespace,
+                                    renaming: renaming,
+                                    on_rename_namespace: on_rename_namespace,
                                 }
                             }
                         }
@@ -804,8 +902,12 @@ fn FlatNsItem(
     on_delete_namespace: EventHandler<String>,
     on_move_note: EventHandler<(String, Option<String>)>,
     on_move_namespace: EventHandler<(String, Option<String>)>,
+    renaming: Signal<Option<String>>,
+    on_rename_namespace: EventHandler<(String, String)>,
 ) -> Element {
     let mut drag_counter = use_signal(|| 0i32);
+    let mut rename_value = use_signal(|| ns_name.clone());
+    let is_renaming = renaming().as_ref() == Some(&ns_path);
 
     rsx! {
         div {
@@ -841,21 +943,75 @@ fn FlatNsItem(
                     drag_item.set(None);
                 }
             },
+            if is_renaming {
+                // Inline rename input
+                SidebarMenuItem {
+                    div {
+                        class: "flex items-center gap-1 px-2 py-1 w-full",
+                        Icon { icon: FaFolder, width: 12, height: 12 }
+                        input {
+                            class: "flex-1 text-sm h-6 bg-transparent border border-current/20 rounded px-1 outline-none",
+                            r#type: "text",
+                            value: rename_value(),
+                            oninput: move |evt: FormEvent| rename_value.set(evt.value()),
+                            onkeydown: {
+                                let ns_path = ns_path.clone();
+                                let ns_name = ns_name.clone();
+                                move |evt: Event<KeyboardData>| {
+                                    if evt.key() == Key::Enter {
+                                        let new_name = rename_value().trim().to_string();
+                                        if !new_name.is_empty() && new_name != ns_name {
+                                            on_rename_namespace.call((ns_path.clone(), new_name));
+                                        }
+                                        renaming.set(None);
+                                    } else if evt.key() == Key::Escape {
+                                        rename_value.set(ns_name.clone());
+                                        renaming.set(None);
+                                    }
+                                }
+                            },
+                            onmounted: move |evt: Event<MountedData>| async move {
+                                let _ = evt.set_focus(true).await;
+                            },
+                            onfocusout: {
+                                let ns_path = ns_path.clone();
+                                let ns_name = ns_name.clone();
+                                move |_| {
+                                    let new_name = rename_value().trim().to_string();
+                                    if !new_name.is_empty() && new_name != ns_name {
+                                        on_rename_namespace.call((ns_path.clone(), new_name));
+                                    }
+                                    renaming.set(None);
+                                }
+                            },
+                        }
+                    }
+                }
+            } else {
             SidebarMenuItem {
                 SidebarMenuButton {
                     tooltip: rsx! { "{ns_name}" },
                     as: {
                         let ns_path = ns_path.clone();
                         let ns_name = ns_name.clone();
+                        let ns_path_dbl = ns_path.clone();
                         move |attrs: Vec<Attribute>| {
                             let ns_path = ns_path.clone();
                             let ns_name = ns_name.clone();
+                            let ns_path_dbl = ns_path_dbl.clone();
                             rsx! {
                                 button {
                                     onclick: move |_| on_navigate_into.call(ns_path.clone()),
                                     ..attrs,
                                     Icon { icon: FaFolder, width: 12, height: 12 }
-                                    span { "{ns_name}" }
+                                    span {
+                                        ondoubleclick: move |evt: Event<MouseData>| {
+                                            evt.stop_propagation();
+                                            rename_value.set(ns_name.clone());
+                                            renaming.set(Some(ns_path_dbl.clone()));
+                                        },
+                                        "{ns_name}"
+                                    }
                                     Icon { icon: FaCaretRight, width: 10, height: 10, class: "ml-auto opacity-40" }
                                 }
                             }
@@ -883,6 +1039,7 @@ fn FlatNsItem(
                 },
             }
         }
+        } // close else
         } // close wrapper div
     }
 }
@@ -985,18 +1142,49 @@ fn LogoutItem() -> Element {
                             auth_state.set(crate::AuthState {
                                 user: None,
                                 loading: false,
+                                online: auth_state().online,
                             });
-                            #[cfg(target_arch = "wasm32")]
-                            {
-                                if let Some(window) = web_sys::window() {
-                                    let _ = window.location().set_href("/login");
-                                }
-                            }
                         }
                     },
                     ..attrs,
                     Icon { icon: FaRightFromBracket }
                     span { "Log out" }
+                }
+            },
+        }
+    }
+}
+
+#[component]
+fn LoginItem(on_navigate_login: EventHandler<()>) -> Element {
+    rsx! {
+        SidebarMenuButton {
+            size: SidebarMenuButtonSize::Sm,
+            tooltip: rsx! { "Sign in to sync" },
+            as: move |attrs: Vec<Attribute>| rsx! {
+                button {
+                    onclick: move |_| on_navigate_login.call(()),
+                    ..attrs,
+                    Icon { icon: FaArrowRightToBracket }
+                    span { "Sign in" }
+                }
+            },
+        }
+    }
+}
+
+#[component]
+fn DetachItem(on_detach: EventHandler<()>) -> Element {
+    rsx! {
+        SidebarMenuButton {
+            size: SidebarMenuButtonSize::Sm,
+            tooltip: rsx! { "Wipe local data and sign out" },
+            as: move |attrs: Vec<Attribute>| rsx! {
+                button {
+                    onclick: move |_| on_detach.call(()),
+                    ..attrs,
+                    Icon { icon: FaTrashCan }
+                    span { "Detach" }
                 }
             },
         }

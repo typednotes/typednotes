@@ -29,6 +29,12 @@ pub fn SidebarLayoutView(
     on_navigate_note: EventHandler<String>,
     /// Called when user clicks the settings button.
     on_navigate_settings: EventHandler<()>,
+    /// Called when anonymous user clicks "Sign in" in sidebar.
+    #[props(default)]
+    on_navigate_login: EventHandler<()>,
+    /// Called when user clicks "Detach" — wipe local data.
+    #[props(default)]
+    on_detach: EventHandler<()>,
     /// Whether to run a background git pull on load (web only).
     #[props(default)]
     enable_git_pull: bool,
@@ -45,6 +51,8 @@ pub fn SidebarLayoutView(
     let mut show_move_confirm = use_signal(|| false);
     let mut move_ns_from = use_signal(|| String::new());
     let mut move_ns_to = use_signal(|| Option::<String>::None);
+    // Detach confirmation state
+    let mut show_detach_confirm = use_signal(|| false);
     let auth = use_auth();
     let mut activity_log = use_activity_log();
 
@@ -59,9 +67,15 @@ pub fn SidebarLayoutView(
             idb.migrate_from_legacy_if_needed().await;
         }
 
+        // Migrate anonymous file store into user-scoped store on first login (native only)
+        #[cfg(not(all(target_arch = "wasm32", feature = "web")))]
+        if let Some(ref uid) = user_id {
+            crate::migrate_anonymous_to_user(uid).await;
+        }
+
         tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
 
-        if enable_git_pull {
+        if enable_git_pull && auth().user.is_some() && auth().online {
             spawn(async move {
                 log_activity(&mut activity_log, LogLevel::Info, "Pulling from git...");
                 match api::pull_notes().await {
@@ -98,7 +112,7 @@ pub fn SidebarLayoutView(
     #[cfg(target_arch = "wasm32")]
     {
         use_effect(move || {
-            if !enable_git_pull {
+            if !enable_git_pull || auth().user.is_none() || !auth().online {
                 return;
             }
             spawn(async move {
@@ -300,6 +314,24 @@ pub fn SidebarLayoutView(
         });
     };
 
+    // Handle renaming a namespace inline
+    let on_rename_namespace = move |(old_path, new_name): (String, String)| {
+        spawn(async move {
+            let user_id = auth().user.as_ref().map(|u| u.id.clone());
+            let repo = make_repo_for_user(user_id.as_deref());
+            // Compute new path: same parent, new leaf name
+            let new_path = if let Some((parent, _)) = old_path.rsplit_once('/') {
+                format!("{parent}/{new_name}")
+            } else {
+                new_name
+            };
+            repo.move_namespace(&old_path, &new_path).await;
+            tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
+            log_activity(&mut activity_log, LogLevel::Info, &format!("Renamed namespace {old_path} -> {new_path}"));
+            toast.success("Namespace renamed".to_string(), ToastOptions::new());
+        });
+    };
+
     // Count items inside the namespace to show in the confirmation dialog
     let delete_ns_note_count = {
         let t = tree();
@@ -331,8 +363,11 @@ pub fn SidebarLayoutView(
                     on_create_namespace: on_create_namespace,
                     on_delete_namespace: on_delete_namespace,
                     on_navigate_settings: on_settings,
+                    on_navigate_login: on_navigate_login,
+                    on_detach: move |_| show_detach_confirm.set(true),
                     on_move_note: on_move_note,
                     on_move_namespace: on_move_namespace,
+                    on_rename_namespace: on_rename_namespace,
                 }
             }
 
@@ -462,6 +497,59 @@ pub fn SidebarLayoutView(
                         Button {
                             variant: ButtonVariant::Outline,
                             onclick: move |_| show_move_confirm.set(false),
+                            "Cancel"
+                        }
+                    }
+                }
+            }
+        }
+        if show_detach_confirm() {
+            ModalOverlay {
+                on_close: move |_| show_detach_confirm.set(false),
+                div {
+                    class: "modal-body",
+                    h2 { class: "modal-title", "Detach" }
+                    p {
+                        class: "modal-text",
+                        "This will delete all local data and sign you out. Your notes are safe on the server."
+                    }
+                    p {
+                        class: "modal-detail",
+                        "You can sign in again later to re-sync."
+                    }
+                    div {
+                        class: "modal-actions",
+                        Button {
+                            variant: ButtonVariant::Destructive,
+                            onclick: move |_| {
+                                show_detach_confirm.set(false);
+                                spawn(async move {
+                                    let user_id = auth().user.as_ref().map(|u| u.id.clone());
+                                    // Logout first
+                                    let _ = api::logout().await;
+                                    // Delete local stores
+                                    if let Some(ref uid) = user_id {
+                                        crate::detach_user(uid).await;
+                                    }
+                                    // Clear auth state
+                                    let mut auth_state = auth;
+                                    let online = auth_state().online;
+                                    auth_state.set(crate::AuthState {
+                                        user: None,
+                                        loading: false,
+                                        online,
+                                    });
+                                    // Refresh tree (now empty anonymous store)
+                                    tree.set(NoteTree::refresh_for(None).await);
+                                    log_activity(&mut activity_log, LogLevel::Info, "Detached — local data cleared");
+                                    toast.success("Detached successfully".to_string(), ToastOptions::new());
+                                });
+                            },
+                            "Detach"
+                        }
+                        Button {
+                            variant: ButtonVariant::Outline,
+                            onclick: move |_| show_detach_confirm.set(false),
                             "Cancel"
                         }
                     }

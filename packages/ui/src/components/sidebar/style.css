@@ -869,4 +869,25 @@
   outline-offset: -2px;
   border-radius: 0.375rem;
 }
+
+/* Online/offline indicator */
+.online-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.online-indicator--syncing {
+  color: #22c55e; /* green-500 */
+}
+
+.online-indicator--offline {
+  color: #f97316; /* orange-500 */
+}
+
+.online-indicator--anonymous {
+  color: var(--sidebar-foreground);
+  opacity: 0.4;
+}
 }

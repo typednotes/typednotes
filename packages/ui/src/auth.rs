@@ -8,6 +8,8 @@ use dioxus::prelude::*;
 pub struct AuthState {
     pub user: Option<UserInfo>,
     pub loading: bool,
+    /// Whether the server is reachable (last connectivity check succeeded).
+    pub online: bool,
 }
 
 impl Default for AuthState {
@@ -15,6 +17,7 @@ impl Default for AuthState {
         Self {
             user: None,
             loading: true,
+            online: false,
         }
     }
 }
@@ -35,18 +38,60 @@ pub fn AuthProvider(children: Element) -> Element {
     let _ = use_resource(move || async move {
         match api::get_current_user().await {
             Ok(user) => {
+                let online = user.is_some();
                 auth_state.set(AuthState {
                     user,
                     loading: false,
+                    online,
                 });
             }
             Err(_) => {
                 auth_state.set(AuthState {
                     user: None,
                     loading: false,
+                    online: false,
                 });
             }
         }
+    });
+
+    // Periodic connectivity check (every 30s)
+    use_effect(move || {
+        spawn(async move {
+            loop {
+                #[cfg(target_arch = "wasm32")]
+                gloo_timers::future::sleep(std::time::Duration::from_secs(30)).await;
+                #[cfg(not(target_arch = "wasm32"))]
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+
+                // Don't check while initial load is still in progress
+                if auth_state().loading {
+                    continue;
+                }
+                match api::get_current_user().await {
+                    Ok(user) => {
+                        let online = user.is_some();
+                        let current = auth_state();
+                        if current.user != user || current.online != online {
+                            auth_state.set(AuthState {
+                                user,
+                                loading: false,
+                                online,
+                            });
+                        }
+                    }
+                    Err(_) => {
+                        if auth_state().online {
+                            let current = auth_state();
+                            auth_state.set(AuthState {
+                                online: false,
+                                ..current
+                            });
+                        }
+                    }
+                }
+            }
+        });
     });
 
     use_context_provider(|| auth_state);
@@ -121,6 +166,7 @@ pub fn LogoutButton(
             auth_state.set(AuthState {
                 user: None,
                 loading: false,
+                online: auth_state().online,
             });
             // Redirect to login
             #[cfg(target_arch = "wasm32")]

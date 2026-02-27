@@ -55,7 +55,7 @@ pub fn NoteDetailView(
             let config = repo.get_config().await;
             auto_sync_secs.set(config.sync.auto_sync_interval_secs);
 
-            if enable_pull_on_load {
+            if enable_pull_on_load && auth().user.is_some() {
                 spawn(async move {
                     log_activity(&mut activity_log, LogLevel::Info, &format!("Pulling latest for {path}..."));
                     match api::pull_notes().await {
@@ -106,8 +106,8 @@ pub fn NoteDetailView(
                 log_activity(&mut activity_log, LogLevel::Info, &format!("Saved {path}"));
                 toast_api.success("Saved".to_string(), ToastOptions::new());
 
-                // Git sync (if enabled)
-                if enable_git_sync {
+                // Git sync (if enabled and logged in)
+                if enable_git_sync && auth().user.is_some() {
                     match api::sync_note(path.clone(), content.clone(), note.r#type.clone()).await {
                         Ok(()) => {
                             log_activity(&mut activity_log, LogLevel::Success, &format!("Synced {path}"));
@@ -164,7 +164,7 @@ pub fn NoteDetailView(
             tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
             log_activity(&mut activity_log, LogLevel::Info, &format!("Deleted {path}"));
 
-            if enable_git_sync {
+            if enable_git_sync && auth().user.is_some() {
                 match api::delete_note_remote(path.clone()).await {
                     Ok(()) => log_activity(&mut activity_log, LogLevel::Success, &format!("Deleted remote {path}")),
                     Err(e) => {

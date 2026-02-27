@@ -75,6 +75,17 @@ impl IdbStore {
             .await
     }
 
+    /// Delete the user-scoped IndexedDB database (`"typednotes-<user_id>"`).
+    pub async fn delete_scoped(user_id: &str) {
+        let db_name = format!("{DEFAULT_DB_NAME}-{user_id}");
+        let _ = Rexie::delete(&db_name).await;
+    }
+
+    /// Delete the anonymous (unscoped) IndexedDB database (`"typednotes"`).
+    pub async fn delete_anonymous() {
+        let _ = Rexie::delete(DEFAULT_DB_NAME).await;
+    }
+
     /// Migrate data from the legacy unscoped DB if the scoped DB is empty.
     ///
     /// Called once after login to seamlessly transfer existing notes into the

@@ -11,7 +11,9 @@ pub mod icons {
 }
 
 mod repo;
-pub use repo::{make_repo, make_repo_for_user};
+pub use repo::{make_repo, make_repo_for_user, detach_user};
+#[cfg(not(all(target_arch = "wasm32", feature = "web")))]
+pub use repo::migrate_anonymous_to_user;
 
 pub mod views;
 
@@ -23,6 +25,9 @@ pub use navbar::Navbar;
 
 mod auth;
 pub use auth::{use_auth, AuthProvider, AuthState, LoginButton, LogoutButton};
+
+mod online_indicator;
+pub use online_indicator::OnlineIndicator;
 
 mod sidebar;
 pub use sidebar::{AppSidebar, ThemeSignal, load_theme_from_storage, apply_theme};

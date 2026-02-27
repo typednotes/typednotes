@@ -19,11 +19,16 @@ pub fn SidebarLayout() -> Element {
         nav.push(Route::NoteDetail { note_path: encoded });
     };
 
+    let navigate_login = move |_: ()| {
+        nav.push(Route::Login {});
+    };
+
     rsx! {
         ui::views::SidebarLayoutView {
             active_path: active_path,
             on_navigate_note: navigate_note,
             on_navigate_settings: navigate_settings,
+            on_navigate_login: navigate_login,
             Outlet::<Route> {}
         }
     }

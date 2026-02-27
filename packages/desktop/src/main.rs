@@ -52,13 +52,9 @@ fn Root() -> Element {
     let auth = ui::use_auth();
     let nav = use_navigator();
 
-    // Redirect based on auth state
+    // Always navigate to Notes once loading is done (works offline/anonymous)
     if !auth().loading {
-        if auth().user.is_some() {
-            nav.replace(Route::Notes {});
-        } else {
-            nav.replace(Route::Login {});
-        }
+        nav.replace(Route::Notes {});
     }
 
     rsx! {}
