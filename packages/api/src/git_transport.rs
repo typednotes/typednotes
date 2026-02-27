@@ -342,7 +342,6 @@ fn parse_ssh_url(url: &str) -> Result<(String, String, String), String> {
 /// Normalises the key text first: strips `\r`, trims whitespace, and ensures a
 /// trailing newline — SSH is very picky about PEM formatting.
 fn write_ssh_key(ssh_key_pem: &str) -> Result<tempfile::NamedTempFile, String> {
-    use std::os::unix::fs::PermissionsExt;
     let normalised = ssh_key_pem.replace('\r', "");
     let normalised = normalised.trim();
     let mut tmp =
@@ -352,8 +351,12 @@ fn write_ssh_key(ssh_key_pem: &str) -> Result<tempfile::NamedTempFile, String> {
     tmp.write_all(b"\n")
         .map_err(|e| format!("write trailing newline: {e}"))?;
     tmp.flush().map_err(|e| format!("flush key: {e}"))?;
-    std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| format!("chmod key: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("chmod key: {e}"))?;
+    }
     Ok(tmp)
 }
 
