@@ -1,219 +1,29 @@
 @layer components {
 
-/* ── Editor container ── */
-.md-editor {
+/* ── CM6 wrapper container ── */
+.cm-wrapper {
   flex: 1;
   width: 100%;
   min-height: 4rem;
-  outline: none;
-  line-height: 1.7;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  cursor: text;
-  color: var(--secondary-color-4);
-  font-family: inherit;
-  font-size: 1rem;
-  caret-color: var(--secondary-color-4);
 }
 
-/* Placeholder */
-.md-editor[data-placeholder]:empty::before {
-  content: attr(data-placeholder);
-  color: var(--secondary-color-5);
-  pointer-events: none;
-}
-
-/* ── Block wrappers ── */
-.md-block {
-  padding: 1px 0;
-  border-radius: 3px;
-  transition: background-color 120ms ease;
-  overflow: hidden;
-}
-
-.md-block-active {
-  background: var(--primary-color-3);
-}
-
-/* ── Syntax dimming ── */
-.md-syntax {
-  color: var(--secondary-color-6, var(--secondary-color-5));
-  font-weight: 400;
-  font-style: normal;
-}
-
-/* ── Heading sizes (active + inactive) ── */
-.md-h1 { font-size: 1.875rem; font-weight: 700; line-height: 1.3; margin: 0.5em 0 0.25em; }
-.md-h2 { font-size: 1.5rem;   font-weight: 650; line-height: 1.35; margin: 0.45em 0 0.2em; }
-.md-h3 { font-size: 1.25rem;  font-weight: 600; line-height: 1.4; margin: 0.4em 0 0.15em; }
-.md-h4 { font-size: 1.125rem; font-weight: 600; line-height: 1.45; margin: 0.35em 0 0.1em; }
-.md-h5 { font-size: 1rem;     font-weight: 600; line-height: 1.5; margin: 0.3em 0 0.1em; }
-.md-h6 { font-size: 0.875rem; font-weight: 600; line-height: 1.5; margin: 0.3em 0 0.1em; }
-
-/* ── Paragraph ── */
-.md-p { margin: 0.25em 0; }
-
-/* ── Code block ── */
-.md-code {
-  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
-  font-size: 0.875rem;
-  background: var(--primary-color-3);
-  border-radius: 6px;
-  padding: 0.75em 1em;
-  margin: 0.5em 0;
-  overflow-x: auto;
-}
-
-/* ── Block quote ── */
-.md-blockquote {
-  border-left: 3px solid var(--secondary-color-6, var(--secondary-color-5));
-  padding-left: 1em;
-  color: var(--secondary-color-5);
-  font-style: italic;
-  margin: 0.5em 0;
-}
-
-/* ── List item ── */
-.md-li {
-  padding-left: 1.5em;
-  margin: 0.15em 0;
-}
-
-/* ── Math block ── */
-.md-math-block {
-  text-align: center;
-  margin: 0.75em 0;
-  padding: 0.5em 0;
-}
-
-/* ── Thematic break ── */
-.md-hr {
-  margin: 1em 0;
-}
-.md-hr hr {
-  border: none;
-  border-top: 1px solid var(--primary-color-6);
-}
-
-/* ── Table ── */
-.md-table {
-  margin: 0.5em 0;
-  overflow-x: auto;
-}
-
-/* ── Rendered HTML within inactive blocks ── */
-.md-block-inactive h1,
-.md-block-inactive h2,
-.md-block-inactive h3,
-.md-block-inactive h4,
-.md-block-inactive h5,
-.md-block-inactive h6 {
-  margin: 0;
-  padding: 0;
-  font-size: inherit;
-  font-weight: inherit;
-  line-height: inherit;
-}
-
-.md-block-inactive p {
-  margin: 0;
-  padding: 0;
-}
-
-.md-block-inactive strong {
-  font-weight: 700;
-}
-
-.md-block-inactive em {
-  font-style: italic;
-}
-
-.md-block-inactive del {
-  text-decoration: line-through;
-}
-
-.md-block-inactive code {
-  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
-  font-size: 0.875em;
-  background: var(--primary-color-3);
-  padding: 0.15em 0.4em;
-  border-radius: 4px;
-}
-
-.md-block-inactive pre {
-  margin: 0;
-}
-.md-block-inactive pre code {
-  display: block;
-  padding: 0;
-  background: none;
-}
-
-.md-block-inactive a {
-  color: var(--accent-color, #3b82f6);
-  text-decoration: underline;
-}
-
-.md-block-inactive blockquote {
-  margin: 0;
-  padding-left: 1em;
-  border-left: 3px solid var(--secondary-color-6, var(--secondary-color-5));
-  color: var(--secondary-color-5);
-  font-style: italic;
-}
-
-.md-block-inactive ul,
-.md-block-inactive ol {
-  margin: 0;
-  padding-left: 1.5em;
-}
-
-.md-block-inactive li {
-  margin: 0.1em 0;
-}
-
-.md-block-inactive table {
-  border-collapse: collapse;
-  width: 100%;
-}
-.md-block-inactive th,
-.md-block-inactive td {
-  border: 1px solid var(--primary-color-6);
-  padding: 0.4em 0.75em;
-  text-align: left;
-}
-.md-block-inactive th {
-  font-weight: 600;
-  background: var(--primary-color-3);
-}
-
-.md-block-inactive img {
-  max-width: 100%;
-  border-radius: 4px;
+/* Ensure the CM6 editor fills its container */
+.cm-wrapper .cm-editor {
+  height: 100%;
 }
 
 /* ── KaTeX overrides ── */
-.math-inline .katex {
+.cm-katex-inline .katex {
   font-size: 1.05em;
 }
 
-.math-display {
-  margin: 0;
+.cm-katex-display {
+  margin: 0.75em 0;
+  padding: 0.5em 0;
+  text-align: center;
 }
-.math-display .katex-display {
+.cm-katex-display .katex-display {
   margin: 0;
-}
-
-/* Active block inline formatting (still styled even with visible syntax) */
-.md-block-active strong { font-weight: 700; }
-.md-block-active em { font-style: italic; }
-.md-block-active del { text-decoration: line-through; }
-.md-block-active code {
-  font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
-  font-size: 0.875em;
-  background: var(--primary-color-3);
-  padding: 0.1em 0.3em;
-  border-radius: 3px;
 }
 
 } /* end @layer components */
