@@ -76,6 +76,14 @@ function buildDecorations(state) {
   // Collect all decorations in an array, then sort by from position
   const decos = [];
 
+  // Detect frontmatter range before tree iteration so we can skip
+  // HorizontalRule nodes that fall inside it (the first --- is parsed
+  // as a thematic break by the Lezer Markdown parser).
+  const docText = state.doc.toString();
+  const fmRegex = /^---\n([\s\S]*?)\n---/;
+  const fmMatch = docText.match(fmRegex);
+  const fmRange = fmMatch ? { from: 0, to: fmMatch[0].length } : null;
+
   tree.iterate({
     enter(node) {
       const { name, from, to } = node;
@@ -417,6 +425,10 @@ function buildDecorations(state) {
 
       // --- HorizontalRule (ThematicBreak) ---
       if (name === "HorizontalRule") {
+        // Skip if inside frontmatter range (first --- is not a real HR)
+        if (fmRange && from >= fmRange.from && to <= fmRange.to) {
+          return false;
+        }
         const cursorInside = cursorOnSameLine(state, from, to);
         if (cursorInside) {
           decos.push({
@@ -502,7 +514,7 @@ function buildDecorations(state) {
 
   // Also handle display math blocks ($$...$$) that may not be in the syntax tree
   const doc = state.doc;
-  const text = doc.toString();
+  const text = docText;
   const mathBlockRegex = /^\$\$\s*\n([\s\S]*?)\n\$\$\s*$/gm;
   let match;
   while ((match = mathBlockRegex.exec(text)) !== null) {
@@ -547,60 +559,46 @@ function buildDecorations(state) {
   }
 
   // Handle YAML frontmatter at document start (---\n...\n---)
-  {
-    const fmRegex = /^---\n([\s\S]*?)\n---/;
-    const fmMatch = text.match(fmRegex);
-    if (fmMatch) {
-      const fmFrom = 0;
-      const fmTo = fmMatch[0].length;
-      const yaml = fmMatch[1];
+  // Reuse fmMatch/fmRange detected before tree iteration
+  if (fmMatch) {
+    const fmFrom = fmRange.from;
+    const fmTo = fmRange.to;
+    const yaml = fmMatch[1];
 
-      // Check it's not already handled by another decoration
-      let fmHandled = false;
-      for (const d of decos) {
-        if (d.from <= fmFrom && d.to >= fmTo) {
-          fmHandled = true;
-          break;
-        }
+    const cursorInside = cursorOnSameLine(state, fmFrom, fmTo);
+    if (cursorInside) {
+      // Show raw YAML with dimmed --- delimiters
+      const firstLine = doc.lineAt(fmFrom);
+      const lastLine = doc.lineAt(fmTo);
+      decos.push({
+        from: firstLine.from,
+        to: firstLine.to,
+        deco: Decoration.mark({ class: "cm-md-syntax" }),
+      });
+      if (firstLine.number !== lastLine.number) {
+        decos.push({
+          from: lastLine.from,
+          to: lastLine.to,
+          deco: Decoration.mark({ class: "cm-md-syntax" }),
+        });
       }
-
-      if (!fmHandled) {
-        const cursorInside = cursorOnSameLine(state, fmFrom, fmTo);
-        if (cursorInside) {
-          // Show raw YAML with dimmed --- delimiters
-          const firstLine = doc.lineAt(fmFrom);
-          const lastLine = doc.lineAt(fmTo);
-          decos.push({
-            from: firstLine.from,
-            to: firstLine.to,
-            deco: Decoration.mark({ class: "cm-md-syntax" }),
-          });
-          if (firstLine.number !== lastLine.number) {
-            decos.push({
-              from: lastLine.from,
-              to: lastLine.to,
-              deco: Decoration.mark({ class: "cm-md-syntax" }),
-            });
-          }
-          // Style intermediate lines
-          const startLine = firstLine.number;
-          const endLine = lastLine.number;
-          for (let ln = startLine; ln <= endLine; ln++) {
-            const line = doc.line(ln);
-            decos.push({
-              from: line.from,
-              to: line.from,
-              deco: Decoration.line({ class: "cm-md-frontmatter-raw" }),
-            });
-          }
-        } else {
-          decos.push({
-            from: fmFrom,
-            to: fmTo,
-            deco: Decoration.replace({ widget: new FrontmatterWidget(yaml) }),
-          });
-        }
+      // Style intermediate lines
+      const startLine = firstLine.number;
+      const endLine = lastLine.number;
+      for (let ln = startLine; ln <= endLine; ln++) {
+        const line = doc.line(ln);
+        decos.push({
+          from: line.from,
+          to: line.from,
+          deco: Decoration.line({ class: "cm-md-frontmatter-raw" }),
+        });
       }
+    } else {
+      decos.push({
+        from: fmFrom,
+        to: fmTo,
+        deco: Decoration.replace({ widget: new FrontmatterWidget(yaml) }),
+      });
     }
   }
 

@@ -81,7 +81,9 @@ pub fn LoginButton(
                     }
                     #[cfg(not(target_arch = "wasm32"))]
                     {
-                        let _ = url;
+                        if let Err(e) = open::that(&url) {
+                            tracing::error!("Failed to open browser: {}", e);
+                        }
                     }
                 }
                 Err(e) => {

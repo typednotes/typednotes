@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use views::{Notes, NoteDetail, Settings, SidebarLayout};
+use views::{Login, Notes, NoteDetail, Register, Settings, SidebarLayout};
 
 mod views;
 
@@ -8,6 +8,10 @@ mod views;
 enum Route {
     #[route("/")]
     Root {},
+    #[route("/login")]
+    Login {},
+    #[route("/register")]
+    Register {},
     #[layout(SidebarLayout)]
         #[route("/notes")]
         Notes {},
@@ -18,14 +22,13 @@ enum Route {
 }
 
 fn main() {
+    dioxus::fullstack::set_server_url("https://typednotes.org");
     dioxus::launch(App);
 }
 
 #[component]
 fn App() -> Element {
     use_context_provider(|| Signal::new(ui::ActivityLog::default()));
-    // Provide a dummy auth state so ui::use_auth() works without AuthProvider
-    use_context_provider(|| Signal::new(ui::AuthState { user: None, loading: false }));
 
     // Theme context: None = system, Some("dark"), Some("light")
     let mut theme: ui::ThemeSignal = use_context_provider(|| Signal::new(Option::<String>::None));
@@ -36,15 +39,27 @@ fn App() -> Element {
     rsx! {
         document::Link { rel: "stylesheet", href: ui::TAILWIND_CSS }
         document::Link { rel: "stylesheet", href: ui::DX_COMPONENTS_CSS }
-        ui::components::ToastProvider {
-            Router::<Route> {}
+        ui::AuthProvider {
+            ui::components::ToastProvider {
+                Router::<Route> {}
+            }
         }
     }
 }
 
 #[component]
 fn Root() -> Element {
+    let auth = ui::use_auth();
     let nav = use_navigator();
-    nav.replace(Route::Notes {});
+
+    // Redirect based on auth state
+    if !auth().loading {
+        if auth().user.is_some() {
+            nav.replace(Route::Notes {});
+        } else {
+            nav.replace(Route::Login {});
+        }
+    }
+
     rsx! {}
 }

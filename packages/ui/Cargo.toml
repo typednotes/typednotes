@@ -19,6 +19,7 @@ gloo-timers = { version = "0.3", features = ["futures"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 dirs = "6"
+open = "5"
 
 [features]
 server = ["api/server"]
