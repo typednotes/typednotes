@@ -103,19 +103,22 @@ pub fn SettingsView(
 
             sync_log.write().push(format!("[{}] Pulling from remote...", current_time()));
             match api::pull_notes().await {
-                Ok(remote_files) => {
-                    let count = remote_files.len();
+                Ok(result) => {
+                    let count = result.files.len();
                     sync_log.write().push(format!("[{}] Received {count} files from remote", current_time()));
 
                     let user_id = auth().user.as_ref().map(|u| u.id.clone());
                     let repo = make_repo_for_user(user_id.as_deref());
-                    for file in &remote_files {
+                    for file in &result.files {
                         let ext = file.path.rsplit('.').next().unwrap_or("md");
                         let note_type = store::models::note_type_from_ext(ext);
                         let stem = file.path.trim_end_matches(&format!(".{ext}"));
                         repo.write_note(stem, &file.content, note_type).await;
                     }
-                    if !remote_files.is_empty() {
+                    for ns in &result.namespaces {
+                        repo.create_namespace(ns).await;
+                    }
+                    if !result.files.is_empty() || !result.namespaces.is_empty() {
                         tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
                     }
                     sync_log.write().push(format!("[{}] Sync complete: {count} notes imported", current_time()));

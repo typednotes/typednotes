@@ -59,23 +59,26 @@ pub fn NoteDetailView(
                 spawn(async move {
                     log_activity(&mut activity_log, LogLevel::Info, &format!("Pulling latest for {path}..."));
                     match api::pull_notes().await {
-                        Ok(remote_files) => {
+                        Ok(result) => {
                             let user_id = auth().user.as_ref().map(|u| u.id.clone());
                             let repo = make_repo_for_user(user_id.as_deref());
-                            for file in &remote_files {
+                            for file in &result.files {
                                 let ext = file.path.rsplit('.').next().unwrap_or("md");
                                 let note_type = store::models::note_type_from_ext(ext);
                                 let stem = file.path.trim_end_matches(&format!(".{ext}"));
                                 repo.write_note(stem, &file.content, note_type).await;
                             }
-                            if !remote_files.is_empty() {
+                            for ns in &result.namespaces {
+                                repo.create_namespace(ns).await;
+                            }
+                            if !result.files.is_empty() || !result.namespaces.is_empty() {
                                 // Guard: only update if still on the same note
                                 if load_generation() != gen { return; }
                                 current_note.set(repo.get_note(&path).await);
                                 let user_id = auth().user.as_ref().map(|u| u.id.clone());
                                 tree.set(NoteTree::refresh_for(user_id.as_deref()).await);
                             }
-                            log_activity(&mut activity_log, LogLevel::Success, &format!("Pulled {} notes", remote_files.len()));
+                            log_activity(&mut activity_log, LogLevel::Success, &format!("Pulled {} notes", result.files.len()));
                         }
                         Err(e) => {
                             log_activity(&mut activity_log, LogLevel::Warning, &format!("Pull: {e}"));

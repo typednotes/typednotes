@@ -148,6 +148,56 @@ export const typedNotesTheme = EditorView.theme({
     borderRadius: "3px",
   },
 
+  // Table
+  ".cm-md-table-wrap": {
+    display: "block",
+    margin: "0.5em 0",
+    overflowX: "auto",
+  },
+  ".cm-md-table": {
+    borderCollapse: "collapse",
+    width: "100%",
+    fontSize: "0.95em",
+  },
+  ".cm-md-table th": {
+    borderBottom: "2px solid var(--primary-color-6, #d1d5db)",
+    padding: "0.4em 0.75em",
+    textAlign: "left",
+    fontWeight: "600",
+    backgroundColor: "var(--primary-color-3, #f3f4f6)",
+  },
+  ".cm-md-table td": {
+    borderBottom: "1px solid var(--primary-color-5, #e5e7eb)",
+    padding: "0.35em 0.75em",
+  },
+  ".cm-md-table tbody tr:hover": {
+    backgroundColor: "var(--primary-color-2, #f9fafb)",
+  },
+  ".cm-md-table-raw": {
+    fontFamily: 'ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace',
+    fontSize: "0.9em",
+  },
+
+  // Frontmatter
+  ".cm-frontmatter-badge": {
+    display: "block",
+    margin: "0.25em 0",
+  },
+  ".cm-frontmatter-chip": {
+    display: "inline-block",
+    fontSize: "0.75em",
+    fontFamily: 'ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace',
+    color: "var(--secondary-color-6, var(--secondary-color-5))",
+    backgroundColor: "var(--primary-color-3, #f3f4f6)",
+    padding: "0.15em 0.5em",
+    borderRadius: "4px",
+  },
+  ".cm-md-frontmatter-raw": {
+    fontFamily: 'ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace',
+    fontSize: "0.875em",
+    color: "var(--secondary-color-6, var(--secondary-color-5))",
+  },
+
   // KaTeX widget
   ".cm-katex-widget": {
     display: "inline-block",

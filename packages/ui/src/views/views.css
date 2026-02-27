@@ -152,8 +152,31 @@
   flex-direction: column;
   height: 100%;
   width: 100%;
-  padding: 1.5rem;
   color: var(--secondary-color-4);
+}
+
+.editor-header {
+  padding: 1.5rem 1.5rem 0;
+}
+
+.editor-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 52rem;
+  margin-left: auto;
+  margin-right: auto;
+  padding: 1rem 1.5rem 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .editor-header {
+    padding: 2rem 3rem 0;
+  }
+  .editor-content {
+    padding: 1rem 3rem 2rem;
+  }
 }
 
 .editor-unsaved {

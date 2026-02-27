@@ -70,6 +70,11 @@ env:
 	@sops decrypt secrets.yaml | yq -r '"ENCRYPTION_KEY=" + .encryption_key' >> .env
 	@echo "Generated .env from secrets.yaml (dev)"
 
+# CodeMirror 6 bundle
+.PHONY: cm6
+cm6:
+	cd packages/ui/cm6-bundle && npm install && npm run build
+
 # Tailwind CSS
 .PHONY: tailwind
 tailwind:

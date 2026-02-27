@@ -46,24 +46,40 @@ pub fn MarkdownEditor(
         format!("cm-editor-{n}")
     });
 
-    // Track whether we initialized the CM6 instance
+    // Track whether we initialized the CM6 instance (requires both CM6 bundle + KaTeX/hljs)
     let mut initialized = use_signal(|| false);
+    let mut cm6_ready = use_signal(|| false);
+    let mut libs_ready = use_signal(|| false);
     // Track latest content to avoid echo loops
     let mut last_pushed = use_signal(|| String::new());
 
-    // ── Load KaTeX + highlight.js CSS + JS once ──
-    use_effect(|| {
+    // ── Load KaTeX + highlight.js CSS + JS once (with onload tracking) ──
+    use_effect(move || {
         let js = format!(
             r#"(function() {{
+                var pending = 0;
+                function checkDone() {{
+                    pending--;
+                    if (pending <= 0) dioxus.send(true);
+                }}
+                if (typeof katex !== 'undefined' && typeof hljs !== 'undefined') {{
+                    dioxus.send(true);
+                    return;
+                }}
                 if (!document.getElementById('katex-css')) {{
                     var link = document.createElement('link');
                     link.id = 'katex-css';
                     link.rel = 'stylesheet';
                     link.href = '{KATEX_CSS}';
                     document.head.appendChild(link);
+                }}
+                if (!document.getElementById('katex-js')) {{
+                    pending++;
                     var script = document.createElement('script');
                     script.id = 'katex-js';
                     script.src = '{KATEX_JS}';
+                    script.onload = checkDone;
+                    script.onerror = checkDone;
                     document.head.appendChild(script);
                 }}
                 if (!document.getElementById('hljs-css')) {{
@@ -72,14 +88,25 @@ pub fn MarkdownEditor(
                     link2.rel = 'stylesheet';
                     link2.href = '{HLJS_CSS}';
                     document.head.appendChild(link2);
+                }}
+                if (!document.getElementById('hljs-js')) {{
+                    pending++;
                     var script2 = document.createElement('script');
                     script2.id = 'hljs-js';
                     script2.src = '{HLJS_JS}';
+                    script2.onload = checkDone;
+                    script2.onerror = checkDone;
                     document.head.appendChild(script2);
                 }}
+                if (pending === 0) dioxus.send(true);
             }})();"#,
         );
-        document::eval(&js);
+        spawn(async move {
+            let mut eval = document::eval(&js);
+            if let Ok(true) = eval.recv::<bool>().await {
+                libs_ready.set(true);
+            }
+        });
     });
 
     // ── Load CM6 bundle script once ──
@@ -96,9 +123,16 @@ pub fn MarkdownEditor(
         spawn(async move {
             let mut eval = document::eval(js);
             if let Ok(true) = eval.recv::<bool>().await {
-                initialized.set(true);
+                cm6_ready.set(true);
             }
         });
+    });
+
+    // ── Set initialized only when both CM6 bundle and KaTeX/hljs are loaded ──
+    use_effect(move || {
+        if cm6_ready() && libs_ready() && !initialized() {
+            initialized.set(true);
+        }
     });
 
     // ── Initialize CM6 editor once bundle is loaded ──

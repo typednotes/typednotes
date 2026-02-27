@@ -28,6 +28,9 @@ make env
 make migrate-run       # Run pending migrations
 make migrate-revert    # Revert last migration
 
+# Build CodeMirror 6 bundle (after editing packages/ui/cm6-bundle/src/)
+make cm6
+
 # Infrastructure (Scaleway via OpenTofu)
 make infra-up      # Deploy and save outputs to secrets.yaml
 make infra-down    # Destroy infrastructure

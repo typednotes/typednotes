@@ -2,7 +2,37 @@ import { EditorState } from "@codemirror/state";
 import { EditorView, placeholder as cmPlaceholder, keymap } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
-import { Strikethrough } from "@lezer/markdown";
+import { Strikethrough, Table } from "@lezer/markdown";
+
+// Custom InlineMath parser extension for $...$ syntax
+const InlineMathExtension = {
+  defineNodes: ["InlineMath"],
+  parseInline: [{
+    name: "InlineMath",
+    parse(cx, next, pos) {
+      if (next !== 36) return -1; // not $
+      // Skip $$ (display math)
+      if (pos + 1 < cx.end && cx.char(pos + 1) === 36) return -1;
+      // Don't start after another $
+      if (pos > cx.offset && cx.char(pos - 1) === 36) return -1;
+      let end = pos + 1;
+      while (end < cx.end) {
+        const ch = cx.char(end);
+        if (ch === 36) { // closing $
+          // Must have content between delimiters
+          if (end > pos + 1) {
+            cx.addElement(cx.elt("InlineMath", pos, end + 1));
+            return end + 1;
+          }
+          return -1;
+        }
+        if (ch === 10) return -1; // no newlines in inline math
+        end++;
+      }
+      return -1;
+    }
+  }]
+};
 import { typedNotesTheme } from "./theme.js";
 import { livePreviewPlugin } from "./live-preview.js";
 
@@ -30,10 +60,10 @@ function createEditor(container, options = {}) {
     history(),
     keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
 
-    // Markdown language with GFM strikethrough
+    // Markdown language with GFM extensions
     markdown({
       base: markdownLanguage,
-      extensions: [Strikethrough],
+      extensions: [Strikethrough, Table, InlineMathExtension],
     }),
 
     // Our theme

@@ -437,6 +437,13 @@ pub struct RemoteFile {
     pub content: String,
 }
 
+/// Result of pulling from the git remote: notes + namespaces.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullResult {
+    pub files: Vec<RemoteFile>,
+    pub namespaces: Vec<String>,
+}
+
 /// Helper: get user_id, remote URL, decrypted SSH key, and branch from the session + DB.
 #[cfg(feature = "server")]
 async fn get_user_git_context(
@@ -688,10 +695,10 @@ pub async fn sync_namespace(path: String) -> Result<(), ServerFnError> {
     Err(ServerFnError::new("Server only"))
 }
 
-/// Pull all notes from the git remote.
+/// Pull all notes and namespaces from the git remote.
 #[cfg(feature = "server")]
 #[get("/api/git/pull", session: tower_sessions::Session)]
-pub async fn pull_notes() -> Result<Vec<RemoteFile>, ServerFnError> {
+pub async fn pull_notes() -> Result<PullResult, ServerFnError> {
     let (_user_id, remote_url, ssh_key_pem, branch) = get_user_git_context(&session).await?;
 
     let mem = store::MemoryStore::new();
@@ -707,18 +714,23 @@ pub async fn pull_notes() -> Result<Vec<RemoteFile>, ServerFnError> {
 
     // List notes from in-memory repo
     let notes = repo.list_notes().await;
+    // List namespaces (includes empty directories with .gitkeep)
+    let namespaces = repo.list_namespaces().await;
 
-    Ok(notes
-        .into_iter()
-        .map(|n| RemoteFile {
-            path: n.path,
-            content: n.note,
-        })
-        .collect())
+    Ok(PullResult {
+        files: notes
+            .into_iter()
+            .map(|n| RemoteFile {
+                path: n.path,
+                content: n.note,
+            })
+            .collect(),
+        namespaces: namespaces.into_iter().map(|ns| ns.path).collect(),
+    })
 }
 
 #[cfg(not(feature = "server"))]
 #[get("/api/git/pull")]
-pub async fn pull_notes() -> Result<Vec<RemoteFile>, ServerFnError> {
+pub async fn pull_notes() -> Result<PullResult, ServerFnError> {
     Err(ServerFnError::new("Server only"))
 }

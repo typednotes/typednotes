@@ -71,9 +71,9 @@ pub fn NoteEditor(
         div {
             class: "editor-container",
 
-            // Title row: editable name + unsaved indicator + delete
+            // Title row: full-width header
             div {
-                class: "flex items-start justify-between gap-4 mb-4",
+                class: "editor-header flex items-start justify-between gap-4",
                 Input {
                     class: "flex-1 text-2xl font-bold border-none bg-transparent p-0 shadow-none focus:ring-0",
                     r#type: "text",
@@ -98,32 +98,35 @@ pub fn NoteEditor(
                 }
             }
 
-            // Content area — fills remaining space; parent pane scrolls
-            if note.r#type == "markdown" {
-                MarkdownEditor {
-                    content: content,
-                    on_change: move |_: String| {
-                        dirty.set(true);
-                    },
-                    on_blur: move |_| {
-                        if dirty() {
-                            on_save.call(content());
-                            dirty.set(false);
-                        }
-                    },
-                    placeholder: "Start writing...".to_string(),
-                }
-            } else {
-                Textarea {
-                    variant: TextareaVariant::Ghost,
-                    class: "flex-1 w-full p-0 font-sans text-base leading-[1.7] resize-none",
-                    value: content(),
-                    placeholder: "Start writing...",
-                    oninput: move |evt: FormEvent| {
-                        content.set(evt.value());
-                        dirty.set(true);
-                    },
-                    onblur: handle_blur,
+            // Content area — centered with max-width for readability
+            div {
+                class: "editor-content",
+                if note.r#type == "markdown" {
+                    MarkdownEditor {
+                        content: content,
+                        on_change: move |_: String| {
+                            dirty.set(true);
+                        },
+                        on_blur: move |_| {
+                            if dirty() {
+                                on_save.call(content());
+                                dirty.set(false);
+                            }
+                        },
+                        placeholder: "Start writing...".to_string(),
+                    }
+                } else {
+                    Textarea {
+                        variant: TextareaVariant::Ghost,
+                        class: "flex-1 w-full p-0 font-sans text-base leading-[1.7] resize-none",
+                        value: content(),
+                        placeholder: "Start writing...",
+                        oninput: move |evt: FormEvent| {
+                            content.set(evt.value());
+                            dirty.set(true);
+                        },
+                        onblur: handle_blur,
+                    }
                 }
             }
         }

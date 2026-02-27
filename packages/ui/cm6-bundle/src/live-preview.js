@@ -7,6 +7,8 @@ import { RangeSetBuilder, StateField } from "@codemirror/state";
 import { syntaxTree } from "@codemirror/language";
 import { KatexWidget } from "./katex-widget.js";
 import { HighlightWidget } from "./highlight-widget.js";
+import { TableWidget } from "./table-widget.js";
+import { FrontmatterWidget } from "./frontmatter-widget.js";
 
 /**
  * CM6 StateField for live markdown preview.
@@ -449,6 +451,32 @@ function buildDecorations(state) {
         return;
       }
 
+      // --- Table (GFM) ---
+      if (name === "Table") {
+        const cursorInside = cursorOnSameLine(state, from, to);
+        if (!cursorInside) {
+          const text = state.doc.sliceString(from, to);
+          decos.push({
+            from,
+            to,
+            deco: Decoration.replace({ widget: new TableWidget(text) }),
+          });
+        } else {
+          // Cursor inside: show raw with dimmed pipes
+          const startLine = state.doc.lineAt(from).number;
+          const endLine = state.doc.lineAt(Math.min(to, state.doc.length)).number;
+          for (let ln = startLine; ln <= endLine; ln++) {
+            const line = state.doc.line(ln);
+            decos.push({
+              from: line.from,
+              to: line.from,
+              deco: Decoration.line({ class: "cm-md-table-raw" }),
+            });
+          }
+        }
+        return false;
+      }
+
       // --- Inline Math ($...$) ---
       if (name === "InlineMath") {
         const cursorInside = cursorInRange(state, from, to);
@@ -518,6 +546,64 @@ function buildDecorations(state) {
     }
   }
 
+  // Handle YAML frontmatter at document start (---\n...\n---)
+  {
+    const fmRegex = /^---\n([\s\S]*?)\n---/;
+    const fmMatch = text.match(fmRegex);
+    if (fmMatch) {
+      const fmFrom = 0;
+      const fmTo = fmMatch[0].length;
+      const yaml = fmMatch[1];
+
+      // Check it's not already handled by another decoration
+      let fmHandled = false;
+      for (const d of decos) {
+        if (d.from <= fmFrom && d.to >= fmTo) {
+          fmHandled = true;
+          break;
+        }
+      }
+
+      if (!fmHandled) {
+        const cursorInside = cursorOnSameLine(state, fmFrom, fmTo);
+        if (cursorInside) {
+          // Show raw YAML with dimmed --- delimiters
+          const firstLine = doc.lineAt(fmFrom);
+          const lastLine = doc.lineAt(fmTo);
+          decos.push({
+            from: firstLine.from,
+            to: firstLine.to,
+            deco: Decoration.mark({ class: "cm-md-syntax" }),
+          });
+          if (firstLine.number !== lastLine.number) {
+            decos.push({
+              from: lastLine.from,
+              to: lastLine.to,
+              deco: Decoration.mark({ class: "cm-md-syntax" }),
+            });
+          }
+          // Style intermediate lines
+          const startLine = firstLine.number;
+          const endLine = lastLine.number;
+          for (let ln = startLine; ln <= endLine; ln++) {
+            const line = doc.line(ln);
+            decos.push({
+              from: line.from,
+              to: line.from,
+              deco: Decoration.line({ class: "cm-md-frontmatter-raw" }),
+            });
+          }
+        } else {
+          decos.push({
+            from: fmFrom,
+            to: fmTo,
+            deco: Decoration.replace({ widget: new FrontmatterWidget(yaml) }),
+          });
+        }
+      }
+    }
+  }
+
   // Sort decorations by from position (required by RangeSetBuilder)
   decos.sort((a, b) => {
     if (a.from !== b.from) return a.from - b.from;
@@ -559,6 +645,12 @@ const livePreviewField = StateField.define({
   },
   update(decos, tr) {
     if (tr.docChanged || tr.selection) {
+      return buildDecorations(tr.state);
+    }
+    // Rebuild when async syntax parsing completes (fixes formatting delay)
+    const oldTree = syntaxTree(tr.startState);
+    const newTree = syntaxTree(tr.state);
+    if (oldTree !== newTree) {
       return buildDecorations(tr.state);
     }
     return decos;
