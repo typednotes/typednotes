@@ -16,6 +16,23 @@ different places; and **build the usage ledger, buy the billing and tax engine**
 
 ---
 
+## 0. Documents
+
+This file holds **system-level decisions**: what we build, what we buy, and why. Per-service
+detail — types, schemas, and the specific properties each service proves — lives alongside it:
+
+- [`proof-strategy.md`](proof-strategy.md) — the six proof tiers, cross-cutting patterns, and
+  an honest account of what "provably correct" can and cannot mean here. **Read this first.**
+- [`services/`](services/) — one document per service, all answering the same eight questions:
+  [`idp`](services/idp.md) · [`core`](services/core.md) · [`broker`](services/broker.md) ·
+  [`ledger`](services/ledger.md) · [`agent`](services/agent.md) ·
+  [`secrets`](services/secrets.md) · [`web`](services/web.md)
+
+Schemas and Lean types are stated **once**, in the owning service document. Where this file
+used to carry them, it now points.
+
+---
+
 ## 1. Context and constraints
 
 | | |
@@ -176,45 +193,11 @@ The fear that usually pushes teams into building their own Keycloak is lock-in. 
 cure is about 30 lines of schema, not a new service: **the IdP's `sub` is a foreign key,
 never our identity.**
 
-```sql
-create table users (
-    id           uuid primary key default gen_random_uuid(),
-    email        citext not null unique,      -- for lookup and invites only
-    display_name text,
-    created_at   timestamptz not null default now(),
-    deleted_at   timestamptz
-);
+Schema: [`services/core.md`](services/core.md) §4 — `users`, `identities`, `orgs`,
+`memberships`.
 
--- One row per external login linked to a user. Lets us swap IdP, support
--- multiple IdPs at once, and merge accounts, without touching any other table.
-create table identities (
-    id            uuid primary key default gen_random_uuid(),
-    user_id       uuid not null references users(id) on delete cascade,
-    issuer        text not null,              -- e.g. 'https://id.typednotes.com'
-    subject       text not null,              -- the IdP's `sub`
-    last_login_at timestamptz,
-    created_at    timestamptz not null default now(),
-    unique (issuer, subject)
-);
-
-create table orgs (
-    id         uuid primary key default gen_random_uuid(),
-    slug       citext not null unique,
-    name       text not null,
-    created_at timestamptz not null default now()
-);
-
-create table memberships (
-    org_id   uuid not null references orgs(id) on delete cascade,
-    user_id  uuid not null references users(id) on delete cascade,
-    role     text not null check (role in ('owner','admin','member')),
-    added_at timestamptz not null default now(),
-    primary key (org_id, user_id)
-);
-```
-
-Every other table keys off `users.id` / `orgs.id`. Nothing downstream ever sees an
-issuer or a `sub`.
+Every other table keys off `users.id` / `orgs.id`. Nothing downstream ever sees an issuer
+or a `sub`.
 
 ### 3.4 Authorization
 
@@ -228,139 +211,24 @@ a large operational tax for little return.
 
 ### 3.5 Encoding and proof strategy
 
-#### Encode the frozen parts in types
+The engine encodes RFC requirements as **types with attached witnesses**, so illegal states
+are unrepresentable rather than rejected at runtime. Dependent typing pays off precisely
+where a specification is frozen, and OAuth 2.0 core and OIDC are frozen.
 
-Dependent typing pays off precisely where a specification is frozen, and OAuth 2.0 core
-and OIDC are frozen — we will not be iterating on RFC 6749. So the engine encodes RFC
-requirements as types with attached witnesses, making the illegal states unrepresentable
-rather than rejected at runtime. Four encodings carry most of the value.
+The tier vocabulary and the cross-cutting patterns are in
+[`proof-strategy.md`](proof-strategy.md); the engine's concrete types, theorems and
+non-goals are in [`services/idp.md`](services/idp.md) §5–7.
 
-**Indexed phases.** Single-use authorization codes stop being a theorem and become the
-absence of a constructor:
-
-```lean
-inductive Phase | init | authenticated | codeIssued | codeRedeemed | revoked
-
-inductive Step : Phase → Phase → Type where
-  | authenticate : Step .init          .authenticated
-  | issueCode    : Step .authenticated .codeIssued
-  | redeem       : Step .codeIssued    .codeRedeemed
-  -- no `Step .codeRedeemed _` exists → RFC 6749 §4.1.2 holds by construction
-```
-
-**Witness-carrying construction.** The RFC's preconditions become the constructor's
-arguments, so a token cannot be minted without them:
-
-```lean
-structure AccessToken (req : TokenRequest) where
-  grant    : Grant
-  pkceOk   : PkceVerified req grant
-  clientOk : req.clientId = grant.clientId
-  acrOk    : req.requiredAcr ≤ grant.acr
-  fresh    : grant.redemptions = 0
-```
-
-**`alg` pinned by index.** Key confusion and `alg: none` become type errors, not checks
-we might forget:
-
-```lean
-inductive Alg | RS256 | PS256   -- no `none` constructor exists
-structure Key (a : Alg)
-def sign   : Key a → Payload → Sig a
-def verify : Key a → Sig a → Payload → Bool
-```
-
-**Registered redirect URIs as a subtype.** `{u : Uri // u ∈ client.registered}` — trivial,
-and it retires a whole CVE class.
-
-#### Two structural consequences
-
-**Witnesses cross neither the wire nor the database.** Requests arrive as untrusted bytes
-and proofs are erased at runtime, so the indexed core is sandwiched between two total
-functions: a parser that checks once and returns the witnesses (*parse, don't validate*),
-and a reconstruction step that re-establishes invariants from persisted state. On
-serverless containers there is no in-memory continuity between `/authorize` and `/token`,
-so **reconstruction happens on every request** — and all of the security rests on those
-two boundaries, not on the elegant middle.
-
-Mitigation, and it is one we want anyway: make Postgres the **event log** and engine state
-a fold over it. Reconstruction is then our verified `step` replayed, rather than a second
-hand-written path that can silently disagree with it. (This is Zitadel's design.)
-
-**Index the engine, not the login module.** Indexed types propagate — changing `Phase`
-moves every signature. That is a fair price against a frozen RFC and a bad one against
-login UX we expect to iterate on. The §3.2 module boundary already falls exactly where
-this line belongs.
-
-#### What the tiers are
-
-Requirements sort into five tiers, and only the first three are types:
-
-| Tier | Mechanism | Example |
-|---|---|---|
-| **Type** | bad state unrepresentable | single-use codes, `alg` pinning, registered URIs |
-| **Witness** | proof as constructor argument | PKCE binding, client binding, ACR floor |
-| **Theorem** | trace property over `step` | refresh-family revocation, no token without prior auth |
-| **Conformance** | the only check on *faithfulness* | our reading of the RFC (§3.7) |
-| **Operational** | measurement | timing uniformity, constant-time, enumeration |
-
-The fourth tier exists because **we cannot prove our formalization faithfully reads the
-English.** The Aeneas report concedes the same of its own work — 2,827 lines of formal
-spec against 25,729 lines of prose, with "each formal spec faithfully captures its
-standard" sitting in the *trusted* base. Perfectly typed code can encode a confident
-misreading of §4.1.3. §3.7 is therefore not belt-and-braces: it is the only instrument
-that tests the formalization itself rather than testing against it.
-
-#### Theorem-tier properties
-
-Keep the engine core pure and total — `State`, `Event`, `Effect` as plain data, no `IO`:
-
-```lean
-def step : State → Event → State × List Effect
-```
-
-`IO` lives strictly outside, so every theorem below is about the shipping core. Prove over
-traces:
-
-- an authorization code is redeemable **at most once**;
-- a code is redeemable only by the `client_id` and PKCE challenge it was issued against;
-- replaying a refresh token revokes its **entire family**;
-- no token is issued below the session's required `acr`;
-- `redirect_uri` matching is exact and total — decidable equality, no prefix case;
-- `alg` is pinned per key: `alg = none` unrepresentable, no key-type confusion.
-
-The last two are types-not-theorems work: make the bad states unconstructible rather than
-rejected at runtime. Cheapest real wins available. Everything here is small and
-first-order — nothing like the crypto proof ratios in §3.1 — and all of it is
-`#guard`-testable before any proof is attempted.
-
-Note which of these have migrated upward: single-use codes and exact `redirect_uri`
-matching are **type**-tier above, and `alg` pinning likewise, so they need no theorem at
-all. What genuinely remains theorem-tier is refresh-family revocation and "no token
-without prior authentication", because both quantify over arbitrary traces rather than
-over a single transition.
-
-**Not provable, and must be handled operationally:**
-
-- **Constant-time.** Not expressible in Lean, and the RC runtime works against it. Route
-  secret comparison through the OpenSSL shim (`CRYPTO_memcmp`). Verified-crypto practice
-  concedes the same point: *"'constant-time' code is verified for correctness but not
-  leakage protection."*
-- **Timing uniformity** on login/registration/recovery — fixed-delay responses, tested by
-  measurement, not proof.
-- **Enumeration resistance** — uniform response bodies, reviewed by hand.
+One rule belongs here because it is an architectural constraint rather than a proof detail:
+**index the engine, not the login module.** Indexed types propagate, which is a fair price
+against a frozen RFC and a bad one against UX that changes weekly. The §3.2 module boundary
+falls exactly where this line belongs.
 
 ### 3.6 Known gaps in `linen`
 
-Facts established by reading the tree and sources, in build order:
-
-| Gap | Impact | Plan |
-|---|---|---|
-| **No CBOR, no COSE** | Blocks passkeys. (`Linen/CDP/Domains/WebAuthn.lean` is the Chrome DevTools domain for *driving* WebAuthn in tests, not a server verifier.) | Build in `linen`. Pure parsing over bytes — the best proof target in the system; `Data/Parser` is already there. |
-| **No password hashing** (no Argon2/bcrypt/scrypt/PBKDF2) | No password accounts | **Go passkey-only**, as rauthy does. Turns the gap into a design decision. Revisit only if a customer blocks on it. |
-| **`ES*` signing not implemented** (`JWS.lean`, RSA only) | id_tokens must be RS256 | Acceptable — RS256 is the most compatible choice. Add ES256 via the existing EVP shim later. |
-| **No TOTP** | No fallback second factor | Small; build if passkey-only proves too strict. |
-| **`Network/TLS` is thin** (`Context`, `Types`) | Low — serverless platform terminates TLS | Serve plain HTTP behind the platform. |
+Four gaps sit between us and a working IdP — no CBOR/COSE (blocks passkeys), no password
+hashing (argues for passkey-only), no `ES*` signing (RS256 is fine), no TOTP. Details,
+impact and plan per gap: [`services/idp.md`](services/idp.md) §2.
 
 ### 3.7 Conformance is the safety net
 
@@ -392,45 +260,22 @@ authority.**
 When a user triggers an agent run, `core` mints a **warrant**: a short-lived, narrowly
 scoped, auditable token stating exactly what the agent may do.
 
-**Use [Biscuit](https://www.biscuitsec.org/)** (Rust, Datalog-based, offline-verifiable).
-The decisive property is **attenuation**: a holder can narrow a token but never widen it.
-A multi-step agent spawning sub-tools hands each one a strictly weaker warrant, and no
-step can escalate — including a step whose reasoning has been hijacked.
+**Format: macaroon-style HMAC chains.** This supersedes an earlier decision to use
+[Biscuit](https://www.biscuitsec.org/): `linen` has no Biscuit, no Datalog, no Protobuf and
+**no Ed25519**, while HMAC-SHA256 is already in the JOSE shim. A macaroon chain gives the
+one property that mattered — attenuation without the root key, and caveats that cannot be
+removed because HMAC is not invertible.
 
-Alternatives: macaroons (same shape), or RFC 8693 token exchange with an `act` claim if
-we want plain JWTs that existing JWKS verification already handles. Biscuit wins on
-attenuation plus native Rust.
+What it gives up is third-party verification: only a root-key holder can verify. `broker` is
+the sole verifier and shares a database with `core`, so that is the right trade here. If it
+ever changes, adding `EVP_PKEY_ED25519` to `ffi/jose.c` is ~40 lines of C.
 
-Logical content of a warrant:
+Caveats are a **closed inductive type**, not an open Datalog — our checks are first-order
+predicates over finite sets, so evaluation is total by structural recursion and needs no
+termination proof.
 
-```
-// facts
-user("<users.id>");
-actor("agent");
-run("<runs.id>");
-org("<orgs.id>");
-expires_at(<unix_ts>);            // minutes, not hours
-
-// capabilities — explicit allowlist, no wildcards
-capability("gmail", "messages.read");
-capability("notion", "pages.read");
-capability("notion", "pages.write");
-
-// resource bounds
-resource_set("notion:database:<id>");
-
-// spend bounds
-budget_credits(2500);             // per-run cap
-
-// checks enforced at the broker
-check if time($t), $t < expires_at;
-check if capability($provider, $action);
-check if resource($r), resource_set($r);
-```
-
-Attenuation in practice: before calling a summarisation sub-tool, the agent appends a
-block dropping every `capability` except `notion:pages.read` and halving the budget. The
-sub-tool physically cannot write, regardless of what it decides to do.
+Full types, the attenuation theorem, and the witness chain that makes the chokepoint hold by
+typing: [`services/broker.md`](services/broker.md) §3–6.
 
 ### 4.2 The broker chokepoint
 
@@ -475,6 +320,9 @@ about:
 - no warrant grants access outside its `resource_set`;
 - total settled spend across a run never exceeds `budget_credits`.
 
+Details: [`services/agent.md`](services/agent.md) §5 for the run-level bound,
+[`services/core.md`](services/core.md) §6 for `mint_sound`.
+
 Attenuation monotonicity is **witness-tier** in the sense of §3.5 — an attenuation should
 only be constructible together with a proof that it narrows. Reuse the trace layer built
 for the engine core rather than building a second one.
@@ -497,28 +345,7 @@ Build the ledger. Buy everything downstream of it.
 Append-only, written by `broker` at the egress and inference call sites. **Stripe is
 never the source of truth for usage.**
 
-```sql
-create table usage_events (
-    id              uuid primary key default gen_random_uuid(),
-    org_id          uuid not null references orgs(id),
-    user_id         uuid references users(id),      -- null for org-level system usage
-    run_id          uuid,
-    event_type      text not null,                  -- 'inference' | 'egress' | ...
-    provider        text not null,                  -- 'mistral' | 'baseten' | 'notion'
-    model           text,
-    input_tokens    bigint,
-    output_tokens   bigint,
-    cost_micros     bigint not null default 0,      -- what WE paid
-    price_micros    bigint not null default 0,      -- what we CHARGED
-    credits         bigint not null default 0,      -- billing unit
-    idempotency_key text not null,
-    occurred_at     timestamptz not null default now(),
-    unique (idempotency_key)
-);
-
-create index on usage_events (org_id, occurred_at);
-create index on usage_events (run_id);
-```
+Schema: [`services/ledger.md`](services/ledger.md) §4.
 
 Four things that are painful to retrofit:
 
@@ -539,33 +366,8 @@ For agent workloads this is the important decision. **A runaway loop on postpaid
 is a bill we cannot collect from a customer who is furious about it.** Prepaid credits
 with a hard check at the chokepoint bound the damage on both sides.
 
-```sql
--- Append-only ledger. Balance is derived; cache it if it ever becomes hot.
-create table credit_ledger (
-    id          uuid primary key default gen_random_uuid(),
-    org_id      uuid not null references orgs(id),
-    delta       bigint not null,               -- + purchase/grant, − settlement
-    reason      text not null,                 -- 'purchase' | 'grant' | 'usage' | 'refund'
-    run_id      uuid,
-    usage_event uuid references usage_events(id),
-    created_at  timestamptz not null default now()
-);
-
-create index on credit_ledger (org_id, created_at);
-
--- In-flight holds, so concurrent runs cannot each spend the same balance.
-create table credit_holds (
-    id         uuid primary key default gen_random_uuid(),
-    org_id     uuid not null references orgs(id),
-    run_id     uuid not null,
-    amount     bigint not null,
-    state      text not null check (state in ('held','settled','released')),
-    created_at timestamptz not null default now(),
-    expires_at timestamptz not null
-);
-
-create index on credit_holds (org_id) where state = 'held';
-```
+Schema: [`services/ledger.md`](services/ledger.md) §4 — `credit_ledger`, `credit_holds`,
+and the atomic conditional insert that makes the balance check race-free.
 
 Flow per run: `core` reserves a hold for the warrant's `budget_credits`; `broker`
 decrements against the hold as calls complete; on run end the hold settles to actual
@@ -665,11 +467,12 @@ in parallel — but it must be resolved before step 8.
 
 ## 8. Open questions
 
-- **Do `core` and `broker` also move to Lean 4?** §2 and §4 still specify Rust for them,
-  and `typednotes/secrets` is Rust and shipped. The §3.1 reasoning is specific to the IdP
-  (provable pure core, shared trace layer) and does not automatically transfer to a vault
-  or an egress proxy — `broker` in particular is concurrency- and I/O-bound, which is
-  where Lean is weakest. Decide deliberately rather than by drift.
+- **Does `broker` stay in Lean 4?** `core` and `ledger` are decision-shaped and suit Lean;
+  `secrets` deliberately stays Rust ([`services/secrets.md`](services/secrets.md) §2, for
+  constant-time reasons that are central to a vault rather than incidental). `broker` is the
+  undecided one: it is the most concurrency-bound service, and Lean's scheduler is not Tokio.
+  **Settle it by load-testing a stub that sleeps 300 ms**, not by argument —
+  [`services/broker.md`](services/broker.md) §7. A day's work against a rewrite.
 - **Passkey-only at launch?** (§3.6) It removes password hashing, recovery-by-password and
   most enumeration surface, but it will lose some users and needs a real account-recovery
   story — which is the #1 takeover vector regardless of credential type.
