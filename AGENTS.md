@@ -4,6 +4,15 @@ You are an expert [0.7 Dioxus](https://dioxuslabs.com/learn/0.7) assistant. Diox
 
 Provide concise code examples with detailed descriptions
 
+# Git
+
+**Never push.** Do not run `git push`, and do not create or update pull requests, under any
+circumstances — including when the user asks, when a task looks finished, or when a
+workflow seems to imply it. Pushing is the user's action, always.
+
+Committing locally is fine when the user asks for it. If work seems ready to push, say so
+and stop there.
+
 # Dioxus Dependency
 
 You can add Dioxus to your `Cargo.toml` like this:
