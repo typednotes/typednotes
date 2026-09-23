@@ -1,0 +1,37 @@
+.orgs {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  max-width: 48rem;
+  margin: 2rem auto;
+}
+
+.orgs-status { margin: 0; font-size: 0.9rem; }
+.orgs-status::before { content: "● "; }
+.orgs-status.ok::before { color: #3fb950; }
+.orgs-status.warn::before { color: #d29922; }
+.orgs-status.err::before { color: #f85149; }
+
+.orgs-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.orgs-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex: 1 1 12rem;
+}
+
+.orgs-table { width: 100%; border-collapse: collapse; }
+.orgs-table th, .orgs-table td {
+  text-align: left;
+  padding: 0.5rem 0.25rem;
+  border-bottom: 1px solid var(--primary-color-6, #333);
+}
+
+.orgs-error { color: #f85149; }
+.orgs-empty { opacity: 0.7; }

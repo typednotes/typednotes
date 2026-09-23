@@ -5,6 +5,14 @@ edition = "2021"
 
 [dependencies]
 dioxus = { workspace = true, features = ["fullstack"] }
+serde = { version = "1", features = ["derive"] }
+
+# Server only: the client (wasm) build never links a database driver.
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+], optional = true }
 
 [features]
-server = ["dioxus/server"]
+server = ["dioxus/server", "dep:sqlx"]
