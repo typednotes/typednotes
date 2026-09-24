@@ -18,7 +18,7 @@ use sqlx::Row;
 
 use super::errors::{conflict, db_error, internal};
 use super::{config, liaison, vault};
-use crate::{Health, Org};
+use crate::{Health, Org, SlugCheck};
 
 static POOL: OnceLock<Result<PgPool, String>> = OnceLock::new();
 
@@ -58,15 +58,21 @@ pub async fn health() -> Health {
         liaison: liaison::configured(),
         github: config::github().is_some(),
         google: config::google().is_some(),
+        gitlab: config::gitlab().is_some(),
+        dropbox: config::dropbox().is_some(),
+        slack: config::slack().is_some(),
+        slack_events: config::slack_signing_secret().is_some(),
+        whatsapp_webhook: config::whatsapp_webhook().is_some(),
     };
     let Ok(pool) = pool() else {
         return configured(false, false, false);
     };
     let database = sqlx::query("select 1").execute(pool).await.is_ok();
-    // `connections` is the newest table of the app's own history.
+    // `channel_messages` is the newest table of the app's own history.
     let schema = database
         && table_exists(pool, "public.orgs").await
-        && table_exists(pool, "public.connections").await;
+        && table_exists(pool, "public.connections").await
+        && table_exists(pool, "public.channel_messages").await;
     let ledger = database && table_exists(pool, "public.credit_ledger").await;
     configured(database, schema, ledger)
 }
@@ -115,7 +121,7 @@ pub async fn org_for_member(slug: &str, user_id: &str) -> Result<Option<Org>, Se
         "select ",
         member_org_columns!(),
         " from orgs o join memberships m on m.org_id = o.id \
-          where o.slug = $1 and m.user_id = $2::uuid"
+          where o.slug = $1::citext and m.user_id = $2::uuid"
     ))
     .bind(slug)
     .bind(user_id)
@@ -142,6 +148,41 @@ pub async fn org_by_id_for_member(
     .await
     .map_err(db_error)?;
     Ok(row.as_ref().map(org_of))
+}
+
+/// Whether `slug` is free for a new org. Asked while the user types, so the
+/// form says "taken" before submitting; creation still relies on the unique
+/// index. Any signed-in user may ask: org slugs are public names, like
+/// GitHub's.
+pub async fn check_org_slug(slug: &str) -> Result<SlugCheck, ServerFnError> {
+    if let Err(message) = crate::validate_slug(slug) {
+        return Ok(SlugCheck {
+            available: false,
+            message,
+        });
+    }
+    let taken = sqlx::query("select 1 from orgs where slug = $1::citext")
+        .bind(slug)
+        .fetch_optional(pool()?)
+        .await
+        .map_err(db_error)?
+        .is_some();
+    Ok(slug_check(slug, taken))
+}
+
+/// The answer for a well-formed slug.
+pub fn slug_check(slug: &str, taken: bool) -> SlugCheck {
+    if taken {
+        SlugCheck {
+            available: false,
+            message: format!("'{slug}' is already taken"),
+        }
+    } else {
+        SlugCheck {
+            available: true,
+            message: format!("'{slug}' is available"),
+        }
+    }
 }
 
 /// Create an org owned by `user_id`: the org and the owner membership in one

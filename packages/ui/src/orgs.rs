@@ -1,10 +1,9 @@
-use api::{create_org, health, list_orgs, validate_org, Org};
+use api::{health, list_orgs, Org};
 use dioxus::prelude::*;
 
-use crate::components::button::Button;
 use crate::components::card::{Card, CardContent, CardDescription, CardHeader, CardTitle};
-use crate::components::input::Input;
-use crate::components::label::Label;
+use crate::error_message;
+use crate::slug_form::{NewSlugForm, Scope};
 
 pub(crate) const ORGS_CSS: Asset = asset!("/assets/styling/orgs.css");
 
@@ -37,7 +36,7 @@ pub fn OrgsPanel() -> Element {
                             p { class: "orgs-empty", "No organisations yet — create one above." }
                         },
                         Some(Ok(list)) => rsx! { OrgTable { orgs: list } },
-                        Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load orgs: {e}" } },
+                        Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load orgs: {error_message(&e)}" } },
                         None => rsx! { p { "Loading…" } },
                     }
                 }
@@ -112,36 +111,10 @@ fn OrgTable(orgs: Vec<Org>) -> Element {
     }
 }
 
-/// Create an org. Validation runs here first (same rule as the server, from
-/// `api::validate_org`) so a malformed slug is explained without a round
-/// trip; the server still enforces it, and uniqueness is the database's.
+/// Create an org: its slug is checked while typing, so a taken one is
+/// refused before submitting.
 #[component]
-fn NewOrgForm(on_created: EventHandler<Org>) -> Element {
-    let mut slug = use_signal(String::new);
-    let mut name = use_signal(String::new);
-    let mut error = use_signal(|| None::<String>);
-    let mut busy = use_signal(|| false);
-
-    let submit = move |evt: FormEvent| async move {
-        evt.prevent_default();
-        let (s, n) = (slug().trim().to_lowercase(), name().trim().to_string());
-        if let Err(message) = validate_org(&s, &n) {
-            error.set(Some(message));
-            return;
-        }
-        busy.set(true);
-        match create_org(s, n).await {
-            Ok(org) => {
-                slug.set(String::new());
-                name.set(String::new());
-                error.set(None);
-                on_created.call(org);
-            }
-            Err(e) => error.set(Some(e.to_string())),
-        }
-        busy.set(false);
-    };
-
+fn NewOrgForm(on_created: EventHandler<String>) -> Element {
     rsx! {
         Card {
             CardHeader {
@@ -149,29 +122,11 @@ fn NewOrgForm(on_created: EventHandler<Org>) -> Element {
                 CardDescription { "You become its owner, and it starts with welcome credits." }
             }
             CardContent {
-                form { class: "orgs-form", onsubmit: submit,
-                    div { class: "orgs-field",
-                        Label { html_for: "org-slug", "Slug" }
-                        Input {
-                            id: "org-slug",
-                            placeholder: "acme-labs",
-                            value: slug(),
-                            oninput: move |evt: FormEvent| slug.set(evt.value()),
-                        }
-                    }
-                    div { class: "orgs-field",
-                        Label { html_for: "org-name", "Name" }
-                        Input {
-                            id: "org-name",
-                            placeholder: "Acme Labs",
-                            value: name(),
-                            oninput: move |evt: FormEvent| name.set(evt.value()),
-                        }
-                    }
-                    Button { r#type: "submit", disabled: busy(), "Create" }
-                }
-                if let Some(message) = error() {
-                    p { class: "orgs-error", "{message}" }
+                NewSlugForm {
+                    scope: Scope::Org,
+                    name_placeholder: "Acme Labs",
+                    slug_placeholder: "acme-labs",
+                    on_created,
                 }
             }
         }

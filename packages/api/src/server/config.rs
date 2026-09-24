@@ -35,6 +35,35 @@ pub fn google() -> Option<OAuthClient> {
     client("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET")
 }
 
+/// The GitLab (gitlab.com) OAuth application: the `gitlab` connection.
+/// liaison needs the same pair to refresh its tokens.
+pub fn gitlab() -> Option<OAuthClient> {
+    client("GITLAB_CLIENT_ID", "GITLAB_CLIENT_SECRET")
+}
+
+/// The Dropbox app: the `dropbox` connection. liaison needs the same pair to
+/// refresh its tokens.
+pub fn dropbox() -> Option<OAuthClient> {
+    client("DROPBOX_CLIENT_ID", "DROPBOX_CLIENT_SECRET")
+}
+
+/// The Slack app: installing it in a workspace is the `slack` connection.
+pub fn slack() -> Option<OAuthClient> {
+    client("SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET")
+}
+
+/// The Slack app's signing secret, which authenticates its Events API
+/// requests to `/hooks/slack`.
+pub fn slack_signing_secret() -> Option<String> {
+    env("SLACK_SIGNING_SECRET")
+}
+
+/// The Meta app's secret, which signs WhatsApp webhook deliveries, and the
+/// verify token Meta echoes when the webhook is registered.
+pub fn whatsapp_webhook() -> Option<(String, String)> {
+    Some((env("WHATSAPP_APP_SECRET")?, env("WHATSAPP_VERIFY_TOKEN")?))
+}
+
 /// Credits granted to a new org (`ledger`'s welcome grant). `0` disables it.
 pub fn welcome_credits() -> i64 {
     match env("TYPEDNOTES_WELCOME_CREDITS") {

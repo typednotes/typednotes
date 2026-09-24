@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use ui::{Navbar, UserMenu};
-use views::{Home, Login, OrgView};
+use views::{Home, Login, OrgView, ProjectView};
 
 mod views;
 
@@ -15,6 +15,8 @@ enum Route {
     Login { error: String },
     #[route("/orgs/:slug?:connected&:error")]
     OrgView { slug: String, connected: String, error: String },
+    #[route("/orgs/:slug/projects/:project?:connected&:error")]
+    ProjectView { slug: String, project: String, connected: String, error: String },
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");

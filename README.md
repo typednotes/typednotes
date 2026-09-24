@@ -7,9 +7,12 @@ per-service detail: [`docs/services/`](docs/services/).
 This repository is the **app**: a Dioxus 0.7 fullstack web app whose server is the minimal
 `core` of the architecture — users, identities, orgs and memberships in Postgres
 (`docs/services/core.md` §4). Users sign in with GitHub or Google (the first sign-in creates
-the account), create orgs, and connect GitHub, Google Drive, S3-compatible buckets and AI
-accounts (Mistral, OpenAI, Anthropic, any OpenAI-compatible endpoint) to them. Credentials go
-into the vault; "Test" calls the provider through liaison. The contract with the other services
+the account; the same verified email is the same account), create orgs and projects, and
+connect code hosts (GitHub, GitLab), storage (S3-compatible buckets, Azure Blob Storage,
+Dropbox, Google Drive) and AI accounts (Anthropic, Mistral, OpenAI, any OpenAI-compatible
+endpoint) to them. A project has a primary repository and messaging interfaces (Slack,
+WhatsApp, Signal) whose messages land in its inbox. Credentials go into the vault; every
+provider call — "Test", listing repositories, sending a message — goes through liaison. The contract with the other services
 is [`docs/connections.md`](docs/connections.md). Everything else in the architecture lives in
 sibling services:
 
@@ -31,8 +34,10 @@ packages/
   api/      shared types and server functions; `src/server/` is server-only:
               session + oauth   sign-in, cookies, the /auth/* routes
               db, connections   orgs, memberships, ledger's grant, connections
+              projects          projects and their primary repository
+              channels          interfaces, inbox, the /hooks/* webhooks
               vault, warrant, liaison   clients for secrets and liaison
-  ui/       shared UI: sign-in, orgs, org page, connections, and the dx components
+  ui/       shared UI: sign-in, orgs, projects, connections, interfaces, and the dx components
   web/      the deployable fullstack app (routes, SSR, wasm client)
   desktop/, mobile/   the same UI for native targets (they need a server URL; not deployed)
 migrations/           the core schema, NNNN_description.sql — the one source of truth
@@ -57,13 +62,18 @@ status line on the home page lists what is missing.
 |---|---|
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub sign-in and connection (OAuth App, callback `http://localhost:8080/auth/github/callback`) |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google sign-in and Drive connection (callback `…/auth/google/callback`) |
+| `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET` | GitLab connection (gitlab.com OAuth application, callback `…/auth/gitlab/callback`); liaison needs the same pair to refresh |
+| `DROPBOX_CLIENT_ID`, `DROPBOX_CLIENT_SECRET` | Dropbox connection (scoped app, callback `…/auth/dropbox/callback`); liaison needs the same pair to refresh |
+| `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | installing the Slack app in a workspace (callback `…/auth/slack/callback`, token rotation off) |
+| `SLACK_SIGNING_SECRET` | inbound Slack messages (Event Subscriptions request URL `…/hooks/slack`) |
+| `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` | inbound WhatsApp messages (Meta webhook `…/hooks/whatsapp`, field `messages`) |
 | `SECRETS_URL`, `SECRETS_PASSWORD` (`SECRETS_USERNAME`, default `typednotes-app`) | storing connections, in a `secrets-server` ≥ 1.2.0 bootstrapped with `typednotes-infra/scripts/vault-bootstrap.sh` |
-| `LIAISON_URL`, `LIAISON_ROOT_KEY` | testing connections through liaison ≥ 0.3.0 (same root key) |
+| `LIAISON_URL`, `LIAISON_ROOT_KEY` | provider calls through liaison ≥ 0.4.0 (same root key) |
 | `PUBLIC_URL` | overrides the origin used in OAuth redirect URIs (default: the request's forwarded host) |
 | `TYPEDNOTES_WELCOME_CREDITS` | credits granted to each new org (default 1000, `0` disables) |
 
 `cargo test -p api --features server` runs the unit tests (validation, sessions, PKCE,
-warrant encoding, credential shapes, ledger's grant SQL);
+warrant encoding, credential shapes, ledger's grant SQL, webhook signatures and payloads);
 `cargo check -p web --features server` and
 `cargo check -p web --features web --target wasm32-unknown-unknown` check both halves.
 

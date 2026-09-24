@@ -130,18 +130,26 @@ pub struct ProviderIdentity {
     pub issuer: &'static str,
     pub subject: String,
     /// Verified by the provider; unverified addresses are refused upstream.
+    /// The email a new user gets.
     pub email: String,
+    /// Every address the provider verified for this person, `email` first:
+    /// any of them links to an existing user.
+    pub verified_emails: Vec<String>,
     pub display_name: Option<String>,
 }
 
 /// The user for a provider identity, creating or linking as needed:
 ///
 /// 1. a known `(issuer, subject)` is that user;
-/// 2. else an existing user with the same (verified) email gets a new
-///    identity — the IdP stays a foreign key, never our identity;
+/// 2. else an existing user whose email is one of the identity's verified
+///    addresses gets a new identity — so signing in with Google, then with
+///    GitHub under the same address, is one account. Emails compare
+///    case-insensitively: `users.email` is `citext`, and the parameter is
+///    cast to it (a `text` parameter would compare case-sensitively);
 /// 3. else a new user.
 ///
-/// A soft-deleted user is refused rather than resurrected.
+/// A soft-deleted user is refused rather than resurrected. Two first
+/// sign-ins racing on the same email both end on the same user.
 pub async fn user_for_identity(id: &ProviderIdentity) -> Result<String, ServerFnError> {
     let mut tx = pool()?.begin().await.map_err(db_error)?;
 
@@ -171,27 +179,29 @@ pub async fn user_for_identity(id: &ProviderIdentity) -> Result<String, ServerFn
         .map_err(db_error)?;
         user_id
     } else {
-        let existing = sqlx::query(
-            "select id::text as id, deleted_at is not null as deleted from users where email = $1",
-        )
-        .bind(&id.email)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(db_error)?;
-        let user_id: String = match existing {
-            Some(row) if row.get::<bool, _>("deleted") => {
-                return Err(forbidden("this account has been deleted"));
+        let user_id = match existing_user(&mut tx, &id.verified_emails).await? {
+            Some((_, true)) => return Err(forbidden("this account has been deleted")),
+            Some((user_id, false)) => user_id,
+            None => {
+                let inserted = sqlx::query(
+                    "insert into users (email, display_name) values ($1, $2) \
+                     on conflict (email) do nothing returning id::text as id",
+                )
+                .bind(&id.email)
+                .bind(&id.display_name)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(db_error)?;
+                match inserted {
+                    Some(row) => row.get("id"),
+                    // Created by a concurrent sign-in since the lookup.
+                    None => match existing_user(&mut tx, std::slice::from_ref(&id.email)).await? {
+                        Some((_, true)) => return Err(forbidden("this account has been deleted")),
+                        Some((user_id, false)) => user_id,
+                        None => return Err(internal("could not create the account")),
+                    },
+                }
             }
-            Some(row) => row.get("id"),
-            None => sqlx::query(
-                "insert into users (email, display_name) values ($1, $2) returning id::text as id",
-            )
-            .bind(&id.email)
-            .bind(&id.display_name)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(db_error)?
-            .get("id"),
         };
         sqlx::query(
             "insert into identities (user_id, issuer, subject, last_login_at) \
@@ -214,6 +224,25 @@ pub async fn user_for_identity(id: &ProviderIdentity) -> Result<String, ServerFn
         .map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(user_id)
+}
+
+/// The user (id, soft-deleted?) whose email is one of `emails`, preferring
+/// earlier addresses.
+async fn existing_user(
+    tx: &mut sqlx::PgConnection,
+    emails: &[String],
+) -> Result<Option<(String, bool)>, ServerFnError> {
+    let row = sqlx::query(
+        "select u.id::text as id, u.deleted_at is not null as deleted \
+         from unnest($1::text[]) with ordinality as e(email, n) \
+         join users u on u.email = e.email::citext \
+         order by e.n limit 1",
+    )
+    .bind(emails)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(db_error)?;
+    Ok(row.map(|row| (row.get("id"), row.get("deleted"))))
 }
 
 #[cfg(test)]

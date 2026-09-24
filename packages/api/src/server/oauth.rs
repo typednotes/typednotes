@@ -40,6 +40,9 @@ pub fn http() -> &'static reqwest::Client {
 pub enum Idp {
     Github,
     Google,
+    Gitlab,
+    Dropbox,
+    Slack,
 }
 
 impl Idp {
@@ -47,15 +50,28 @@ impl Idp {
         match self {
             Idp::Github => "github",
             Idp::Google => "google",
+            Idp::Gitlab => "gitlab",
+            Idp::Dropbox => "dropbox",
+            Idp::Slack => "slack",
         }
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "github" => Some(Idp::Github),
-            "google" => Some(Idp::Google),
-            _ => None,
-        }
+        [
+            Idp::Github,
+            Idp::Google,
+            Idp::Gitlab,
+            Idp::Dropbox,
+            Idp::Slack,
+        ]
+        .into_iter()
+        .find(|idp| idp.id() == id)
+    }
+
+    /// Whether users sign in through this server (the others only connect
+    /// accounts).
+    pub fn signs_in(self) -> bool {
+        matches!(self, Idp::Github | Idp::Google)
     }
 
     /// `identities.issuer` for users signing in through this server.
@@ -63,6 +79,9 @@ impl Idp {
         match self {
             Idp::Github => "https://github.com",
             Idp::Google => "https://accounts.google.com",
+            Idp::Gitlab => "https://gitlab.com",
+            Idp::Dropbox => "https://www.dropbox.com",
+            Idp::Slack => "https://slack.com",
         }
     }
 
@@ -70,6 +89,9 @@ impl Idp {
         match self {
             Idp::Github => super::config::github(),
             Idp::Google => super::config::google(),
+            Idp::Gitlab => super::config::gitlab(),
+            Idp::Dropbox => super::config::dropbox(),
+            Idp::Slack => super::config::slack(),
         }
     }
 
@@ -77,7 +99,10 @@ impl Idp {
     pub fn for_connection(provider: Provider) -> Option<Self> {
         match provider {
             Provider::Github => Some(Idp::Github),
+            Provider::Gitlab => Some(Idp::Gitlab),
             Provider::Gdrive => Some(Idp::Google),
+            Provider::Dropbox => Some(Idp::Dropbox),
+            Provider::Slack => Some(Idp::Slack),
             _ => None,
         }
     }
@@ -86,6 +111,9 @@ impl Idp {
         match self {
             Idp::Github => "https://github.com/login/oauth/authorize",
             Idp::Google => "https://accounts.google.com/o/oauth2/v2/auth",
+            Idp::Gitlab => "https://gitlab.com/oauth/authorize",
+            Idp::Dropbox => "https://www.dropbox.com/oauth2/authorize",
+            Idp::Slack => "https://slack.com/oauth/v2/authorize",
         }
     }
 
@@ -93,6 +121,9 @@ impl Idp {
         match self {
             Idp::Github => "https://github.com/login/oauth/access_token",
             Idp::Google => "https://oauth2.googleapis.com/token",
+            Idp::Gitlab => "https://gitlab.com/oauth/token",
+            Idp::Dropbox => "https://api.dropboxapi.com/oauth2/token",
+            Idp::Slack => "https://slack.com/api/oauth.v2.access",
         }
     }
 }
@@ -105,10 +136,13 @@ pub enum Purpose {
         user_id: String,
         org_id: String,
         provider: Provider,
+        /// A project page to come back to, instead of the org's.
+        return_to: Option<String>,
     },
 }
 
-/// Scopes and extra authorization parameters per (server, purpose).
+/// Scopes (empty: the app's configured ones) and extra authorization
+/// parameters per (server, purpose).
 fn scopes(idp: Idp, purpose: &Purpose) -> (&'static str, &'static [(&'static str, &'static str)]) {
     match (idp, purpose) {
         (Idp::Github, Purpose::Login) => ("read:user user:email", &[]),
@@ -119,6 +153,15 @@ fn scopes(idp: Idp, purpose: &Purpose) -> (&'static str, &'static [(&'static str
         (Idp::Google, Purpose::Connect { .. }) => (
             "openid email https://www.googleapis.com/auth/drive",
             &[("access_type", "offline"), ("prompt", "consent")],
+        ),
+        (Idp::Gitlab, _) => ("read_user read_api read_repository write_repository", &[]),
+        // Dropbox scopes are the app's own (set in its console); `offline`
+        // is what yields a refresh token next to the 4-hour access token.
+        (Idp::Dropbox, _) => ("", &[("token_access_type", "offline")]),
+        // Bot scopes, comma-separated as Slack wants them.
+        (Idp::Slack, _) => (
+            "chat:write,chat:write.public,channels:read,groups:read,channels:history,groups:history,im:history",
+            &[],
         ),
     }
 }
@@ -140,22 +183,25 @@ pub async fn start(
 ) -> Result<String, ServerFnError> {
     let state = random_token(32)?;
     let verifier = random_token(32)?;
-    let (user_id, org_id, provider) = match &purpose {
-        Purpose::Login => (None, None, None),
+    let (user_id, org_id, provider, return_to) = match &purpose {
+        Purpose::Login => (None, None, None, None),
         Purpose::Connect {
             user_id,
             org_id,
             provider,
+            return_to,
         } => (
             Some(user_id.clone()),
             Some(org_id.clone()),
             Some(provider.id()),
+            return_to.clone(),
         ),
     };
     sqlx::query(
         "insert into oauth_flows \
-         (state, idp, purpose, pkce_verifier, user_id, org_id, connection_provider, expires_at) \
-         values ($1, $2, $3, $4, $5::uuid, $6::uuid, $7, now() + interval '10 minutes')",
+         (state, idp, purpose, pkce_verifier, user_id, org_id, connection_provider, return_to, \
+          expires_at) \
+         values ($1, $2, $3, $4, $5::uuid, $6::uuid, $7, $8, now() + interval '10 minutes')",
     )
     .bind(&state)
     .bind(idp.id())
@@ -168,6 +214,7 @@ pub async fn start(
     .bind(user_id)
     .bind(org_id)
     .bind(provider)
+    .bind(return_to)
     .execute(pool()?)
     .await
     .map_err(db_error)?;
@@ -179,11 +226,13 @@ pub async fn start(
         ("client_id", client.id.as_str()),
         ("redirect_uri", redirect.as_str()),
         ("response_type", "code"),
-        ("scope", scope),
         ("state", state.as_str()),
         ("code_challenge", challenge.as_str()),
         ("code_challenge_method", "S256"),
     ];
+    if !scope.is_empty() {
+        params.push(("scope", scope));
+    }
     params.extend_from_slice(extra);
     let url = url::Url::parse_with_params(idp.authorize_endpoint(), &params)
         .expect("the authorize endpoints are valid URLs");
@@ -202,7 +251,8 @@ pub async fn take(state: &str, idp: Idp) -> Result<Option<Flow>, ServerFnError> 
     let row = sqlx::query(
         "delete from oauth_flows where state = $1 \
          returning idp, purpose, pkce_verifier, user_id::text as user_id, \
-                   org_id::text as org_id, connection_provider, expires_at > now() as fresh",
+                   org_id::text as org_id, connection_provider, return_to, \
+                   expires_at > now() as fresh",
     )
     .bind(state)
     .fetch_optional(pool()?)
@@ -225,6 +275,7 @@ pub async fn take(state: &str, idp: Idp) -> Result<Option<Flow>, ServerFnError> 
                 user_id,
                 org_id,
                 provider,
+                return_to: row.get("return_to"),
             },
             _ => return Ok(None),
         }
@@ -243,6 +294,14 @@ pub struct Tokens {
     pub expires_in: Option<i64>,
     pub error: Option<String>,
     pub error_description: Option<String>,
+    /// Slack: the workspace the app was installed in.
+    pub team: Option<SlackTeam>,
+}
+
+#[derive(Deserialize)]
+pub struct SlackTeam {
+    pub id: String,
+    pub name: Option<String>,
 }
 
 /// Exchange an authorization code. Errors are short, credential-free strings
@@ -314,6 +373,8 @@ async fn get_json<T: for<'de> Deserialize<'de>>(url: &str, token: &str) -> Resul
 }
 
 /// A GitHub identity, plus the login (used to label a `github` connection).
+/// Every verified address counts for linking; the primary one is the
+/// account's email when a new user is created.
 pub async fn github_identity(token: &str) -> Result<(ProviderIdentity, String), String> {
     #[derive(Deserialize)]
     struct GhUser {
@@ -321,29 +382,46 @@ pub async fn github_identity(token: &str) -> Result<(ProviderIdentity, String), 
         login: String,
         name: Option<String>,
     }
-    #[derive(Deserialize)]
-    struct GhEmail {
-        email: String,
-        primary: bool,
-        verified: bool,
-    }
     let user: GhUser = get_json("https://api.github.com/user", token).await?;
     let emails: Vec<GhEmail> = get_json("https://api.github.com/user/emails", token).await?;
-    let email = emails
-        .into_iter()
-        .find(|e| e.primary && e.verified)
-        .map(|e| e.email)
-        .ok_or("your GitHub account has no verified primary email")?;
+    let (email, verified_emails) =
+        github_emails(emails).ok_or("your GitHub account has no verified primary email")?;
     let identity = ProviderIdentity {
         issuer: Idp::Github.issuer(),
         subject: user.id.to_string(),
         email,
+        verified_emails,
         display_name: user
             .name
             .filter(|n| !n.trim().is_empty())
             .or(Some(user.login.clone())),
     };
     Ok((identity, user.login))
+}
+
+#[derive(Deserialize)]
+struct GhEmail {
+    email: String,
+    primary: bool,
+    verified: bool,
+}
+
+/// The verified primary address, and every verified address (primary
+/// first). `None` without a verified primary.
+fn github_emails(emails: Vec<GhEmail>) -> Option<(String, Vec<String>)> {
+    let primary = emails
+        .iter()
+        .find(|e| e.primary && e.verified)?
+        .email
+        .clone();
+    let mut all = vec![primary.clone()];
+    all.extend(
+        emails
+            .into_iter()
+            .filter(|e| e.verified && !e.email.eq_ignore_ascii_case(&primary))
+            .map(|e| e.email),
+    );
+    Some((primary, all))
 }
 
 /// A Google identity, from the OIDC userinfo endpoint. The access token came
@@ -366,9 +444,50 @@ pub async fn google_identity(token: &str) -> Result<ProviderIdentity, String> {
     Ok(ProviderIdentity {
         issuer: Idp::Google.issuer(),
         subject: info.sub,
+        verified_emails: vec![email.clone()],
         email,
         display_name: info.name.filter(|n| !n.trim().is_empty()),
     })
+}
+
+/// The GitLab username, to label a `gitlab` connection.
+pub async fn gitlab_username(token: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct GlUser {
+        username: String,
+    }
+    let user: GlUser = get_json("https://gitlab.com/api/v4/user", token).await?;
+    Ok(user.username)
+}
+
+/// The Dropbox account's email, to label a `dropbox` connection. An RPC
+/// endpoint without arguments: `POST` with a JSON `null` body.
+pub async fn dropbox_email(token: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    struct Account {
+        email: String,
+    }
+    let url = "https://api.dropboxapi.com/2/users/get_current_account";
+    let response = http()
+        .post(url)
+        .bearer_auth(token)
+        .header("content-type", "application/json")
+        .body("null")
+        .send()
+        .await
+        .map_err(|e| {
+            eprintln!("POST {url} failed: {e}");
+            "could not reach Dropbox".to_string()
+        })?;
+    if !response.status().is_success() {
+        eprintln!("POST {url}: {}", response.status());
+        return Err(format!("Dropbox answered {}", response.status().as_u16()));
+    }
+    let account: Account = response.json().await.map_err(|e| {
+        eprintln!("POST {url}: unreadable body: {e}");
+        "Dropbox's answer was unreadable".to_string()
+    })?;
+    Ok(account.email)
 }
 
 #[cfg(test)]
@@ -390,6 +509,7 @@ mod tests {
             user_id: "u".into(),
             org_id: "o".into(),
             provider: Provider::Gdrive,
+            return_to: None,
         };
         let (scope, extra) = scopes(Idp::Google, &purpose);
         assert!(scope.contains("auth/drive"));
@@ -399,6 +519,62 @@ mod tests {
             scopes(Idp::Google, &Purpose::Login).0,
             "openid email profile"
         );
+    }
+
+    #[test]
+    fn dropbox_asks_for_a_refresh_token_and_slack_for_bot_scopes() {
+        let purpose = |provider| Purpose::Connect {
+            user_id: "u".into(),
+            org_id: "o".into(),
+            provider,
+            return_to: None,
+        };
+        let (scope, extra) = scopes(Idp::Dropbox, &purpose(Provider::Dropbox));
+        assert_eq!(scope, "");
+        assert!(extra.contains(&("token_access_type", "offline")));
+        let (scope, _) = scopes(Idp::Slack, &purpose(Provider::Slack));
+        assert!(scope.split(',').any(|s| s == "chat:write"));
+        assert!(!scope.contains(' '));
+        assert!(scopes(Idp::Gitlab, &purpose(Provider::Gitlab))
+            .0
+            .contains("read_api"));
+    }
+
+    #[test]
+    fn idps_round_trip_and_only_two_sign_in() {
+        for idp in [
+            Idp::Github,
+            Idp::Google,
+            Idp::Gitlab,
+            Idp::Dropbox,
+            Idp::Slack,
+        ] {
+            assert_eq!(Idp::from_id(idp.id()), Some(idp));
+        }
+        assert!(Idp::Github.signs_in() && Idp::Google.signs_in());
+        assert!(!Idp::Gitlab.signs_in() && !Idp::Slack.signs_in());
+        for p in Provider::ALL {
+            assert_eq!(Idp::for_connection(p).is_some(), p.is_oauth(), "{p:?}");
+        }
+    }
+
+    #[test]
+    fn github_links_on_every_verified_email() {
+        let e = |email: &str, primary, verified| GhEmail {
+            email: email.into(),
+            primary,
+            verified,
+        };
+        let (primary, all) = github_emails(vec![
+            e("work@corp.com", false, true),
+            e("Me@Example.com", true, true),
+            e("me@example.com", false, true),
+            e("old@nowhere.com", false, false),
+        ])
+        .unwrap();
+        assert_eq!(primary, "Me@Example.com");
+        assert_eq!(all, vec!["Me@Example.com", "work@corp.com"]);
+        assert!(github_emails(vec![e("a@b.c", true, false)]).is_none());
     }
 
     #[test]

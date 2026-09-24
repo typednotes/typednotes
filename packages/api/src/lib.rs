@@ -1,6 +1,7 @@
 //! Shared fullstack server functions — the `core` service of
 //! `docs/architecture.md` §2: users (signed in with GitHub or Google), their
-//! orgs, and the third-party accounts connected to those orgs.
+//! orgs and projects, the third-party accounts connected to those orgs, and
+//! the messaging interfaces of each project.
 //!
 //! The contract with the other services — `secrets`, `liaison`, `ledger` and
 //! `typednotes-infra` — is `docs/connections.md`. Two rules from it shape
@@ -15,7 +16,6 @@
 //! server's database identity has data rights only.
 
 use dioxus::prelude::*;
-use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "server")]
 mod server;
@@ -27,280 +27,13 @@ pub fn auth_routes() -> dioxus::server::axum::Router {
 }
 
 #[cfg(feature = "server")]
-use server::{connections, db, errors, session};
+use server::{channels, connections, db, errors, projects, session};
 
-/// A signed-in user.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct User {
-    pub id: String,
-    pub email: String,
-    pub display_name: Option<String>,
-}
+mod model;
+pub use model::*;
 
-/// An org, as a member sees it. Ids and timestamps travel as text: the client
-/// only displays them, and this keeps `uuid`/`chrono` out of the wasm build.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Org {
-    pub id: String,
-    pub slug: String,
-    pub name: String,
-    /// The caller's role: `owner`, `admin` or `member`.
-    pub role: String,
-    pub created_at: String,
-}
-
-/// An org's page: the org and its spendable credits (`None` when `ledger`'s
-/// tables are not there).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct OrgDetail {
-    pub org: Org,
-    pub credits: Option<i64>,
-}
-
-/// What this deployment can do, for the status line and for probing a fresh
-/// deploy: each flag is a dependency that is reachable or configured.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Health {
-    pub database: bool,
-    /// The app's own history is applied (through `connections`).
-    pub schema: bool,
-    /// `ledger`'s tables exist.
-    pub ledger: bool,
-    pub vault: bool,
-    pub liaison: bool,
-    pub github: bool,
-    pub google: bool,
-}
-
-/// A kind of third-party account (docs/connections.md §3.1). The ids are
-/// shared with the vault path, liaison's warrants and the `connections`
-/// check constraint.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Provider {
-    Github,
-    Gdrive,
-    S3,
-    Mistral,
-    Openai,
-    Anthropic,
-    OpenaiCompatible,
-}
-
-impl Provider {
-    pub const ALL: [Provider; 7] = [
-        Provider::Github,
-        Provider::Gdrive,
-        Provider::S3,
-        Provider::Mistral,
-        Provider::Openai,
-        Provider::Anthropic,
-        Provider::OpenaiCompatible,
-    ];
-
-    /// The AI providers, connected with an API token.
-    pub const AI: [Provider; 4] = [
-        Provider::Mistral,
-        Provider::Openai,
-        Provider::Anthropic,
-        Provider::OpenaiCompatible,
-    ];
-
-    pub fn id(self) -> &'static str {
-        match self {
-            Provider::Github => "github",
-            Provider::Gdrive => "gdrive",
-            Provider::S3 => "s3",
-            Provider::Mistral => "mistral",
-            Provider::Openai => "openai",
-            Provider::Anthropic => "anthropic",
-            Provider::OpenaiCompatible => "openai-compatible",
-        }
-    }
-
-    pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|p| p.id() == id)
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Provider::Github => "GitHub",
-            Provider::Gdrive => "Google Drive",
-            Provider::S3 => "S3 bucket",
-            Provider::Mistral => "Mistral",
-            Provider::Openai => "OpenAI",
-            Provider::Anthropic => "Anthropic",
-            Provider::OpenaiCompatible => "OpenAI-compatible",
-        }
-    }
-
-    /// The API root liaison confines calls to, when it does not depend on
-    /// the account (S3 and OpenAI-compatible endpoints are entered by the user).
-    pub fn fixed_base_url(self) -> Option<&'static str> {
-        match self {
-            Provider::Github => Some("https://api.github.com"),
-            Provider::Gdrive => Some("https://www.googleapis.com"),
-            Provider::Mistral => Some("https://api.mistral.ai/v1"),
-            Provider::Openai => Some("https://api.openai.com/v1"),
-            Provider::Anthropic => Some("https://api.anthropic.com/v1"),
-            Provider::S3 | Provider::OpenaiCompatible => None,
-        }
-    }
-
-    pub fn is_ai(self) -> bool {
-        Self::AI.contains(&self)
-    }
-}
-
-/// A connected account. Never carries its credential.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Connection {
-    pub id: String,
-    pub provider: Provider,
-    pub label: String,
-    pub base_url: String,
-    /// `pending`, `active` or `failed`.
-    pub status: String,
-    pub owner_email: String,
-    pub created_at: String,
-    pub last_checked_at: Option<String>,
-    pub last_error: Option<String>,
-    /// Whether the caller may remove it (its creator, or an org admin).
-    pub can_remove: bool,
-}
-
-/// The outcome of a connection test through liaison.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct TestResult {
-    pub ok: bool,
-    pub message: String,
-}
-
-// ── Validation, identical on both sides ─────────────────────────────────
-// The forms explain before a round trip; the server still enforces.
-
-/// Why an org name or slug was refused.
-pub fn validate_org(slug: &str, name: &str) -> Result<(), String> {
-    let slug_ok = (3..=40).contains(&slug.len())
-        && slug
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && !slug.starts_with('-')
-        && !slug.ends_with('-');
-    if !slug_ok {
-        return Err(
-            "slug: 3–40 characters, lowercase letters, digits and inner dashes".to_string(),
-        );
-    }
-    let name = name.trim();
-    if name.is_empty() || name.chars().count() > 100 {
-        return Err("name: 1–100 characters".to_string());
-    }
-    Ok(())
-}
-
-/// An API base URL: `https://host[:port][/path]`, no query, fragment,
-/// userinfo or dot segments, returned without a trailing `/`. Plain `http`
-/// only for `localhost`/`127.0.0.1` (local S3 or model servers). liaison
-/// re-checks all of this before any call.
-pub fn validate_base_url(url: &str, allow_path: bool) -> Result<String, String> {
-    let url = url.trim().trim_end_matches('/');
-    let rest = if let Some(rest) = url.strip_prefix("https://") {
-        rest
-    } else if let Some(rest) = url.strip_prefix("http://") {
-        let host = rest.split(['/', ':']).next().unwrap_or("");
-        if host != "localhost" && host != "127.0.0.1" {
-            return Err("the URL must start with https://".to_string());
-        }
-        rest
-    } else {
-        return Err("the URL must start with https://".to_string());
-    };
-    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let bad = |c: char| c.is_whitespace() || c.is_control() || "?#@\\\"<>{}|^`".contains(c);
-    if authority.is_empty() || url.chars().any(bad) {
-        return Err(
-            "the URL must be a plain https://host[/path], without query or credentials".to_string(),
-        );
-    }
-    if path
-        .split('/')
-        .any(|seg| seg.is_empty() || seg == "." || seg == "..")
-        && !path.is_empty()
-    {
-        return Err("the URL path is malformed".to_string());
-    }
-    if !allow_path && !path.is_empty() {
-        return Err(
-            "the endpoint must not have a path, e.g. https://s3.fr-par.scw.cloud".to_string(),
-        );
-    }
-    Ok(url.to_string())
-}
-
-fn is_token(s: &str, min: usize, max: usize) -> bool {
-    (min..=max).contains(&s.len()) && s.chars().all(|c| c.is_ascii_graphic())
-}
-
-/// An API token or key: printable ASCII, no spaces.
-pub fn validate_api_key(key: &str) -> Result<String, String> {
-    let key = key.trim();
-    if is_token(key, 8, 512) {
-        Ok(key.to_string())
-    } else {
-        Err("the API key must be 8–512 printable characters without spaces".to_string())
-    }
-}
-
-/// A normalized S3 connection form.
-#[derive(Clone, Debug, PartialEq)]
-pub struct S3Form {
-    /// `{endpoint}/{bucket}`: path-style, so liaison confines calls to the bucket.
-    pub base_url: String,
-    pub region: String,
-    pub bucket: String,
-    pub access_key_id: String,
-    pub secret_access_key: String,
-}
-
-pub fn validate_s3(
-    endpoint: &str,
-    region: &str,
-    bucket: &str,
-    access_key_id: &str,
-    secret_access_key: &str,
-) -> Result<S3Form, String> {
-    let endpoint = validate_base_url(endpoint, false)?;
-    let region = region.trim().to_string();
-    if !(1..=32).contains(&region.len())
-        || !region
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-    {
-        return Err("region: lowercase letters, digits and dashes, e.g. fr-par".to_string());
-    }
-    let bucket = bucket.trim().to_string();
-    let alnum = |c: Option<char>| c.is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-    if !(3..=63).contains(&bucket.len())
-        || !bucket
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '.')
-        || !alnum(bucket.chars().next())
-        || !alnum(bucket.chars().last())
-    {
-        return Err("bucket: 3–63 lowercase letters, digits, dots and dashes".to_string());
-    }
-    let (access_key_id, secret_access_key) = (access_key_id.trim(), secret_access_key.trim());
-    if !is_token(access_key_id, 1, 256) || !is_token(secret_access_key, 1, 256) {
-        return Err("access key id and secret: printable characters without spaces".to_string());
-    }
-    Ok(S3Form {
-        base_url: format!("{endpoint}/{bucket}"),
-        region,
-        bucket,
-        access_key_id: access_key_id.to_string(),
-        secret_access_key: secret_access_key.to_string(),
-    })
-}
+mod validate;
+pub use validate::*;
 
 // ── Server functions ────────────────────────────────────────────────────
 
@@ -336,6 +69,14 @@ pub async fn logout() -> Result<(), ServerFnError> {
 pub async fn list_orgs() -> Result<Vec<Org>, ServerFnError> {
     let user = session::require_user().await?;
     db::list_orgs_for(&user.id).await
+}
+
+/// Whether a slug is free for a new org, for the form to say before
+/// submitting.
+#[post("/api/orgs/check")]
+pub async fn check_org_slug(slug: String) -> Result<SlugCheck, ServerFnError> {
+    session::require_user().await?;
+    db::check_org_slug(&slug.trim().to_lowercase()).await
 }
 
 /// Create an org owned by the caller, with `ledger`'s welcome grant. `409` if
@@ -401,10 +142,38 @@ pub async fn connect_s3(
     connections::store(
         &org,
         &user,
-        Provider::S3,
-        &form.bucket,
-        &form.base_url,
+        connections::NewConnection {
+            provider: Provider::S3,
+            label: &form.bucket,
+            base_url: &form.base_url,
+            external_id: None,
+        },
         credential,
+    )
+    .await
+}
+
+/// Connect an Azure Blob Storage container with a shared access signature.
+#[post("/api/connections/azure")]
+pub async fn connect_azure(
+    slug: String,
+    account: String,
+    container: String,
+    sas: String,
+) -> Result<Connection, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    let form = validate_azure(&account, &container, &sas).map_err(errors::bad_request)?;
+    let label = format!("{}/{}", form.account, form.container);
+    connections::store(
+        &org,
+        &user,
+        connections::NewConnection {
+            provider: Provider::Azure,
+            label: &label,
+            base_url: &form.base_url,
+            external_id: None,
+        },
+        server::vault::azure_sas(&form.base_url, &form.sas),
     )
     .await
 }
@@ -446,7 +215,18 @@ pub async fn connect_ai(
             server::vault::bearer(&base_url, &key),
         ),
     };
-    connections::store(&org, &user, provider, &label, &base_url, credential).await
+    connections::store(
+        &org,
+        &user,
+        connections::NewConnection {
+            provider,
+            label: &label,
+            base_url: &base_url,
+            external_id: None,
+        },
+        credential,
+    )
+    .await
 }
 
 /// Remove a connection and its credential.
@@ -463,89 +243,159 @@ pub async fn test_connection(slug: String, id: String) -> Result<TestResult, Ser
     connections::test(&org, &user, id.trim()).await
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// ── Projects ────────────────────────────────────────────────────────────
 
-    #[test]
-    fn accepts_a_plain_slug() {
-        assert!(validate_org("acme-labs", "Acme Labs").is_ok());
-    }
+/// The org's projects, newest first.
+#[post("/api/projects")]
+pub async fn list_projects(slug: String) -> Result<Vec<Project>, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    projects::list(&org).await
+}
 
-    #[test]
-    fn refuses_malformed_slugs() {
-        for slug in ["ab", "Acme", "acme_labs", "-acme", "acme-", "acme labs"] {
-            assert!(
-                validate_org(slug, "Acme").is_err(),
-                "{slug} should be refused"
-            );
-        }
-    }
+/// Whether a slug is free for a new project of the org.
+#[post("/api/projects/check")]
+pub async fn check_project_slug(slug: String, project: String) -> Result<SlugCheck, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    projects::check_slug(&org, &project.trim().to_lowercase()).await
+}
 
-    #[test]
-    fn refuses_blank_or_long_names() {
-        assert!(validate_org("acme", "   ").is_err());
-        assert!(validate_org("acme", &"x".repeat(101)).is_err());
-    }
+/// Create a project in the org. `409` if the org already has that slug.
+#[post("/api/projects/create")]
+pub async fn create_project(
+    slug: String,
+    project: String,
+    name: String,
+) -> Result<Project, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    projects::create(&org, &user, &project.trim().to_lowercase(), &name).await
+}
 
-    #[test]
-    fn provider_ids_round_trip() {
-        for p in Provider::ALL {
-            assert_eq!(Provider::from_id(p.id()), Some(p));
-        }
-        assert_eq!(Provider::from_id("dropbox"), None);
-        assert!(Provider::Anthropic.is_ai() && !Provider::S3.is_ai());
-    }
+/// A project's page; `404` outside the caller's orgs.
+#[post("/api/project")]
+pub async fn get_project(slug: String, project: String) -> Result<ProjectDetail, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    let (project, _) = projects::get(&org, &project).await?;
+    Ok(ProjectDetail { org, project })
+}
 
-    #[test]
-    fn base_urls() {
-        assert_eq!(
-            validate_base_url("https://api.example.com/v1/", true).unwrap(),
-            "https://api.example.com/v1"
-        );
-        assert_eq!(
-            validate_base_url("http://localhost:9000", false).unwrap(),
-            "http://localhost:9000"
-        );
-        for bad in [
-            "http://api.example.com",
-            "ftp://x",
-            "https://",
-            "https://user@host",
-            "https://host/v1?x=1",
-            "https://host/#f",
-            "https://host/a/../b",
-            "https://host//v1",
-            "https://ho st",
-        ] {
-            assert!(
-                validate_base_url(bad, true).is_err(),
-                "{bad} should be refused"
-            );
-        }
-        assert!(validate_base_url("https://s3.example.com/path", false).is_err());
-    }
+/// Delete a project with its interfaces and messages.
+#[post("/api/project/delete")]
+pub async fn delete_project(slug: String, project: String) -> Result<(), ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    projects::delete(&org, &user, &project).await
+}
 
-    #[test]
-    fn s3_forms() {
-        let f = validate_s3(
-            "https://s3.fr-par.scw.cloud/",
-            "fr-par",
-            "my-bucket",
-            "AK",
-            "SK",
-        )
-        .unwrap();
-        assert_eq!(f.base_url, "https://s3.fr-par.scw.cloud/my-bucket");
-        assert!(validate_s3("https://s3.x", "FR", "b-1", "a", "s").is_err());
-        assert!(validate_s3("https://s3.x", "fr", "-b", "a", "s").is_err());
-        assert!(validate_s3("https://s3.x", "fr", "bkt", "a b", "s").is_err());
-    }
+/// The repositories a GitHub or GitLab connection of the org can see.
+#[post("/api/repos")]
+pub async fn list_repos(slug: String, connection: String) -> Result<Vec<Repo>, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    projects::list_repos(&org, &user, &connection).await
+}
 
-    #[test]
-    fn api_keys() {
-        assert_eq!(validate_api_key("  sk-12345678 ").unwrap(), "sk-12345678");
-        assert!(validate_api_key("short").is_err());
-        assert!(validate_api_key("has a space in it").is_err());
-    }
+/// Make a repository the project's primary one.
+#[post("/api/project/repo")]
+pub async fn set_project_repo(
+    slug: String,
+    project: String,
+    connection: String,
+    full_name: String,
+) -> Result<Project, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    projects::set_repo(&org, &user, &project, &connection, &full_name).await
+}
+
+/// Forget the project's primary repository.
+#[post("/api/project/repo/clear")]
+pub async fn clear_project_repo(slug: String, project: String) -> Result<Project, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    projects::clear_repo(&org, &project).await
+}
+
+// ── Interfaces and inbox ────────────────────────────────────────────────
+
+/// The project's messaging interfaces.
+#[post("/api/channels")]
+pub async fn list_channels(slug: String, project: String) -> Result<Vec<Channel>, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    channels::list(&org, &project).await
+}
+
+/// The channels a Slack connection's bot can post to.
+#[post("/api/slack/channels")]
+pub async fn list_slack_channels(
+    slug: String,
+    connection: String,
+) -> Result<Vec<SlackChannel>, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    channels::slack_channels(&org, &user, &connection).await
+}
+
+/// Make a Slack channel an interface of the project.
+#[post("/api/channels/slack")]
+pub async fn add_slack_channel(
+    slug: String,
+    project: String,
+    connection: String,
+    channel: String,
+) -> Result<Channel, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    channels::add_slack(&org, &user, &project, &connection, &channel).await
+}
+
+/// Connect a WhatsApp Cloud API number as an interface of the project.
+#[post("/api/channels/whatsapp")]
+pub async fn connect_whatsapp(
+    slug: String,
+    project: String,
+    phone_number_id: String,
+    access_token: String,
+) -> Result<Channel, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    channels::connect_whatsapp(&org, &user, &project, &phone_number_id, &access_token).await
+}
+
+/// Connect a Signal number, through a signal-cli-rest-api bridge, as an
+/// interface of the project.
+#[post("/api/channels/signal")]
+pub async fn connect_signal(
+    slug: String,
+    project: String,
+    base_url: String,
+    number: String,
+    token: String,
+) -> Result<Channel, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    channels::connect_signal(&org, &user, &project, &base_url, &number, &token).await
+}
+
+/// Remove an interface (its connection stays in the org).
+#[post("/api/channels/delete")]
+pub async fn remove_channel(
+    slug: String,
+    project: String,
+    channel: String,
+) -> Result<(), ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    channels::remove(&org, &project, &channel).await
+}
+
+/// The project's latest messages, newest first.
+#[post("/api/inbox")]
+pub async fn list_messages(slug: String, project: String) -> Result<Vec<Message>, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    channels::inbox(&org, &user, &project).await
+}
+
+/// Send a message through an interface: to its channel (Slack) or to
+/// `recipient` (WhatsApp, Signal).
+#[post("/api/inbox/send")]
+pub async fn send_message(
+    slug: String,
+    project: String,
+    channel: String,
+    recipient: String,
+    text: String,
+) -> Result<Message, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    channels::send(&org, &user, &project, &channel, &recipient, &text).await
 }

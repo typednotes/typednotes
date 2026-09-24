@@ -8,6 +8,8 @@ dioxus = { workspace = true }
 api = { workspace = true }
 # Pinned to the registry commit `dx components add` copied `src/components/` from.
 dioxus-primitives = { git = "https://github.com/DioxusLabs/components", rev = "9a758255ea26e2b20c8cecf4c1c946feb9e71da7", version = "0.0.1", default-features = false }
+# The icons the registry's `select` component draws (chevron, check).
+dioxus-icons = "0.1.0"
 
 [features]
 server = ["api/server"]

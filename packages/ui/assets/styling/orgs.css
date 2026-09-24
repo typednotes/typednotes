@@ -35,3 +35,9 @@
 
 .orgs-error { color: #f85149; }
 .orgs-empty { opacity: 0.7; }
+
+.slug-check { margin: 0.5rem 0 0; font-size: 0.85rem; }
+.slug-check.ok { color: #3fb950; }
+.slug-check.err { color: #f85149; }
+
+.projects-new { margin: 1.25rem 0 0.75rem; }

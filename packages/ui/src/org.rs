@@ -4,9 +4,11 @@ use dioxus::prelude::*;
 use crate::auth::LoginPanel;
 use crate::components::card::{Card, CardContent, CardDescription, CardHeader, CardTitle};
 use crate::connections::ConnectionsPanel;
+use crate::error_message;
 use crate::orgs::ORGS_CSS;
+use crate::projects::ProjectsPanel;
 
-/// One org: its credits (from `ledger`) and its connections.
+/// One org: its credits (from `ledger`), its projects and its connections.
 ///
 /// `connected` and `error` come from the query string the OAuth callback
 /// redirects back with (`?connected=github`, `?error=…`); empty when absent.
@@ -28,7 +30,7 @@ pub fn OrgPage(slug: ReadSignal<String>, connected: String, error: String) -> El
             p { a { href: "/", "← Your organisations" } }
             match detail() {
                 None => rsx! { p { "Loading…" } },
-                Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load this organisation: {e}" } },
+                Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load this organisation: {error_message(&e)}" } },
                 Some(Ok(d)) => rsx! {
                     Card {
                         CardHeader {
@@ -51,6 +53,7 @@ pub fn OrgPage(slug: ReadSignal<String>, connected: String, error: String) -> El
                     if !error.is_empty() {
                         p { class: "orgs-error", "{error}" }
                     }
+                    ProjectsPanel { slug: d.org.slug.clone() }
                     ConnectionsPanel { slug: d.org.slug.clone() }
                 },
             }

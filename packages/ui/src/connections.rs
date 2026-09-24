@@ -1,6 +1,7 @@
 use api::{
-    connect_ai, connect_s3, delete_connection, health, list_connections, test_connection,
-    validate_api_key, validate_base_url, validate_s3, Connection, Provider, TestResult,
+    aws_s3_endpoint, connect_ai, connect_azure, connect_s3, delete_connection, health,
+    list_connections, test_connection, validate_api_key, validate_azure, validate_base_url,
+    validate_s3, Connection, Health, Provider, TestResult,
 };
 use dioxus::prelude::*;
 
@@ -8,9 +9,11 @@ use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardContent, CardDescription, CardHeader, CardTitle};
 use crate::components::input::Input;
 use crate::components::label::Label;
+use crate::components::select::{Select, SelectOption};
+use crate::error_message;
 use crate::navigate_to;
 
-const CONNECTIONS_CSS: Asset = asset!("/assets/styling/connections.css");
+pub(crate) const CONNECTIONS_CSS: Asset = asset!("/assets/styling/connections.css");
 
 /// An org's connections and the forms to add more (docs/connections.md §3).
 ///
@@ -34,7 +37,7 @@ pub(crate) fn ConnectionsPanel(slug: ReadSignal<String>) -> Element {
             CardContent {
                 match list() {
                     None => rsx! { p { "Loading…" } },
-                    Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load connections: {e}" } },
+                    Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load connections: {error_message(&e)}" } },
                     Some(Ok(items)) if items.is_empty() => rsx! {
                         p { class: "orgs-empty", "Nothing connected yet." }
                     },
@@ -72,7 +75,7 @@ fn ConnectionRow(slug: String, connection: Connection, on_changed: EventHandler<
             error.set(None);
             match test_connection(s, id).await {
                 Ok(r) => result.set(Some(r)),
-                Err(e) => error.set(Some(e.to_string())),
+                Err(e) => error.set(Some(error_message(&e))),
             }
             busy.set(false);
             on_changed.call(());
@@ -90,7 +93,7 @@ fn ConnectionRow(slug: String, connection: Connection, on_changed: EventHandler<
             match delete_connection(s, id).await {
                 Ok(()) => on_changed.call(()),
                 Err(e) => {
-                    error.set(Some(e.to_string()));
+                    error.set(Some(error_message(&e)));
                     confirming.set(false);
                 }
             }
@@ -148,17 +151,82 @@ fn ConnectionRow(slug: String, connection: Connection, on_changed: EventHandler<
     }
 }
 
-/// The three ways to add a connection: OAuth (GitHub, Google Drive), an S3
-/// access key, or an AI provider's API token.
+/// Whether an OAuth provider can be connected here: the vault is configured
+/// and so is the provider's OAuth client.
+pub(crate) fn oauth_ready(h: Option<&Health>, provider: Provider) -> bool {
+    let Some(h) = h else { return false };
+    h.vault
+        && match provider {
+            Provider::Github => h.github,
+            Provider::Gitlab => h.gitlab,
+            Provider::Gdrive => h.google,
+            Provider::Dropbox => h.dropbox,
+            Provider::Slack => h.slack,
+            _ => false,
+        }
+}
+
+/// The OAuth connect route for `provider`, optionally coming back to a
+/// project page. Only built from ids and validated slugs.
+pub(crate) fn connect_url(provider: Provider, org: &str, project: Option<&str>) -> String {
+    match project {
+        Some(p) => format!("/auth/connect/{}?org={org}&project={p}", provider.id()),
+        None => format!("/auth/connect/{}?org={org}", provider.id()),
+    }
+}
+
+/// A menu of providers, in the order given.
+#[component]
+fn ProviderSelect(
+    options: Vec<Provider>,
+    value: Provider,
+    on_change: EventHandler<Provider>,
+    label: String,
+) -> Element {
+    rsx! {
+        div { class: "conn-select",
+            Select::<Provider> {
+                default_value: value,
+                aria_label: "{label}",
+                on_value_change: move |v: Option<Provider>| {
+                    if let Some(p) = v {
+                        on_change.call(p);
+                    }
+                },
+                for (i, p) in options.into_iter().enumerate() {
+                    SelectOption::<Provider> {
+                        key: "{p.id()}",
+                        index: i,
+                        value: p,
+                        text_value: "{p.name()}",
+                        "{p.name()}"
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The ways to add a connection, by what it is for: code (GitHub, GitLab),
+/// storage (S3, Azure, Dropbox, Google Drive) and AI.
 #[component]
 fn AddConnection(slug: String, on_added: EventHandler<()>) -> Element {
     let status = use_server_future(health)?;
     let h = status().and_then(|r| r.ok());
     let vault = h.as_ref().is_some_and(|h| h.vault);
-    let github = vault && h.as_ref().is_some_and(|h| h.github);
-    let google = vault && h.as_ref().is_some_and(|h| h.google);
+    let mut storage = use_signal(|| Provider::S3);
 
-    let (gh_slug, gd_slug) = (slug.clone(), slug.clone());
+    let oauth_button = |provider: Provider, primary: bool| {
+        let url = connect_url(provider, &slug, None);
+        rsx! {
+            Button {
+                variant: if primary { ButtonVariant::Primary } else { ButtonVariant::Outline },
+                disabled: !oauth_ready(h.as_ref(), provider),
+                onclick: move |_| navigate_to(&url),
+                "Connect {provider.name()}"
+            }
+        }
+    };
 
     rsx! {
         Card {
@@ -168,41 +236,101 @@ fn AddConnection(slug: String, on_added: EventHandler<()>) -> Element {
                     CardDescription { class: "orgs-error",
                         "Connections are disabled until the vault is configured (SECRETS_URL, SECRETS_PASSWORD)."
                     }
+                } else {
+                    CardDescription {
+                        "Slack, WhatsApp and Signal are connected from a project's Interfaces."
+                    }
                 }
             }
             CardContent {
                 div { class: "conn-section",
-                    h4 { "Accounts" }
+                    h4 { "Code" }
                     div { class: "conn-oauth",
-                        Button {
-                            disabled: !github,
-                            onclick: move |_| navigate_to(&format!("/auth/connect/github?org={gh_slug}")),
-                            "Connect GitHub"
-                        }
-                        Button {
-                            variant: ButtonVariant::Outline,
-                            disabled: !google,
-                            onclick: move |_| navigate_to(&format!("/auth/connect/gdrive?org={gd_slug}")),
-                            "Connect Google Drive"
-                        }
+                        {oauth_button(Provider::Github, true)}
+                        {oauth_button(Provider::Gitlab, false)}
                     }
                 }
-                S3Form { slug: slug.clone(), disabled: !vault, on_added }
+                div { class: "conn-section",
+                    h4 { "Storage" }
+                    ProviderSelect {
+                        options: Provider::STORAGE.to_vec(),
+                        value: storage(),
+                        on_change: move |p| storage.set(p),
+                        label: "Storage provider",
+                    }
+                    match storage() {
+                        Provider::S3 => rsx! { S3Form { slug: slug.clone(), disabled: !vault, on_added } },
+                        Provider::Azure => rsx! { AzureForm { slug: slug.clone(), disabled: !vault, on_added } },
+                        p => rsx! {
+                            p { class: "conn-meta",
+                                "You will be sent to {p.name()} to grant access, then back here."
+                            }
+                            {oauth_button(p, true)}
+                        },
+                    }
+                }
                 AiForm { slug: slug.clone(), disabled: !vault, on_added }
             }
         }
     }
 }
 
+/// Where an S3 bucket lives; each preset derives the endpoint.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum S3Preset {
+    Aws,
+    Scaleway,
+    CloudflareR2,
+    Other,
+}
+
+impl S3Preset {
+    const ALL: [S3Preset; 4] = [
+        S3Preset::Aws,
+        S3Preset::CloudflareR2,
+        S3Preset::Scaleway,
+        S3Preset::Other,
+    ];
+
+    fn name(self) -> &'static str {
+        match self {
+            S3Preset::Aws => "Amazon S3",
+            S3Preset::Scaleway => "Scaleway Object Storage",
+            S3Preset::CloudflareR2 => "Cloudflare R2",
+            S3Preset::Other => "Other S3-compatible",
+        }
+    }
+
+    fn default_region(self) -> &'static str {
+        match self {
+            S3Preset::Aws => "us-east-1",
+            S3Preset::Scaleway => "fr-par",
+            S3Preset::CloudflareR2 => "auto",
+            S3Preset::Other => "",
+        }
+    }
+}
+
 #[component]
 fn S3Form(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
-    let mut endpoint = use_signal(|| "https://s3.fr-par.scw.cloud".to_string());
-    let mut region = use_signal(|| "fr-par".to_string());
+    let mut preset = use_signal(|| S3Preset::Aws);
+    let mut region = use_signal(|| S3Preset::Aws.default_region().to_string());
+    let mut custom_endpoint = use_signal(String::new);
+    let mut r2_account = use_signal(String::new);
     let mut bucket = use_signal(String::new);
     let mut key_id = use_signal(String::new);
     let mut secret = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
+
+    let endpoint = use_memo(move || match preset() {
+        S3Preset::Aws => aws_s3_endpoint(&region()),
+        S3Preset::Scaleway => format!("https://s3.{}.scw.cloud", region().trim()),
+        S3Preset::CloudflareR2 => {
+            format!("https://{}.r2.cloudflarestorage.com", r2_account().trim())
+        }
+        S3Preset::Other => custom_endpoint(),
+    });
 
     let submit = move |evt: FormEvent| {
         let slug = slug.clone();
@@ -223,23 +351,54 @@ fn S3Form(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
                     error.set(None);
                     on_added.call(());
                 }
-                Err(e) => error.set(Some(e.to_string())),
+                Err(e) => error.set(Some(error_message(&e))),
             }
             busy.set(false);
         }
     };
 
     rsx! {
-        form { class: "conn-section", onsubmit: submit,
-            h4 { "S3-compatible bucket" }
-            div { class: "conn-grid",
-                div { class: "orgs-field",
-                    Label { html_for: "s3-endpoint", "Endpoint" }
-                    Input { id: "s3-endpoint", value: endpoint(), oninput: move |e: FormEvent| endpoint.set(e.value()) }
+        form { class: "conn-subform", onsubmit: submit,
+            div { class: "conn-choices", role: "radiogroup", aria_label: "Where the bucket lives",
+                for p in S3Preset::ALL {
+                    Button {
+                        key: "{p.name()}",
+                        r#type: "button",
+                        size: ButtonSize::Sm,
+                        role: "radio",
+                        aria_checked: preset() == p,
+                        variant: if preset() == p { ButtonVariant::Primary } else { ButtonVariant::Outline },
+                        onclick: move |_| {
+                            preset.set(p);
+                            if p != S3Preset::Other {
+                                region.set(p.default_region().to_string());
+                            }
+                        },
+                        "{p.name()}"
+                    }
                 }
-                div { class: "orgs-field",
-                    Label { html_for: "s3-region", "Region" }
-                    Input { id: "s3-region", value: region(), oninput: move |e: FormEvent| region.set(e.value()) }
+            }
+            div { class: "conn-grid",
+                match preset() {
+                    S3Preset::Other => rsx! {
+                        div { class: "orgs-field",
+                            Label { html_for: "s3-endpoint", "Endpoint" }
+                            Input { id: "s3-endpoint", placeholder: "https://s3.example.com", value: custom_endpoint(), oninput: move |e: FormEvent| custom_endpoint.set(e.value()) }
+                        }
+                    },
+                    S3Preset::CloudflareR2 => rsx! {
+                        div { class: "orgs-field",
+                            Label { html_for: "s3-r2-account", "Account id" }
+                            Input { id: "s3-r2-account", placeholder: "Cloudflare account id", value: r2_account(), oninput: move |e: FormEvent| r2_account.set(e.value()) }
+                        }
+                    },
+                    _ => rsx! {},
+                }
+                if preset() != S3Preset::CloudflareR2 {
+                    div { class: "orgs-field",
+                        Label { html_for: "s3-region", "Region" }
+                        Input { id: "s3-region", placeholder: "us-east-1", value: region(), oninput: move |e: FormEvent| region.set(e.value()) }
+                    }
                 }
                 div { class: "orgs-field",
                     Label { html_for: "s3-bucket", "Bucket" }
@@ -254,6 +413,9 @@ fn S3Form(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
                     Input { id: "s3-secret", r#type: "password", autocomplete: "off", value: secret(), oninput: move |e: FormEvent| secret.set(e.value()) }
                 }
             }
+            if preset() != S3Preset::Other {
+                p { class: "conn-meta", "Calls go to " code { "{endpoint}/{bucket}" } }
+            }
             Button { r#type: "submit", disabled: disabled || busy(), "Connect bucket" }
             if let Some(message) = error() {
                 p { class: "orgs-error", "{message}" }
@@ -263,8 +425,66 @@ fn S3Form(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
 }
 
 #[component]
+fn AzureForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
+    let mut account = use_signal(String::new);
+    let mut container = use_signal(String::new);
+    let mut sas = use_signal(String::new);
+    let mut error = use_signal(|| None::<String>);
+    let mut busy = use_signal(|| false);
+
+    let submit = move |evt: FormEvent| {
+        let slug = slug.clone();
+        async move {
+            evt.prevent_default();
+            if let Err(message) = validate_azure(&account(), &container(), &sas()) {
+                error.set(Some(message));
+                return;
+            }
+            busy.set(true);
+            match connect_azure(slug, account(), container(), sas()).await {
+                Ok(_) => {
+                    container.set(String::new());
+                    sas.set(String::new());
+                    error.set(None);
+                    on_added.call(());
+                }
+                Err(e) => error.set(Some(error_message(&e))),
+            }
+            busy.set(false);
+        }
+    };
+
+    rsx! {
+        form { class: "conn-subform", onsubmit: submit,
+            div { class: "conn-grid",
+                div { class: "orgs-field",
+                    Label { html_for: "az-account", "Storage account" }
+                    Input { id: "az-account", placeholder: "mystorageaccount", value: account(), oninput: move |e: FormEvent| account.set(e.value()) }
+                }
+                div { class: "orgs-field",
+                    Label { html_for: "az-container", "Container" }
+                    Input { id: "az-container", placeholder: "notes", value: container(), oninput: move |e: FormEvent| container.set(e.value()) }
+                }
+                div { class: "orgs-field",
+                    Label { html_for: "az-sas", "SAS token or SAS URL" }
+                    Input { id: "az-sas", r#type: "password", autocomplete: "off", placeholder: "sv=…&sig=…", value: sas(), oninput: move |e: FormEvent| sas.set(e.value()) }
+                }
+            }
+            p { class: "conn-meta",
+                "Generate a container SAS (read, list, write as needed) in the Azure portal: "
+                "Storage account → Containers → … → Generate SAS."
+            }
+            Button { r#type: "submit", disabled: disabled || busy(), "Connect container" }
+            if let Some(message) = error() {
+                p { class: "orgs-error", "{message}" }
+            }
+        }
+    }
+}
+
+#[component]
 fn AiForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
-    let mut provider = use_signal(|| Provider::Mistral);
+    let mut provider = use_signal(|| Provider::AI[0]);
     let mut base_url = use_signal(String::new);
     let mut key = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
@@ -293,7 +513,7 @@ fn AiForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
                     error.set(None);
                     on_added.call(());
                 }
-                Err(e) => error.set(Some(e.to_string())),
+                Err(e) => error.set(Some(error_message(&e))),
             }
             busy.set(false);
         }
@@ -301,20 +521,12 @@ fn AiForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
 
     rsx! {
         form { class: "conn-section", onsubmit: submit,
-            h4 { "AI account" }
-            div { class: "conn-choices", role: "radiogroup",
-                for p in Provider::AI {
-                    Button {
-                        key: "{p.id()}",
-                        r#type: "button",
-                        size: ButtonSize::Sm,
-                        role: "radio",
-                        aria_checked: provider() == p,
-                        variant: if provider() == p { ButtonVariant::Primary } else { ButtonVariant::Outline },
-                        onclick: move |_| provider.set(p),
-                        "{p.name()}"
-                    }
-                }
+            h4 { "AI" }
+            ProviderSelect {
+                options: Provider::AI.to_vec(),
+                value: provider(),
+                on_change: move |p| provider.set(p),
+                label: "AI provider",
             }
             div { class: "conn-grid",
                 if provider() == Provider::OpenaiCompatible {

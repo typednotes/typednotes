@@ -21,6 +21,8 @@ pub struct Call<'a> {
     pub method: &'a str,
     pub url: String,
     pub headers: Vec<(&'a str, &'a str)>,
+    /// UTF-8 request body, e.g. the JSON of a message to send.
+    pub body: Option<String>,
 }
 
 /// The request fields next to `warrant` and `call`.
@@ -47,6 +49,16 @@ pub fn body(warrant: &Warrant, r: &Request, call: &Call) -> Value {
         .iter()
         .map(|(k, v)| (k.to_string(), Value::from(*v)))
         .collect();
+    let mut call_json = json!({
+        "kind": "provider",
+        "account": call.account,
+        "method": call.method,
+        "url": call.url,
+        "headers": headers,
+    });
+    if let Some(body) = &call.body {
+        call_json["body"] = Value::from(body.as_str());
+    }
     json!({
         "warrant": warrant.to_json(),
         "now": r.now.to_string(),
@@ -56,13 +68,7 @@ pub fn body(warrant: &Warrant, r: &Request, call: &Call) -> Value {
         "resource": r.resource,
         "runId": r.run_id,
         "orgId": r.org_id,
-        "call": {
-            "kind": "provider",
-            "account": call.account,
-            "method": call.method,
-            "url": call.url,
-            "headers": headers,
-        },
+        "call": call_json,
     })
 }
 

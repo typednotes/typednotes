@@ -151,14 +151,44 @@ pub fn header(base_url: &str, header: &str, token: &str, headers: &[(&str, &str)
             "headers": headers })
 }
 
-pub fn google_oauth(
+/// Who refreshes a refreshable OAuth credential: liaison holds a client for
+/// each and knows its token endpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OAuthIssuer {
+    Google,
+    Dropbox,
+    Gitlab,
+}
+
+impl OAuthIssuer {
+    /// The credential `kind`.
+    pub fn kind(self) -> &'static str {
+        match self {
+            OAuthIssuer::Google => "google_oauth",
+            OAuthIssuer::Dropbox => "dropbox_oauth",
+            OAuthIssuer::Gitlab => "gitlab_oauth",
+        }
+    }
+}
+
+/// `Authorization: Bearer {access_token}`, refreshed by liaison at the
+/// issuer's token endpoint once `expires_at - 60 ≤ now`.
+pub fn oauth(
+    issuer: OAuthIssuer,
     base_url: &str,
     access_token: &str,
     refresh_token: &str,
     expires_at: u64,
 ) -> Value {
-    json!({ "kind": "google_oauth", "base_url": base_url, "access_token": access_token,
+    json!({ "kind": issuer.kind(), "base_url": base_url, "access_token": access_token,
             "refresh_token": refresh_token, "expires_at": expires_at.to_string() })
+}
+
+/// An Azure Blob Storage shared access signature, appended by liaison to the
+/// query of every call.
+pub fn azure_sas(base_url: &str, sas: &str) -> Value {
+    json!({ "kind": "azure_sas", "base_url": base_url, "sas": sas,
+            "headers": { "x-ms-version": "2021-12-02" } })
 }
 
 pub fn s3(base_url: &str, region: &str, access_key_id: &str, secret_access_key: &str) -> Value {
@@ -200,8 +230,40 @@ mod tests {
                    "token": "k", "headers": {"anthropic-version": "2023-06-01"}})
         );
         assert_eq!(
-            google_oauth("https://www.googleapis.com", "a", "r", 1_790_000_000)["expires_at"],
-            json!("1790000000")
+            oauth(
+                OAuthIssuer::Google,
+                "https://www.googleapis.com",
+                "a",
+                "r",
+                1_790_000_000
+            ),
+            json!({"kind": "google_oauth", "base_url": "https://www.googleapis.com",
+                   "access_token": "a", "refresh_token": "r", "expires_at": "1790000000"})
+        );
+        assert_eq!(
+            oauth(
+                OAuthIssuer::Dropbox,
+                "https://api.dropboxapi.com",
+                "a",
+                "r",
+                1
+            )["kind"],
+            json!("dropbox_oauth")
+        );
+        assert_eq!(
+            oauth(
+                OAuthIssuer::Gitlab,
+                "https://gitlab.com/api/v4",
+                "a",
+                "r",
+                1
+            )["kind"],
+            json!("gitlab_oauth")
+        );
+        assert_eq!(
+            azure_sas("https://a.blob.core.windows.net/c", "sv=1&sig=x"),
+            json!({"kind": "azure_sas", "base_url": "https://a.blob.core.windows.net/c",
+                   "sas": "sv=1&sig=x", "headers": {"x-ms-version": "2021-12-02"}})
         );
         assert_eq!(
             s3("https://s3.fr-par.scw.cloud/b", "fr-par", "AK", "SK"),
