@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
-use ui::Navbar;
-use views::Home;
+use ui::{Navbar, UserMenu};
+use views::{Home, Login, OrgView};
 
 mod views;
 
@@ -11,12 +11,23 @@ enum Route {
     #[layout(WebNavbar)]
     #[route("/")]
     Home {},
+    #[route("/login?:error")]
+    Login { error: String },
+    #[route("/orgs/:slug?:connected&:error")]
+    OrgView { slug: String, connected: String, error: String },
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() {
+    // The server also serves the OAuth round trips (`/auth/...`): plain
+    // redirects, merged into the router next to the app and its server
+    // functions.
+    #[cfg(feature = "server")]
+    dioxus::serve(|| async move { Ok(dioxus::server::router(App).merge(api::auth_routes())) });
+
+    #[cfg(not(feature = "server"))]
     dioxus::launch(App);
 }
 
@@ -42,6 +53,7 @@ fn WebNavbar() -> Element {
                 to: Route::Home {},
                 "Typednotes"
             }
+            UserMenu {}
         }
 
         Outlet::<Route> {}

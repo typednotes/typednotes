@@ -6,9 +6,9 @@ use crate::components::card::{Card, CardContent, CardDescription, CardHeader, Ca
 use crate::components::input::Input;
 use crate::components::label::Label;
 
-const ORGS_CSS: Asset = asset!("/assets/styling/orgs.css");
+pub(crate) const ORGS_CSS: Asset = asset!("/assets/styling/orgs.css");
 
-/// The whole app, for now: which orgs exist, and a form to add one.
+/// The signed-in home page: the caller's orgs, and a form to add one.
 ///
 /// Both reads use `use_server_future`, so the server renders the list and
 /// the status line into the initial HTML and the client hydrates the same
@@ -28,13 +28,13 @@ pub fn OrgsPanel() -> Element {
 
             Card {
                 CardHeader {
-                    CardTitle { "Organisations" }
-                    CardDescription { "Every org in the core schema, newest first." }
+                    CardTitle { "Your organisations" }
+                    CardDescription { "Orgs you belong to, newest first. Connections live in each org." }
                 }
                 CardContent {
                     match orgs() {
                         Some(Ok(list)) if list.is_empty() => rsx! {
-                            p { class: "orgs-empty", "No organisations yet." }
+                            p { class: "orgs-empty", "No organisations yet — create one above." }
                         },
                         Some(Ok(list)) => rsx! { OrgTable { orgs: list } },
                         Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load orgs: {e}" } },
@@ -46,15 +46,40 @@ pub fn OrgsPanel() -> Element {
     }
 }
 
-/// Database and schema reachability, so a fresh deploy says what is missing
-/// (no database, or migrations not applied yet) instead of failing opaquely.
+/// What this deployment is missing, so a fresh deploy says so (no database,
+/// migrations not applied, vault or liaison not configured) instead of
+/// failing opaquely later.
 #[component]
 fn StatusLine(health: Option<api::Health>) -> Element {
-    let (class, text) = match health {
-        Some(h) if h.database && h.schema => ("ok", "database connected, core schema present"),
-        Some(h) if h.database => ("warn", "database connected, but the core schema is missing — apply the migrations"),
-        Some(_) => ("err", "database unreachable"),
-        None => ("warn", "status unknown"),
+    let Some(h) = health else {
+        return rsx! { p { class: "orgs-status warn", "status unknown" } };
+    };
+    let mut missing = Vec::new();
+    if !h.database {
+        missing.push("database unreachable");
+    } else if !h.schema {
+        missing.push("core schema not applied");
+    }
+    if h.database && !h.ledger {
+        missing.push("ledger schema absent (no credits)");
+    }
+    if !h.vault {
+        missing.push("vault not configured (no connections)");
+    }
+    if !h.liaison {
+        missing.push("liaison not configured (no tests)");
+    }
+    let class = if !h.database || !h.schema {
+        "err"
+    } else if missing.is_empty() {
+        "ok"
+    } else {
+        "warn"
+    };
+    let text = if missing.is_empty() {
+        "database, ledger, vault and liaison all configured".to_string()
+    } else {
+        missing.join(" · ")
     };
     rsx! { p { class: "orgs-status {class}", "{text}" } }
 }
@@ -67,14 +92,18 @@ fn OrgTable(orgs: Vec<Org>) -> Element {
                 tr {
                     th { "Slug" }
                     th { "Name" }
+                    th { "Role" }
                     th { "Created" }
                 }
             }
             tbody {
                 for org in orgs {
                     tr { key: "{org.id}",
-                        td { code { "{org.slug}" } }
+                        // A plain link: the router lives in each app crate,
+                        // and every app routes `/orgs/:slug` to `OrgPage`.
+                        td { a { href: "/orgs/{org.slug}", code { "{org.slug}" } } }
                         td { "{org.name}" }
+                        td { "{org.role}" }
                         td { "{org.created_at}" }
                     }
                 }
@@ -117,6 +146,7 @@ fn NewOrgForm(on_created: EventHandler<Org>) -> Element {
         Card {
             CardHeader {
                 CardTitle { "New organisation" }
+                CardDescription { "You become its owner, and it starts with welcome credits." }
             }
             CardContent {
                 form { class: "orgs-form", onsubmit: submit,

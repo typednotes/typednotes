@@ -75,6 +75,10 @@ rather than by comparison with the Lean services.
 - **Fail-closed with what caching, if any?** A short-lived in-`broker` cache of *access*
   tokens (not refresh tokens) is the obvious middle ground, and needs a decision.
 - **Does the server enforce the `(user, provider, connection)` scope**, or only
-  authenticate the caller? Read the implementation and record the answer here.
+  authenticate the caller? *Answer (read in 1.2.0):* only by path prefix. Policies are
+  longest-prefix rules over paths, so the scope holds only because the triple is in the path
+  (`secret/data/thirdparty/{provider}/{user_id}/{connection_id}`, see
+  [`../connections.md`](../connections.md)). The per-connection binding is enforced in
+  `broker`: the account's last segment must equal the warrant's `resource`.
 - Is the audit log in `secrets` reconciled against `broker`'s? Two logs that can disagree
   are worse than one.

@@ -23,6 +23,8 @@ detail — types, schemas, and the specific properties each service proves — l
 
 - [`proof-strategy.md`](proof-strategy.md) — the six proof tiers, cross-cutting patterns, and
   an honest account of what "provably correct" can and cannot mean here. **Read this first.**
+- [`connections.md`](connections.md) — the cross-service contract for sign-in and connected
+  accounts: vault paths, credential shapes, egress fields, the grant statement.
 - [`services/`](services/) — one document per service, all answering the same eight questions:
   [`idp`](services/idp.md) · [`core`](services/core.md) · [`broker`](services/broker.md) ·
   [`ledger`](services/ledger.md) · [`agent`](services/agent.md) ·
@@ -450,7 +452,9 @@ migrating invoicing later is far more expensive than choosing correctly now.
 3. **Passkeys.** CBOR + COSE + attestation in `linen` (§3.6), then the login module and
    the Dioxus UI. Prove the parsers.
 4. **Connections.** OAuth connect flow per provider; refresh tokens into
-   `typednotes/secrets`, scoped `(user_id, provider, connection_id)`.
+   `typednotes/secrets`, scoped `(user_id, provider, connection_id)`. *v0 built ahead of steps
+   1–3:* GitHub and Google Drive over OAuth, S3 and AI API keys by form, interim GitHub/Google
+   sign-in, see [`connections.md`](connections.md).
 5. **`broker` v0.** Warrant minting and verification with Biscuit, plus the audit log.
    No budget yet. Route one provider through it.
 6. **Agent v0.** Lean 4 agent that can only reach the world through `broker`.

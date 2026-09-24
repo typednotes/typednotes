@@ -6,8 +6,12 @@ per-service detail: [`docs/services/`](docs/services/).
 
 This repository is the **app**: a Dioxus 0.7 fullstack web app whose server is the minimal
 `core` of the architecture — users, identities, orgs and memberships in Postgres
-(`docs/services/core.md` §4). Today it lists and creates orgs; everything else in the
-architecture lives in sibling services:
+(`docs/services/core.md` §4). Users sign in with GitHub or Google (the first sign-in creates
+the account), create orgs, and connect GitHub, Google Drive, S3-compatible buckets and AI
+accounts (Mistral, OpenAI, Anthropic, any OpenAI-compatible endpoint) to them. Credentials go
+into the vault; "Test" calls the provider through liaison. The contract with the other services
+is [`docs/connections.md`](docs/connections.md). Everything else in the architecture lives in
+sibling services:
 
 | Service | Repository | Deployed by |
 |---|---|---|
@@ -16,19 +20,23 @@ architecture lives in sibling services:
 | `liaison` — the broker, sole egress chokepoint | [`typednotes/liaison`](https://github.com/typednotes/liaison) | `typednotes-infra` |
 | `secrets` — the vault | [`typednotes/secrets`](https://github.com/typednotes/secrets) | `typednotes-infra` |
 
-**There is no authentication yet** — the IdP (`docs/services/idp.md`) is not built — so every
-endpoint is public. Don't store anything real in a deployment of this version.
+Sign-in is **interim**: GitHub and Google act as identity providers until `idp`
+(`docs/services/idp.md`) exists. They are recorded as `identities` rows, so switching providers
+later keeps every user id.
 
 ## Layout
 
 ```
 packages/
-  api/      server functions (`list_orgs`, `create_org`, `health`); sqlx, server-only
-  ui/       shared UI: `OrgsPanel`, `Navbar`, and the dx components in `src/components/`
+  api/      shared types and server functions; `src/server/` is server-only:
+              session + oauth   sign-in, cookies, the /auth/* routes
+              db, connections   orgs, memberships, ledger's grant, connections
+              vault, warrant, liaison   clients for secrets and liaison
+  ui/       shared UI: sign-in, orgs, org page, connections, and the dx components
   web/      the deployable fullstack app (routes, SSR, wasm client)
   desktop/, mobile/   the same UI for native targets (they need a server URL; not deployed)
 migrations/           the core schema, NNNN_description.sql — the one source of truth
-scripts/dev-db.sh     applies migrations/ to a local database
+scripts/dev-db.sh     applies migrations/ (and sibling ledger/liaison sql/) to a local database
 Dockerfile            `dx bundle` → the `web` server binary + `public/`
 ```
 
@@ -37,12 +45,25 @@ Dockerfile            `dx bundle` → the `web` server binary + `public/`
 ```sh
 # a local Postgres, then the schema (the server never migrates itself)
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/typednotes
-scripts/dev-db.sh
+scripts/dev-db.sh          # also applies ../ledger/sql and ../liaison/sql when checked out
 
 dx serve -p web            # http://localhost:8080
 ```
 
-`cargo test -p api --features server` runs the validation tests;
+Every other variable is optional and turns one feature on (`docs/connections.md` §8); the
+status line on the home page lists what is missing.
+
+| Variable | Enables |
+|---|---|
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub sign-in and connection (OAuth App, callback `http://localhost:8080/auth/github/callback`) |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google sign-in and Drive connection (callback `…/auth/google/callback`) |
+| `SECRETS_URL`, `SECRETS_PASSWORD` (`SECRETS_USERNAME`, default `typednotes-app`) | storing connections, in a `secrets-server` ≥ 1.2.0 bootstrapped with `typednotes-infra/scripts/vault-bootstrap.sh` |
+| `LIAISON_URL`, `LIAISON_ROOT_KEY` | testing connections through liaison ≥ 0.3.0 (same root key) |
+| `PUBLIC_URL` | overrides the origin used in OAuth redirect URIs (default: the request's forwarded host) |
+| `TYPEDNOTES_WELCOME_CREDITS` | credits granted to each new org (default 1000, `0` disables) |
+
+`cargo test -p api --features server` runs the unit tests (validation, sessions, PKCE,
+warrant encoding, credential shapes, ledger's grant SQL);
 `cargo check -p web --features server` and
 `cargo check -p web --features web --target wasm32-unknown-unknown` check both halves.
 
@@ -66,5 +87,5 @@ history whose applied prefix changed.
 Tag `vX.Y.Z` and push: `.github/workflows/docker-publish.yml` publishes
 `ghcr.io/typednotes/typednotes:X.Y.Z`. Then bump the app's release version in
 `typednotes-infra` (it names both the image and the tag the SQL is read at)
-and apply there. The container needs one variable, `DATABASE_URL`, which the fleet binds from a
-composed secret.
+and apply there. The fleet binds every variable above (`typednotes-infra`'s `Fleet.lean` and
+README, "Vault service identities").

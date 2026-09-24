@@ -52,6 +52,9 @@ Everything. Specifically worth testing rather than reasoning about:
 
 ## 6. Open questions
 
+- **Interim, decided:** until `idp` exists, `web` signs users in with GitHub or Google itself
+  (authorization code + PKCE, [`../connections.md`](../connections.md) §2). They are ordinary
+  `identities` issuers, so moving to `idp` later changes no user id.
 - **Does the login UI ship inside `idp` or inside `web`?** Inside `idp` keeps the
   authentication surface in one deployable and avoids a cross-origin challenge handoff;
   inside `web` gives a consistent design system. Leaning `idp`.
