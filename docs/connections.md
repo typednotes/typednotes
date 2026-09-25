@@ -87,7 +87,7 @@ and as the warrant `capability` provider.
 |---|---|---|---|
 | `github` | OAuth (scopes `read:user repo`) | `https://api.github.com` | `bearer` |
 | `gitlab` | OAuth (scopes `read_user read_api read_repository write_repository`) | `https://gitlab.com/api/v4` | `gitlab_oauth` |
-| `gdrive` | OAuth (scope `https://www.googleapis.com/auth/drive`, `access_type=offline`, `prompt=consent`) | `https://www.googleapis.com` | `google_oauth` |
+| `gdrive` | OAuth (scope `https://www.googleapis.com/auth/drive.file` — only the files the app creates or the user picks for it; the full `…/auth/drive` is a restricted scope, refused to unverified apps — `access_type=offline`, `prompt=consent`) | `https://www.googleapis.com` | `google_oauth` |
 | `dropbox` | OAuth (the app's scopes, `token_access_type=offline`) | `https://api.dropboxapi.com` | `dropbox_oauth` |
 | `s3` | form: endpoint (presets: AWS `https://s3.{region}.amazonaws.com`, Cloudflare R2, Scaleway, other), region, bucket, access key id, secret | `{endpoint}/{bucket}` (path-style) | `s3` |
 | `azure` | form: storage account, container, SAS token (or SAS URL) | `https://{account}.blob.core.windows.net/{container}` | `azure_sas` |

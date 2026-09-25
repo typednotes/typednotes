@@ -150,8 +150,13 @@ fn scopes(idp: Idp, purpose: &Purpose) -> (&'static str, &'static [(&'static str
         (Idp::Google, Purpose::Login) => ("openid email profile", &[]),
         // A refresh token is only issued with offline access, and only on a
         // consent screen — so force one, or a reconnect would get none.
+        // `drive.file`, not `drive`: access to the files the app creates or
+        // the user picks for it, not the whole Drive. Google classes `drive`
+        // as restricted — unverified apps are refused (403 access_denied)
+        // for anyone but test users, and verification needs a yearly
+        // security assessment — while `drive.file` is not.
         (Idp::Google, Purpose::Connect { .. }) => (
-            "openid email https://www.googleapis.com/auth/drive",
+            "openid email https://www.googleapis.com/auth/drive.file",
             &[("access_type", "offline"), ("prompt", "consent")],
         ),
         (Idp::Gitlab, _) => ("read_user read_api read_repository write_repository", &[]),
@@ -512,7 +517,9 @@ mod tests {
             return_to: None,
         };
         let (scope, extra) = scopes(Idp::Google, &purpose);
-        assert!(scope.contains("auth/drive"));
+        // Per-file access only: the full-Drive scope is restricted.
+        let drive: Vec<&str> = scope.split(' ').filter(|s| s.contains("auth/drive")).collect();
+        assert_eq!(drive, ["https://www.googleapis.com/auth/drive.file"]);
         assert!(extra.contains(&("access_type", "offline")));
         assert!(extra.contains(&("prompt", "consent")));
         assert_eq!(
