@@ -25,3 +25,6 @@ rustc-ice-*.txt
 
 # Playwright MCP
 .playwright-mcp
+
+# macOS
+.DS_Store
