@@ -129,7 +129,9 @@ pub async fn store(
             .bind(&id)
             .execute(pool)
             .await;
-        return Err(bad_gateway("could not store the credential in the vault"));
+        return Err(bad_gateway(format!(
+            "could not store the credential in the vault: {e}"
+        )));
     }
     sqlx::query("update connections set status = 'active' where id = $1::uuid")
         .bind(&id)

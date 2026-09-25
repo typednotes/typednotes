@@ -3,6 +3,16 @@
 
 use dioxus::prelude::ServerFnError;
 
+/// The server's own message, without the "error running server function:
+/// … (details: None)" wrapping `Display` adds — for text that ends up in a
+/// redirect's `?error=` and is shown as is.
+pub fn message(e: &ServerFnError) -> String {
+    match e {
+        ServerFnError::ServerError { message, .. } => message.clone(),
+        other => other.to_string(),
+    }
+}
+
 fn with_code(code: u16, message: impl Into<String>) -> ServerFnError {
     ServerFnError::ServerError {
         message: message.into(),

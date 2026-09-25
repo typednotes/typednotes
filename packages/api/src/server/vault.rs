@@ -39,6 +39,32 @@ pub fn configured() -> bool {
 
 static TOKEN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 
+/// The last failed login and when, so a vault that refuses the app is not
+/// asked again (an Argon2 verification each time) on every page load.
+static LAST_FAILURE: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+const FAILURE_TTL: Duration = Duration::from_secs(30);
+
+const NOT_CONFIGURED: &str = "the vault is not configured (SECRETS_URL, SECRETS_PASSWORD)";
+
+/// Whether the vault accepts the app right now: configured, reachable, and
+/// the `typednotes-app` user exists with this password. `configured()` alone
+/// is not enough — a vault whose service users were never created looks
+/// configured until the first credential fails to store. Uses the cached
+/// token when there is one, so this is usually free.
+pub async fn ready() -> Result<(), String> {
+    let s = settings().ok_or(NOT_CONFIGURED)?;
+    let recent = LAST_FAILURE.lock().expect("vault failure lock").clone();
+    if let Some((error, at)) = recent {
+        if at.elapsed() < FAILURE_TTL {
+            return Err(error);
+        }
+    }
+    let result = token(&s).await.map(|_| ());
+    *LAST_FAILURE.lock().expect("vault failure lock") =
+        result.as_ref().err().map(|e| (e.clone(), Instant::now()));
+    result
+}
+
 /// The vault path (relative to `secret/data/`) of a connection's credential.
 pub fn credential_path(provider: Provider, user_id: &str, connection_id: &str) -> String {
     format!("thirdparty/{}/{user_id}/{connection_id}", provider.id())
@@ -111,7 +137,7 @@ async fn send(
 
 /// Write `credential` at `secret/data/{path}` (a new version if it exists).
 pub async fn write(path: &str, credential: &Value) -> Result<(), String> {
-    let s = settings().ok_or("the vault is not configured (SECRETS_URL, SECRETS_PASSWORD)")?;
+    let s = settings().ok_or(NOT_CONFIGURED)?;
     let url = format!("{}/v1/secret/data/{path}", s.url);
     let response = send(&s, |token| {
         http().post(&url).bearer_auth(token).json(credential)
@@ -126,7 +152,7 @@ pub async fn write(path: &str, credential: &Value) -> Result<(), String> {
 
 /// Delete the credential at `secret/data/{path}`. Already absent is success.
 pub async fn delete(path: &str) -> Result<(), String> {
-    let s = settings().ok_or("the vault is not configured (SECRETS_URL, SECRETS_PASSWORD)")?;
+    let s = settings().ok_or(NOT_CONFIGURED)?;
     let url = format!("{}/v1/secret/data/{path}", s.url);
     let response = send(&s, |token| http().delete(&url).bearer_auth(token)).await?;
     match response.status() {

@@ -2,7 +2,8 @@
 .dx-label {
   display: flex;
   align-items: center;
-  color: var(--secondary-color-4);
+  color: var(--app-text);
   font-size: 0.8rem;
+  font-weight: 500;
   line-height: 1;
 }

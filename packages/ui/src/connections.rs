@@ -234,7 +234,7 @@ fn AddConnection(slug: String, on_added: EventHandler<()>) -> Element {
                 CardTitle { "Add a connection" }
                 if !vault {
                     CardDescription { class: "orgs-error",
-                        "Connections are disabled until the vault is configured (SECRETS_URL, SECRETS_PASSWORD)."
+                        "Connections are disabled: the vault is not configured (SECRETS_URL, SECRETS_PASSWORD) or refuses the app's login."
                     }
                 } else {
                     CardDescription {

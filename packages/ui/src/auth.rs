@@ -1,7 +1,7 @@
 use api::{current_user, health, logout};
 use dioxus::prelude::*;
 
-use crate::components::button::{Button, ButtonVariant};
+use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardContent, CardDescription, CardHeader, CardTitle};
 use crate::navigate_to;
 
@@ -73,13 +73,20 @@ pub fn UserMenu() -> Element {
         .display_name
         .clone()
         .unwrap_or_else(|| user.email.clone());
+    let initial = who
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_string());
 
     rsx! {
         document::Link { rel: "stylesheet", href: AUTH_CSS }
         div { class: "user-menu",
+            span { class: "user-menu-avatar", aria_hidden: "true", "{initial}" }
             span { class: "user-menu-name", title: "{user.email}", "{who}" }
             Button {
-                variant: ButtonVariant::Ghost,
+                variant: ButtonVariant::Outline,
+                size: ButtonSize::Sm,
                 disabled: busy(),
                 onclick: move |_| async move {
                     busy.set(true);

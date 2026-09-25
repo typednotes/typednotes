@@ -8,7 +8,7 @@
   flex-direction: column;
   gap: 0.35rem;
   padding: 0.75rem 0;
-  border-bottom: 1px solid var(--primary-color-6, #333);
+  border-bottom: 1px solid var(--app-border);
 }
 
 .conn-row:last-child { border-bottom: none; }
@@ -30,9 +30,9 @@
   border: 1px solid currentColor;
 }
 
-.conn-status-active { color: #3fb950; }
-.conn-status-pending { color: #d29922; }
-.conn-status-failed { color: #f85149; }
+.conn-status-active { color: var(--app-success); }
+.conn-status-pending { color: var(--app-warning); }
+.conn-status-failed { color: var(--app-danger); }
 
 .conn-meta {
   font-size: 0.8rem;
@@ -41,8 +41,8 @@
 }
 
 .conn-result { font-size: 0.85rem; }
-.conn-result.ok { color: #3fb950; }
-.conn-result.err { color: #f85149; }
+.conn-result.ok { color: var(--app-success); }
+.conn-result.err { color: var(--app-danger); }
 
 .conn-actions,
 .conn-oauth,
@@ -58,7 +58,7 @@
   align-items: flex-start;
   gap: 0.75rem;
   padding: 1rem 0;
-  border-bottom: 1px solid var(--primary-color-6, #333);
+  border-bottom: 1px solid var(--app-border);
 }
 
 .conn-section:first-child { padding-top: 0; }
@@ -108,10 +108,38 @@
   gap: 0.25rem;
   padding: 0.5rem 0.75rem;
   border-radius: 0.5rem;
-  border: 1px solid var(--primary-color-6, #333);
+  border: 1px solid var(--app-border);
   max-width: 85%;
 }
 
 .inbox-msg.in { align-self: flex-start; }
 .inbox-msg.out { align-self: flex-end; opacity: 0.9; }
 .inbox-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.conn-row {
+  transition: background-color 120ms ease;
+}
+
+.conn-status {
+  font-weight: 500;
+  background: color-mix(in oklab, currentColor 10%, transparent);
+  border-color: color-mix(in oklab, currentColor 35%, transparent);
+}
+
+.conn-meta { color: var(--app-muted); opacity: 1; }
+
+@media (max-width: 640px) {
+  .conn-select,
+  .conn-select-wide {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .conn-picker > *,
+  .conn-actions > *,
+  .conn-oauth > * {
+    flex: 1 1 auto;
+  }
+
+  .inbox-msg { max-width: 100%; }
+}

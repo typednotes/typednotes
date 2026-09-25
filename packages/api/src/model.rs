@@ -48,6 +48,7 @@ pub struct Health {
     pub schema: bool,
     /// `ledger`'s tables exist.
     pub ledger: bool,
+    /// The vault is configured *and* accepts the app's login.
     pub vault: bool,
     pub liaison: bool,
     pub github: bool,

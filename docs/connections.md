@@ -156,8 +156,10 @@ including `sv` and `sig`.
   - `DELETE` → `204`, or `404` if absent.
   - The capability check runs before the body is read. `400` for a username outside 1–64
     characters of `[A-Za-z0-9_.-]` (or starting with `.`), a password under 12 characters,
-    or an empty policy name. The bootstrap script requires 16 for the service passwords.
-- Service identities, created once by `typednotes-infra/scripts/vault-bootstrap.sh`:
+    or an empty policy name.
+- Service identities, declared in the vault's own config (`SECRETS_SERVER_SERVICE_IDENTITIES`,
+  `secrets` ≥ 1.3.0, set by `typednotes-infra`) and applied by the vault on every start, so a
+  recreated vault needs no manual step and a rotated password takes effect on redeploy:
 
 | User | Policy | Rules |
 |---|---|---|
@@ -283,7 +285,7 @@ seconds. `id`, `orgId` and `runId` are UUIDs (ledger's `credit_holds.run_id` is 
 ## 9. Verified end to end
 
 On 2026-09-24, against Postgres 16 with every service's migrations applied in order, the local
-`secrets-server` (bootstrapped by `vault-bootstrap.sh`), liaison 0.3.0 and the app. The provider
+`secrets-server` (its service users then created over HTTP), liaison 0.3.0 and the app. The provider
 was a mock except where noted.
 
 - An OAuth start stores the flow and redirects with PKCE. A bogus or replayed `state` is
@@ -324,7 +326,7 @@ Slack, WhatsApp, Azure, GitHub/GitLab repository APIs.
 - `liaison` still takes `now` from the caller; the app is the only caller.
 - Deleting a vault user does not revoke tokens already issued to it, and `renew-self` has no
   maximum lifetime, so a holder can keep such a token alive by renewing it. Rotate by
-  re-running the bootstrap script; a max TTL or revoke-by-owner in `secrets` is the real fix.
+  changing the password and redeploying; a max TTL or revoke-by-owner in `secrets` is the real fix.
 - Concurrent OAuth refreshes in liaison are not coalesced (last write wins in the vault).
   GitLab rotates its refresh token on every refresh, so for `gitlab` a lost race or a failed
   write-back means reconnecting.

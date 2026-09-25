@@ -50,11 +50,14 @@ async fn table_exists(pool: &PgPool, table: &str) -> bool {
 }
 
 pub async fn health() -> Health {
+    // Not just configured: the vault must accept the app's login, or every
+    // connection fails at its last step (after the OAuth round trip).
+    let vault = vault::ready().await.is_ok();
     let configured = |database, schema, ledger| Health {
         database,
         schema,
         ledger,
-        vault: vault::configured(),
+        vault,
         liaison: liaison::configured(),
         github: config::github().is_some(),
         google: config::google().is_some(),

@@ -63,7 +63,7 @@ fn StatusLine(health: Option<api::Health>) -> Element {
         missing.push("ledger schema absent (no credits)");
     }
     if !h.vault {
-        missing.push("vault not configured (no connections)");
+        missing.push("vault not configured or refusing the app (no connections)");
     }
     if !h.liaison {
         missing.push("liaison not configured (no tests)");

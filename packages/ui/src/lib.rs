@@ -28,6 +28,10 @@ use dioxus::prelude::*;
 /// The dx components' theme variables. Include once, at the app root.
 pub const COMPONENTS_THEME: Asset = asset!("/assets/dx-components-theme.css");
 
+/// The app's design tokens and page styles, on top of `COMPONENTS_THEME`.
+/// Include once, at the app root, after it.
+pub const APP_THEME: Asset = asset!("/assets/styling/theme.css");
+
 /// A full-page navigation. The OAuth routes are plain HTTP redirects, not
 /// router pages, and signing out must drop every cached server future — so
 /// both leave the SPA rather than use the router. `url` is always built from

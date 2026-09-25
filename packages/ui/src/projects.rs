@@ -104,7 +104,7 @@ pub fn ProjectPage(
         document::Link { rel: "stylesheet", href: ORGS_CSS }
         document::Link { rel: "stylesheet", href: CONNECTIONS_CSS }
         div { class: "orgs",
-            p { a { href: "/orgs/{slug}", "← Organisation" } }
+            p { class: "back-link", a { href: "/orgs/{slug}", "← Organisation" } }
             match detail() {
                 None => rsx! { p { "Loading…" } },
                 Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load this project: {error_message(&e)}" } },

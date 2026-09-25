@@ -8,3 +8,5 @@
 - [x] There should be a notion of Project
 - [x] I should connect to github, or gitlab and select a primary repo for the project
 - [x] Add interfaces to Whatsapp, Signal and Slack
+- [x] The black background makes the log-out button invisible.
+- [x] The choice of color is a bit weird, nothing happens on button hover, can you make the design look more responsive, modern and functionnal ?

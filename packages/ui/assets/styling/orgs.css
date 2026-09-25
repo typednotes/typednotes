@@ -3,14 +3,19 @@
   flex-direction: column;
   gap: 1.5rem;
   max-width: 48rem;
-  margin: 2rem auto;
+  margin: 0 auto;
 }
 
-.orgs-status { margin: 0; font-size: 0.9rem; }
+@media (max-width: 640px) {
+  .orgs { gap: 1rem; }
+  .orgs-table th:nth-child(4), .orgs-table td:nth-child(4) { display: none; }
+}
+
+.orgs-status { margin: 0; font-size: 0.875rem; color: var(--app-muted); }
 .orgs-status::before { content: "● "; }
-.orgs-status.ok::before { color: #3fb950; }
-.orgs-status.warn::before { color: #d29922; }
-.orgs-status.err::before { color: #f85149; }
+.orgs-status.ok::before { color: var(--app-success); }
+.orgs-status.warn::before { color: var(--app-warning); }
+.orgs-status.err::before { color: var(--app-danger); }
 
 .orgs-form {
   display: flex;
@@ -29,15 +34,15 @@
 .orgs-table { width: 100%; border-collapse: collapse; }
 .orgs-table th, .orgs-table td {
   text-align: left;
-  padding: 0.5rem 0.25rem;
-  border-bottom: 1px solid var(--primary-color-6, #333);
+  padding: 0.6rem 0.5rem;
+  border-bottom: 1px solid var(--app-border);
 }
 
-.orgs-error { color: #f85149; }
-.orgs-empty { opacity: 0.7; }
+.orgs-error { color: var(--app-danger); }
+.orgs-empty { color: var(--app-muted); }
 
 .slug-check { margin: 0.5rem 0 0; font-size: 0.85rem; }
-.slug-check.ok { color: #3fb950; }
-.slug-check.err { color: #f85149; }
+.slug-check.ok { color: var(--app-success); }
+.slug-check.err { color: var(--app-danger); }
 
 .projects-new { margin: 1.25rem 0 0.75rem; }

@@ -24,6 +24,7 @@ fn App() -> Element {
     rsx! {
         // Global app resources
         document::Stylesheet { href: ui::COMPONENTS_THEME }
+        document::Stylesheet { href: ui::APP_THEME }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
 
         Router::<Route> {}
@@ -37,11 +38,12 @@ fn MobileNavbar() -> Element {
     rsx! {
         Navbar {
             Link {
+                class: "navbar-brand",
                 to: Route::Home {},
                 "Typednotes"
             }
         }
 
-        Outlet::<Route> {}
+        main { class: "page", Outlet::<Route> {} }
     }
 }

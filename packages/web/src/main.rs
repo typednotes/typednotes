@@ -37,7 +37,10 @@ fn main() {
 fn App() -> Element {
     rsx! {
         // Global app resources
+        document::Title { "Typednotes" }
+        document::Meta { name: "viewport", content: "width=device-width, initial-scale=1" }
         document::Stylesheet { href: ui::COMPONENTS_THEME }
+        document::Stylesheet { href: ui::APP_THEME }
         document::Link { rel: "icon", href: FAVICON }
         document::Link { rel: "stylesheet", href: MAIN_CSS }
 
@@ -52,12 +55,13 @@ fn WebNavbar() -> Element {
     rsx! {
         Navbar {
             Link {
+                class: "navbar-brand",
                 to: Route::Home {},
                 "Typednotes"
             }
             UserMenu {}
         }
 
-        Outlet::<Route> {}
+        main { class: "page", Outlet::<Route> {} }
     }
 }

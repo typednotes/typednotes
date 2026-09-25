@@ -32,6 +32,7 @@ use super::channels::{self, SlackEvent};
 use super::connections::NewConnection;
 use super::oauth::{self, Idp, Purpose};
 use super::vault::OAuthIssuer;
+use super::errors::message;
 use super::{config, connections, db, projects, session, vault};
 use crate::{Provider, User};
 
@@ -105,7 +106,7 @@ async fn login(Path(idp): Path<String>, headers: HeaderMap) -> Response {
     };
     match oauth::start(idp, &client, Purpose::Login, &config::public_url(&headers)).await {
         Ok(url) => Redirect::to(&url).into_response(),
-        Err(e) => to_login(&e.to_string()),
+        Err(e) => to_login(&message(&e)),
     }
 }
 
@@ -150,8 +151,11 @@ async fn connect(
     let Some(client) = idp.client() else {
         return fail(&format!("{} is not configured", provider.name()));
     };
-    if !vault::configured() {
-        return fail("connections are disabled: the vault is not configured");
+    // Checked before the round trip to the provider, not after it: the
+    // credential could not be stored anyway.
+    if let Err(e) = vault::ready().await {
+        eprintln!("connect refused before the OAuth round trip: {e}");
+        return fail(&format!("connections are unavailable: {e}"));
     }
     let purpose = Purpose::Connect {
         user_id: user.id,
@@ -161,7 +165,7 @@ async fn connect(
     };
     match oauth::start(idp, &client, purpose, &config::public_url(&headers)).await {
         Ok(url) => Redirect::to(&url).into_response(),
-        Err(e) => fail(&e.to_string()),
+        Err(e) => fail(&message(&e)),
     }
 }
 
@@ -239,14 +243,14 @@ async fn callback(
             };
             let user_id = match session::user_for_identity(&identity).await {
                 Ok(id) => id,
-                Err(e) => return fail(&e.to_string()),
+                Err(e) => return fail(&message(&e)),
             };
             match session::create(&user_id).await {
                 Ok(token) => {
                     let cookie = session::set_cookie(&token, public_url.starts_with("https://"));
                     ([(SET_COOKIE, cookie)], Redirect::to("/")).into_response()
                 }
-                Err(e) => fail(&e.to_string()),
+                Err(e) => fail(&message(&e)),
             }
         }
         Purpose::Connect {
@@ -381,7 +385,7 @@ async fn finish_connect(
     )
     .await
     .map(|_| ())
-    .map_err(|e| e.to_string())
+    .map_err(|e| message(&e))
 }
 
 // ── Messaging webhooks ──────────────────────────────────────────────────

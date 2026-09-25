@@ -67,7 +67,7 @@ status line on the home page lists what is missing.
 | `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | installing the Slack app in a workspace (callback `…/auth/slack/callback`, token rotation off) |
 | `SLACK_SIGNING_SECRET` | inbound Slack messages (Event Subscriptions request URL `…/hooks/slack`) |
 | `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` | inbound WhatsApp messages (Meta webhook `…/hooks/whatsapp`, field `messages`) |
-| `SECRETS_URL`, `SECRETS_PASSWORD` (`SECRETS_USERNAME`, default `typednotes-app`) | storing connections, in a `secrets-server` ≥ 1.2.0 bootstrapped with `typednotes-infra/scripts/vault-bootstrap.sh` |
+| `SECRETS_URL`, `SECRETS_PASSWORD` (`SECRETS_USERNAME`, default `typednotes-app`) | storing connections, in a `secrets-server` ≥ 1.3.0 that declares the `typednotes-app` identity (`SECRETS_SERVER_SERVICE_IDENTITIES`; `typednotes-infra` does). `/api/health` reports `vault: true` only once the app can log in |
 | `LIAISON_URL`, `LIAISON_ROOT_KEY` | provider calls through liaison ≥ 0.4.0 (same root key) |
 | `PUBLIC_URL` | overrides the origin used in OAuth redirect URIs (default: the request's forwarded host) |
 | `TYPEDNOTES_WELCOME_CREDITS` | credits granted to each new org (default 1000, `0` disables) |

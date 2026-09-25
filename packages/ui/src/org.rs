@@ -27,7 +27,7 @@ pub fn OrgPage(slug: ReadSignal<String>, connected: String, error: String) -> El
     rsx! {
         document::Link { rel: "stylesheet", href: ORGS_CSS }
         div { class: "orgs",
-            p { a { href: "/", "← Your organisations" } }
+            p { class: "back-link", a { href: "/", "← Your organisations" } }
             match detail() {
                 None => rsx! { p { "Loading…" } },
                 Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load this organisation: {error_message(&e)}" } },
