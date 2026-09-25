@@ -16,11 +16,14 @@ background:
   logo-light.svg  for light backgrounds (dark glyph)
   logo.svg        both, switched by prefers-color-scheme
 
-Symbols are outlined from Fira Code (fontTools), so the SVGs need no font:
+and the same three as `mark-*.svg`: the variant for small sizes (the app's
+navbar pill, 28 px), with only the hard shadow band, since a
+soft edge is noise at that size.
 
-  scripts/logo.py                              # LOGO_FONT=… to use another .ttf
-  for m in light dark; do rsvg-convert -w 1024 -h 1024 \\
-    packages/ui/assets/logo/logo-$m.svg -o packages/ui/assets/logo/logo-$m.png; done
+Symbols are outlined from Fira Code (fontTools), so the SVGs need no font.
+PNGs (logo 1024 px; mark 28, 56 and 84 px: 1x, 2x, 3x) come from rsvg-convert:
+
+  scripts/logo.py              # LOGO_FONT=… to use another .ttf
 """
 
 import math
@@ -68,19 +71,40 @@ SEED = 7                        # a fixed arrangement; never the same symbol twi
 
 SOLID = {(r, c) for r, line in enumerate(T) for c, g in enumerate(line) if g == "█"}
 
+# name -> (blur radius, margin in cells, PNG sizes)
+VARIANTS = {
+    "logo": (RADIUS, 1, [1024]),
+    "mark": (0, 1, [28, 56, 84]),
+}
+
 
 def f(v: float) -> str:
     return f"{v:.2f}".rstrip("0").rstrip(".")
 
 
-def shadow_bands() -> dict[tuple[int, int], int]:
+class Layout:
+    """Where everything goes for one variant: each shadow cell's band, and
+    the square viewBox the T and its shadow are centred in."""
+
+    def __init__(self, radius: int, margin: int):
+        self.bands = shadow_bands(radius)
+        cells = SOLID | set(self.bands)
+        r0, c0 = min(r for r, _ in cells), min(c for _, c in cells)
+        r1, c1 = max(r for r, _ in cells), max(c for _, c in cells)
+        w, h = (c1 - c0 + 1) * CW, (r1 - r0 + 1) * CH
+        self.size = max(w, h) + 2 * margin * CW
+        self.ox = (self.size - w) / 2 - c0 * CW
+        self.oy = (self.size - h) / 2 - r0 * CH
+
+
+def shadow_bands(radius: int) -> dict[tuple[int, int], int]:
     """Every shadow cell and its band: the pixel distance from the cell to the
     shifted T, in rows, rounded up — 0 under it. Cells the T covers are not
     shadow."""
     dc, dr = OFFSET
     shifted = {(r + dr, c + dc) for r, c in SOLID}
-    reach_c = math.ceil(RADIUS * CH / CW)
-    rows = range(min(r for r, _ in shifted) - RADIUS, max(r for r, _ in shifted) + RADIUS + 1)
+    reach_c = math.ceil(radius * CH / CW)
+    rows = range(min(r for r, _ in shifted) - radius, max(r for r, _ in shifted) + radius + 1)
     cols = range(min(c for _, c in shifted) - reach_c, max(c for _, c in shifted) + reach_c + 1)
     bands = {}
     for r in rows:
@@ -89,21 +113,12 @@ def shadow_bands() -> dict[tuple[int, int], int]:
                 continue
             d = min(math.hypot((c - b) * CW, (r - a) * CH) for a, b in shifted) / CH
             band = math.ceil(d - 1e-9)
-            if band <= RADIUS:
+            if band <= radius:
                 bands[(r, c)] = band
     return bands
 
 
-BANDS_OF = shadow_bands()
-ALL = SOLID | set(BANDS_OF)
-R0, C0 = min(r for r, _ in ALL), min(c for _, c in ALL)
-R1, C1 = max(r for r, _ in ALL), max(c for _, c in ALL)
-SIZE = max((C1 - C0 + 1) * CW, (R1 - R0 + 1) * CH) + 2 * CW   # square, a cell of margin
-OX = (SIZE - (C1 - C0 + 1) * CW) / 2 - C0 * CW
-OY = (SIZE - (R1 - R0 + 1) * CH) / 2 - R0 * CH
-
-
-def blocks() -> str:
+def blocks(lay: Layout) -> str:
     """The T as few rects as possible: horizontal runs of █, merged down
     across rows that repeat them (the T is its bar and its stem). Each rect
     overlaps the one below by half a unit, as the site's fillRect does, so no
@@ -124,7 +139,7 @@ def blocks() -> str:
             else:
                 rects.append([r, r, start, c - 1])
     return "\n".join(
-        f'<rect x="{f(OX + c0 * CW)}" y="{f(OY + r0 * CH)}" '
+        f'<rect x="{f(lay.ox + c0 * CW)}" y="{f(lay.oy + r0 * CH)}" '
         f'width="{f((c1 - c0 + 1) * CW)}" height="{f((r1 - r0 + 1) * CH + 0.5)}"/>'
         for r0, r1, c0, c1 in rects
     )
@@ -138,9 +153,11 @@ def font_path() -> str:
     ).stdout
 
 
-def shadow() -> dict[int, str]:
+def shadow(lay: Layout) -> dict[int, str]:
     """The shadow's symbols as one outlined path per band, each centred in its
-    cell (on its cap height, where the site's `textBaseline = 'middle'` puts it)."""
+    cell (on its cap height, where the site's `textBaseline = 'middle'` puts it).
+    Symbols are drawn in the same order for every variant, so the mark's are
+    the logo's."""
     font = TTFont(font_path())
     glyphs, cmap = font.getGlyphSet(), font.getBestCmap() or {}
     missing = [s for s in "".join(BANDS) if ord(s) not in cmap]
@@ -153,13 +170,15 @@ def shadow() -> dict[int, str]:
     rng = random.Random(SEED)
     placed: dict[tuple[int, int], str] = {}
     paths: dict[int, list[str]] = {}
-    for (r, c), band in sorted(BANDS_OF.items()):
+    for (r, c), band in sorted(shadow_bands(RADIUS).items()):
         neighbours = {placed.get((r, c - 1)), placed.get((r - 1, c))}
         ch = rng.choice([s for s in BANDS[band] if s not in neighbours] or BANDS[band])
         placed[(r, c)] = ch
+        if (r, c) not in lay.bands:
+            continue
         glyph = glyphs[cmap[ord(ch)]]
-        x = OX + c * CW + CW / 2 - glyph.width * scale / 2
-        baseline = OY + r * CH + CH / 2 + cap * scale / 2
+        x = lay.ox + c * CW + CW / 2 - glyph.width * scale / 2
+        baseline = lay.oy + r * CH + CH / 2 + cap * scale / 2
         pen = SVGPathPen(glyphs, ntos=f)
         glyph.draw(TransformPen(pen, (scale, 0, 0, -scale, x, baseline)))
         paths.setdefault(band, []).append(pen.getCommands())
@@ -167,18 +186,18 @@ def shadow() -> dict[int, str]:
     return {band: "".join(paths[band]) for band in sorted(paths, reverse=True)}
 
 
-def svg(body: str, style: str = "") -> str:
+def svg(lay: Layout, body: str, style: str = "") -> str:
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {f(SIZE)} {f(SIZE)}" '
-        f'width="{f(SIZE)}" height="{f(SIZE)}" role="img" aria-label="Typednotes">\n'
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {f(lay.size)} {f(lay.size)}" '
+        f'width="{f(lay.size)}" height="{f(lay.size)}" role="img" aria-label="Typednotes">\n'
         f"<title>Typednotes</title>\n{style}{body}</svg>\n"
     )
 
 
-def body(paint) -> str:
+def body(lay: Layout, paint) -> str:
     """`paint(tone)` is the attribute that colours `block` or `band0`…`band2`."""
-    parts = [f'<path {paint(f"band{band}")} d="{d}"/>' for band, d in shadow().items()]
-    parts.append(f'<g {paint("block")}>\n{blocks()}\n</g>')
+    parts = [f'<path {paint(f"band{band}")} d="{d}"/>' for band, d in shadow(lay).items()]
+    parts.append(f'<g {paint("block")}>\n{blocks(lay)}\n</g>')
     return "\n".join(parts) + "\n"
 
 
@@ -187,8 +206,6 @@ def main() -> None:
         raise SystemExit(f"BANDS needs {RADIUS + 1} entries (bands 0…RADIUS)")
     out = Path(__file__).resolve().parent.parent / "packages/ui/assets/logo"
     out.mkdir(parents=True, exist_ok=True)
-    for mode, p in PALETTES.items():
-        (out / f"logo-{mode}.svg").write_text(svg(body(lambda t: f'fill="{p[t]}"')))
 
     def rules(p):
         return "".join(f".{t}{{fill:{v}}}" for t, v in p.items())
@@ -199,8 +216,17 @@ def main() -> None:
         f"@media (prefers-color-scheme: dark){{{rules(PALETTES['dark'])}}}\n"
         "</style>\n"
     )
-    (out / "logo.svg").write_text(svg(body(lambda t: f'class="{t}"'), style))
-    print(f"wrote {out}/logo.svg, logo-light.svg, logo-dark.svg")
+    for name, (radius, margin, sizes) in VARIANTS.items():
+        lay = Layout(radius, margin)
+        for mode, p in PALETTES.items():
+            path = out / f"{name}-{mode}.svg"
+            path.write_text(svg(lay, body(lay, lambda t: f'fill="{p[t]}"')))
+            for px in sizes:
+                png = out / (f"{name}-{mode}.png" if len(sizes) == 1 else f"{name}-{mode}-{px}.png")
+                subprocess.run(["rsvg-convert", "-w", str(px), "-h", str(px), str(path), "-o", str(png)],
+                               check=True)
+        (out / f"{name}.svg").write_text(svg(lay, body(lay, lambda t: f'class="{t}"'), style))
+        print(f"{name}: {name}.svg, {name}-light.svg, {name}-dark.svg, PNGs at {sizes} px")
 
 
 if __name__ == "__main__":

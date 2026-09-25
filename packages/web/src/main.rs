@@ -57,6 +57,7 @@ fn WebNavbar() -> Element {
             Link {
                 class: "navbar-brand",
                 to: Route::Home {},
+                ui::Logo {}
                 "Typednotes"
             }
             UserMenu {}

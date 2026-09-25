@@ -5,7 +5,7 @@
 pub mod components;
 
 mod navbar;
-pub use navbar::Navbar;
+pub use navbar::{Logo, Navbar};
 
 mod auth;
 pub use auth::{LoginPanel, UserMenu};
