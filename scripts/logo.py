@@ -21,7 +21,7 @@ navbar pill, 28 px), with only the hard shadow band, since a
 soft edge is noise at that size.
 
 Symbols are outlined from Fira Code (fontTools), so the SVGs need no font.
-PNGs (logo 1024 px; mark 28, 56 and 84 px: 1x, 2x, 3x) come from rsvg-convert:
+PNGs (logo 1024 px; mark 28, 56 and 84 px: 1x, 2x, 3x, and 1024 px like the logo) come from rsvg-convert:
 
   scripts/logo.py              # LOGO_FONT=… to use another .ttf
 """
@@ -32,6 +32,7 @@ import random
 import subprocess
 from pathlib import Path
 
+from fontTools.pens.recordingPen import DecomposingRecordingPen
 from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.ttLib import TTFont
@@ -74,7 +75,7 @@ SOLID = {(r, c) for r, line in enumerate(T) for c, g in enumerate(line) if g == 
 # name -> (blur radius, margin in cells, PNG sizes)
 VARIANTS = {
     "logo": (RADIUS, 1, [1024]),
-    "mark": (0, 1, [28, 56, 84]),
+    "mark": (0, 1, [28, 56, 84, 1024]),
 }
 
 
@@ -179,8 +180,13 @@ def shadow(lay: Layout) -> dict[int, str]:
         glyph = glyphs[cmap[ord(ch)]]
         x = lay.ox + c * CW + CW / 2 - glyph.width * scale / 2
         baseline = lay.oy + r * CH + CH / 2 + cap * scale / 2
+        # Decompose first: some symbols are other glyphs transformed (Fira
+        # Code's ∀ is its A flipped), and a component's transform must apply
+        # before the flip into SVG's downward y, not be composed with it.
+        outline = DecomposingRecordingPen(glyphs)
+        glyph.draw(outline)
         pen = SVGPathPen(glyphs, ntos=f)
-        glyph.draw(TransformPen(pen, (scale, 0, 0, -scale, x, baseline)))
+        outline.replay(TransformPen(pen, (scale, 0, 0, -scale, x, baseline)))
         paths.setdefault(band, []).append(pen.getCommands())
     # Faintest first, so a denser band is never painted over.
     return {band: "".join(paths[band]) for band in sorted(paths, reverse=True)}
