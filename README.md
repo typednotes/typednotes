@@ -13,7 +13,9 @@ Dropbox, Google Drive) and AI accounts (Anthropic, Mistral, OpenAI, any OpenAI-c
 endpoint) to them. A project has a primary repository and messaging interfaces (Slack,
 WhatsApp, Signal) whose messages land in its inbox. A project's computations are
 notebooks of natural-language cells — graphs implemented by `lode` in the
-repository and run by `lun` ([`docs/computations.md`](docs/computations.md), design).
+repository and run by `lun`, fed by scheduled checks, widgets, webhooks and channel
+messages ([`docs/computations.md`](docs/computations.md)). Members are invited by email;
+account, org and project settings each have their own page ([`docs/services/web.md`](docs/services/web.md) §4b).
 Credentials go into the vault; every provider call — "Test",
 listing repositories, sending a message — goes through liaison. The contract with the other services
 is [`docs/connections.md`](docs/connections.md). Everything else in the architecture lives in
@@ -76,9 +78,14 @@ status line on the home page lists what is missing.
 | `LIAISON_URL`, `LIAISON_ROOT_KEY` | provider calls through liaison ≥ 0.4.0 (same root key) |
 | `PUBLIC_URL` | overrides the origin used in OAuth redirect URIs (default: the request's forwarded host) |
 | `TYPEDNOTES_WELCOME_CREDITS` | credits granted to each new org (default 1000, `0` disables) |
+| `LODE_URL`, `LODE_TOKEN` | implementing notebooks (lode ≥ 0.2) |
+| `LUN_URL`, `LUN_TOKEN` | building and running them (lun ≥ 0.2) |
+| `COMPUTE_DB_URL` | `db` sinks: an identity that may create roles and schemas on compute-db |
+| `TYPEDNOTES_SOURCE_CHECKS_PER_HOUR`, `TYPEDNOTES_ENDPOINT_CALLS_PER_MINUTE`, `TYPEDNOTES_MODEL_CALL_COST`, `TYPEDNOTES_STORAGE_WRITE_COST`, `TYPEDNOTES_AUTO_REPAIRS` | notebook caps and costs (defaults 120, 60, 10, 1, 2 — `docs/connections.md` §8) |
 
 `cargo test -p api --features server` runs the unit tests (validation, sessions, PKCE,
-warrant encoding, credential shapes, ledger's grant SQL, webhook signatures and payloads);
+warrant encoding, credential shapes, ledger's grant SQL, webhook signatures and payloads,
+cron, cells, `lun.json`, SCRAM verifiers, renderers);
 `cargo check -p web --features server` and
 `cargo check -p web --features web --target wasm32-unknown-unknown` check both halves.
 

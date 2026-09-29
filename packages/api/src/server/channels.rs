@@ -583,20 +583,76 @@ async fn pull_signal(
     .await?;
     let mut recorded = 0;
     for m in parse_signal(&body).map_err(bad_gateway)? {
-        if record(NewMessage {
-            channel_id: &routed.channel.id,
-            direction: "in",
-            external_id: Some(&m.external_id),
-            peer: &m.peer,
-            peer_name: m.peer_name.as_deref(),
-            body: &m.body,
-            sent_by: None,
-        })
-        .await?
-        .is_some()
-        {
+        if record_inbound(&routed.channel.id, &m).await? {
             recorded += 1;
         }
+    }
+    Ok(recorded)
+}
+
+/// Pull a Signal channel by id, as its connection's owner — for the
+/// scheduler's tick, which has no request (docs/computations.md §3.6).
+pub async fn pull_signal_channel(channel_id: &str) -> Result<usize, String> {
+    let text = |e: ServerFnError| super::errors::message(&e);
+    let row = sqlx::query(
+        "select o.id::text as org_id, o.slug::text as org_slug, o.name as org_name, m.role, \
+         to_char(o.created_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI \"UTC\"') as org_created_at, \
+         p.slug::text as project_slug, u.id::text as user_id, u.email::text as email, u.display_name \
+         from channels ch join projects p on p.id = ch.project_id join orgs o on o.id = p.org_id \
+         join connections c on c.id = ch.connection_id join users u on u.id = c.user_id \
+         join memberships m on m.org_id = o.id and m.user_id = u.id \
+         where ch.id = $1::uuid and ch.provider = 'signal'",
+    )
+    .bind(channel_id)
+    .fetch_optional(pool().map_err(text)?)
+    .await
+    .map_err(|e| format!("database error: {e}"))?
+    .ok_or("no such Signal channel, or its connection's owner left the org")?;
+    let org = Org {
+        id: row.get("org_id"),
+        slug: row.get("org_slug"),
+        name: row.get("org_name"),
+        role: row.get("role"),
+        created_at: row.get("org_created_at"),
+    };
+    let user = User {
+        id: row.get("user_id"),
+        email: row.get("email"),
+        display_name: row.get("display_name"),
+    };
+    let project: String = row.get("project_slug");
+    pull_signal(&org, &user, &project, channel_id)
+        .await
+        .map_err(text)
+}
+
+/// Record an inbound message; if it is new (not a retry or a repeated
+/// pull), feed it to the graphs whose `channel` sources listen on the channel.
+async fn record_inbound(channel_id: &str, m: &Inbound) -> Result<bool, ServerFnError> {
+    let recorded = record(NewMessage {
+        channel_id,
+        direction: "in",
+        external_id: Some(&m.external_id),
+        peer: &m.peer,
+        peer_name: m.peer_name.as_deref(),
+        body: &m.body,
+        sent_by: None,
+    })
+    .await?
+    .is_some();
+    if recorded {
+        // In the background: a webhook must be answered within seconds
+        // (Slack retries after three), and a recompute can take longer.
+        let (channel_id, m) = (channel_id.to_string(), m.clone());
+        tokio::spawn(async move {
+            super::graphs::on_channel_message(
+                &channel_id,
+                &m.peer,
+                m.peer_name.as_deref(),
+                &m.body,
+            )
+            .await;
+        });
     }
     Ok(recorded)
 }
@@ -801,17 +857,7 @@ pub async fn deliver(
     let Some(channel_id) = route(provider, external_id, external_channel).await? else {
         return Ok(false);
     };
-    Ok(record(NewMessage {
-        channel_id: &channel_id,
-        direction: "in",
-        external_id: Some(&m.external_id),
-        peer: &m.peer,
-        peer_name: m.peer_name.as_deref(),
-        body: &m.body,
-        sent_by: None,
-    })
-    .await?
-    .is_some())
+    record_inbound(&channel_id, m).await
 }
 
 #[cfg(test)]

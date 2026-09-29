@@ -31,6 +31,72 @@ pub struct OrgDetail {
     pub credits: Option<i64>,
 }
 
+/// The signed-in user's account page.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Account {
+    pub user: User,
+    /// How they sign in.
+    pub identities: Vec<Identity>,
+    /// Signed-in browsers, this one included.
+    pub sessions: i64,
+    pub orgs: Vec<Org>,
+}
+
+/// A way of signing in: a GitHub or Google account linked to the user.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Identity {
+    /// `GitHub`, `Google`.
+    pub provider: String,
+    pub created_at: String,
+    pub last_login_at: Option<String>,
+}
+
+/// A member of an org, as the org's page lists them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Member {
+    pub user_id: String,
+    pub email: String,
+    pub display_name: Option<String>,
+    /// `owner`, `admin` or `member`.
+    pub role: String,
+    pub added_at: String,
+    /// Whether they have signed in yet (an invited address has not).
+    pub signed_in: bool,
+    pub is_you: bool,
+    /// Whether the caller may remove them.
+    pub can_remove: bool,
+}
+
+/// The roles a member can be given, most powerful first.
+pub const ROLES: [&str; 3] = ["owner", "admin", "member"];
+
+/// Whether a caller of role `actor` may add someone as `role`, or remove a
+/// member of role `role`: owners manage everyone, admins manage admins and
+/// members, members manage nobody (but may leave).
+pub fn may_manage(actor: &str, role: &str) -> bool {
+    match actor {
+        "owner" => ROLES.contains(&role),
+        "admin" => role == "admin" || role == "member",
+        _ => false,
+    }
+}
+
+/// An org's settings, as its settings page shows them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OrgSettings {
+    /// Rewrites of a notebook's code Typednotes may start by itself — after
+    /// a failed build or a failing cell — before a member asks for one
+    /// again. `None`: the deployment's default.
+    pub auto_repairs: Option<i32>,
+    /// The deployment's default.
+    pub default_auto_repairs: i32,
+    /// Whether the caller may change them (owners and admins).
+    pub can_edit: bool,
+}
+
+/// The largest cap an org may set on automatic rewrites.
+pub const MAX_AUTO_REPAIRS: i32 = 10;
+
 /// Whether a slug can be used, checked while the user types.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SlugCheck {
@@ -60,6 +126,14 @@ pub struct Health {
     pub slack_events: bool,
     /// WhatsApp's app secret and verify token, for the inbound webhook.
     pub whatsapp_webhook: bool,
+    /// The computations history (`0004`) is applied.
+    pub computations: bool,
+    /// `LODE_URL` and `LODE_TOKEN`: notebooks can be implemented.
+    pub lode: bool,
+    /// `LUN_URL` and `LUN_TOKEN`: notebooks can be built and run.
+    pub lun: bool,
+    /// `COMPUTE_DB_URL`: `db` sinks can get their per-user schema.
+    pub compute: bool,
 }
 
 /// A kind of third-party account (docs/connections.md §3.1). The ids are

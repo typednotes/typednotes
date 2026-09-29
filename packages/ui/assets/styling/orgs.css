@@ -45,4 +45,29 @@
 .slug-check.ok { color: var(--app-success); }
 .slug-check.err { color: var(--app-danger); }
 
+.settings-title { margin: 0; font-size: 1.35rem; }
+.settings-number { flex: 0 0 14rem; }
+
 .projects-new { margin: 1.25rem 0 0.75rem; }
+
+/* A workspace page's header links (org, project). */
+.workspace-links {
+  display: flex;
+  gap: 0.5rem 1rem;
+  flex-wrap: wrap;
+  font-size: 0.875rem;
+}
+
+.setup-hints {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0.75rem 0 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: var(--app-radius-sm);
+  background: var(--app-accent-soft);
+  font-size: 0.875rem;
+}
+
+.setup-hints p { margin: 0; }
+

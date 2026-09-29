@@ -5,13 +5,14 @@ use api::{
 use dioxus::prelude::*;
 
 use crate::auth::LoginPanel;
-use crate::channels::ChannelsSection;
+use crate::channels::InboxPanel;
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardContent, CardDescription, CardHeader, CardTitle};
 use crate::components::select::{Select, SelectOption};
 use crate::connections::{connect_url, oauth_ready, CONNECTIONS_CSS};
 use crate::error_message;
 use crate::navigate_to;
+use crate::notebook::GraphsPanel;
 use crate::orgs::ORGS_CSS;
 use crate::slug_form::{NewSlugForm, Scope};
 
@@ -81,10 +82,13 @@ fn ProjectTable(org: String, projects: Vec<Project>) -> Element {
     }
 }
 
-/// One project: its primary repository, its interfaces and its inbox.
+/// One project, for the work in it: its notebooks and its inbox. What it
+/// is set up with — its repository, its interfaces, its name — is in its
+/// settings, which the header links to (and to the right section when
+/// something is missing).
 ///
-/// `connected` and `error` come from the query string an OAuth round trip
-/// started here redirects back with.
+/// `connected` and `error` come from older OAuth redirects; flows started
+/// from the project's settings come back there.
 #[component]
 pub fn ProjectPage(
     slug: ReadSignal<String>,
@@ -93,7 +97,7 @@ pub fn ProjectPage(
     error: String,
 ) -> Element {
     let me = use_server_future(current_user)?;
-    let mut detail = use_server_future(move || get_project(slug(), project()))?;
+    let detail = use_server_future(move || get_project(slug(), project()))?;
 
     if let Some(Ok(None)) = me() {
         return rsx! { LoginPanel { error: None } };
@@ -108,39 +112,54 @@ pub fn ProjectPage(
             match detail() {
                 None => rsx! { p { "Loading…" } },
                 Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load this project: {error_message(&e)}" } },
-                Some(Ok(d)) => rsx! {
-                    Card {
-                        CardHeader {
-                            CardTitle { "{d.project.name}" }
-                            CardDescription {
-                                code { "{d.org.slug}/{d.project.slug}" }
-                                " · in {d.org.name} · created {d.project.created_at}"
+                Some(Ok(d)) => {
+                    let settings = format!("/orgs/{}/projects/{}/settings", d.org.slug, d.project.slug);
+                    rsx! {
+                        Card {
+                            CardHeader {
+                                CardTitle { "{d.project.name}" }
+                                CardDescription {
+                                    "in {d.org.name} · "
+                                    match &d.project.repo {
+                                        Some(r) => rsx! { a { href: "{r.web_url}", target: "_blank", rel: "noopener", "{r.full_name}" } },
+                                        None => rsx! { "no repository" },
+                                    }
+                                }
+                            }
+                            CardContent {
+                                div { class: "workspace-links",
+                                    a { href: "{settings}", "Settings" }
+                                    a { href: "{settings}/repository", "Repository" }
+                                    a { href: "{settings}/interfaces", "Interfaces" }
+                                }
+                                if d.project.repo.is_none() {
+                                    div { class: "setup-hints",
+                                        p {
+                                            "Notebooks need a primary repository, where their code is written: "
+                                            a { href: "{settings}/repository", "choose one" }
+                                            "."
+                                        }
+                                    }
+                                }
                             }
                         }
-                        CardContent {
-                            DeleteProject { slug: slug(), project: project() }
+                        if let Some(message) = flash.clone() {
+                            p { class: "orgs-status ok", "{message}" }
                         }
+                        if !error.is_empty() {
+                            p { class: "orgs-error", "{error}" }
+                        }
+                        GraphsPanel { slug: slug(), project: project() }
+                        InboxPanel { slug: slug(), project: project() }
                     }
-                    if let Some(message) = flash.clone() {
-                        p { class: "orgs-status ok", "{message}" }
-                    }
-                    if !error.is_empty() {
-                        p { class: "orgs-error", "{error}" }
-                    }
-                    RepoPanel {
-                        slug: slug(),
-                        project: d.project.clone(),
-                        on_changed: move |_| detail.restart(),
-                    }
-                    ChannelsSection { slug: slug(), project: project() }
-                },
+                }
             }
         }
     }
 }
 
 #[component]
-fn DeleteProject(slug: String, project: String) -> Element {
+pub(crate) fn DeleteProject(slug: String, project: String) -> Element {
     let mut confirming = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
     let org = slug.clone();
@@ -182,7 +201,7 @@ fn describe_connection(c: &Connection) -> String {
 /// The project's primary repository, and a picker to set it from the
 /// repositories a GitHub or GitLab connection of the org can see.
 #[component]
-fn RepoPanel(slug: String, project: Project, on_changed: EventHandler<()>) -> Element {
+pub(crate) fn RepoPanel(slug: String, project: Project, on_changed: EventHandler<()>) -> Element {
     let org = slug.clone();
     let connections = use_server_future(move || list_connections(org.clone()))?;
     let status = use_server_future(health)?;

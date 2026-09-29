@@ -1,8 +1,6 @@
 //! Connections: rows in `connections`, credentials in the vault, calls
 //! through liaison (docs/connections.md §3, §7).
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use dioxus::prelude::ServerFnError;
 use serde_json::Value;
 use sqlx::postgres::PgRow;
@@ -303,40 +301,23 @@ pub async fn call(
 ) -> Result<Outcome, ServerFnError> {
     if !liaison::configured() {
         return Err(unavailable(
-            "calls to providers are disabled: liaison is not configured",
+            "calls to providers are disabled: the credential broker is not configured",
         ));
     }
     let root = warrant::root_key().map_err(unavailable)?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let run_id = uuid::Uuid::new_v4().to_string();
     let provider = connection.provider.id();
-    let minted = warrant::mint(
-        &root,
-        &uuid::Uuid::new_v4().to_string(),
-        &org.id,
-        vec![
-            warrant::Caveat::ExpiresAt(now + 300),
-            warrant::Caveat::Capability {
-                provider: provider.to_string(),
-                action: request.action.to_string(),
-            },
-            warrant::Caveat::Resource(connection.id.clone()),
-            warrant::Caveat::Budget(0),
-            warrant::Caveat::RunId(run_id.clone()),
-        ],
-    );
+    let grant =
+        warrant::for_connection(&root, &org.id, provider, request.action, &connection.id, 0);
     let r = Request {
-        now,
+        now: grant.now,
         cost: 0,
         provider,
         action: request.action,
         resource: &connection.id,
-        run_id: &run_id,
+        run_id: &grant.run_id,
         org_id: &org.id,
     };
+    let minted = grant.warrant;
     let c = Call {
         account: format!("{owner}/{}", connection.id),
         method: request.method,
@@ -349,7 +330,7 @@ pub async fn call(
             "liaison egress for connection {} failed: {e}",
             connection.id
         );
-        bad_gateway("liaison is unreachable")
+        bad_gateway("the credential broker is unreachable")
     })
 }
 
@@ -368,7 +349,7 @@ pub async fn call_ok(
             snippet(&body)
         ))),
         Outcome::Refused { status, error } => Err(bad_gateway(format!(
-            "liaison refused the call ({status} {error})"
+            "the credential broker refused the call ({status} {error})"
         ))),
     }
 }
@@ -393,7 +374,7 @@ pub async fn test(org: &Org, user: &User, id: &str) -> Result<TestResult, Server
         },
         Outcome::Refused { status, error } => TestResult {
             ok: false,
-            message: format!("liaison refused the call ({status} {error})"),
+            message: format!("the credential broker refused the call ({status} {error})"),
         },
     };
 

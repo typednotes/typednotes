@@ -1,6 +1,6 @@
 //! Shared UI for the workspace: the dx components (`components`, from the
 //! DioxusLabs/components registry), the navbar, sign-in, orgs, projects,
-//! connections and messaging interfaces.
+//! connections, messaging interfaces, members and notebooks.
 
 pub mod components;
 
@@ -19,8 +19,16 @@ pub use org::OrgPage;
 mod projects;
 pub use projects::ProjectPage;
 
+mod notebook;
+pub use notebook::NotebookPage;
+
+mod settings;
+pub use settings::{AccountPage, OrgSettingsPage, ProjectSettingsPage};
+
 mod channels;
 mod connections;
+mod members;
+mod render;
 mod slug_form;
 
 use dioxus::prelude::*;

@@ -64,21 +64,82 @@ pub fn whatsapp_webhook() -> Option<(String, String)> {
     Some((env("WHATSAPP_APP_SECRET")?, env("WHATSAPP_VERIFY_TOKEN")?))
 }
 
-/// Credits granted to a new org (`ledger`'s welcome grant). `0` disables it.
-pub fn welcome_credits() -> i64 {
-    match env("TYPEDNOTES_WELCOME_CREDITS") {
-        None => 1000,
+/// An internal service the app calls with a bearer token.
+#[derive(Clone)]
+pub struct Service {
+    pub url: String,
+    pub token: String,
+}
+
+fn service(url: &str, token: &str) -> Option<Service> {
+    Some(Service {
+        url: env(url)?.trim_end_matches('/').to_string(),
+        token: env(token)?,
+    })
+}
+
+/// `lode`, the implementer (docs/services/lode.md): `LODE_URL`, `LODE_TOKEN`.
+pub fn lode() -> Option<Service> {
+    service("LODE_URL", "LODE_TOKEN")
+}
+
+/// `lun`, the runtime (docs/services/lun.md): `LUN_URL`, `LUN_TOKEN`.
+pub fn lun() -> Option<Service> {
+    service("LUN_URL", "LUN_TOKEN")
+}
+
+/// `compute-db`, where `db` sinks write (docs/computations.md §4.1): a
+/// connection string whose identity may create roles and schemas there, and
+/// nowhere else.
+pub fn compute_db_url() -> Option<String> {
+    env("COMPUTE_DB_URL")
+}
+
+/// A non-negative integer setting, with a default.
+pub fn number(name: &str, default: i64) -> i64 {
+    match env(name) {
+        None => default,
         Some(v) => v
             .parse::<i64>()
             .ok()
             .filter(|n| *n >= 0)
             .unwrap_or_else(|| {
-                eprintln!(
-                    "TYPEDNOTES_WELCOME_CREDITS={v:?} is not a non-negative integer; using 1000"
-                );
-                1000
+                eprintln!("{name}={v:?} is not a non-negative integer; using {default}");
+                default
             }),
     }
+}
+
+/// Scheduled and watch checks an org may run per hour (§3.1's rate cap).
+pub fn source_checks_per_hour() -> i64 {
+    number("TYPEDNOTES_SOURCE_CHECKS_PER_HOUR", 120)
+}
+
+/// Deliveries one endpoint accepts per minute (§3.5).
+pub fn endpoint_calls_per_minute() -> i64 {
+    number("TYPEDNOTES_ENDPOINT_CALLS_PER_MINUTE", 60)
+}
+
+/// The credits liaison holds for each of lode's model calls (§5).
+pub fn model_call_cost() -> u64 {
+    number("TYPEDNOTES_MODEL_CALL_COST", 10) as u64
+}
+
+/// Rewrites the app may launch by itself — for a failed build, or an error
+/// lun reports — before a member asks for one again (0 disables them): the
+/// default of orgs that did not set their own on their settings page.
+pub fn auto_repairs() -> i64 {
+    number("TYPEDNOTES_AUTO_REPAIRS", 2)
+}
+
+/// The per-call budget of a `storage` sink's write warrant (§4.3).
+pub fn storage_write_cost() -> u64 {
+    number("TYPEDNOTES_STORAGE_WRITE_COST", 1) as u64
+}
+
+/// Credits granted to a new org (`ledger`'s welcome grant). `0` disables it.
+pub fn welcome_credits() -> i64 {
+    number("TYPEDNOTES_WELCOME_CREDITS", 1000)
 }
 
 /// The app's public origin, for OAuth redirect URIs: `PUBLIC_URL` if set,

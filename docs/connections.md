@@ -70,9 +70,10 @@ Callback URLs to register with the providers (`PUBLIC_URL` is the app's origin):
   stored as a plain `bearer`)
 
 The same GitHub and Google clients serve sign-in and connections; `oauth_flows.purpose` tells
-them apart. GitLab, Dropbox and Slack only connect accounts. A connect flow started from a
-project page records it in `oauth_flows.return_to` (a `/orgs/{org}/projects/{project}` path
-of the caller's org) and comes back there.
+them apart. GitLab, Dropbox and Slack only connect accounts. A connect flow comes back to the
+settings section it started from: the org's connections (`/orgs/{org}/settings/connections`),
+or — recorded in `oauth_flows.return_to` — a project's repository or interfaces
+(`/orgs/{org}/projects/{project}/settings/{repository|interfaces}`, by provider).
 
 ## 3. Providers and credentials
 
@@ -163,8 +164,9 @@ including `sv` and `sig`.
 
 | User | Policy | Rules |
 |---|---|---|
-| `typednotes-app` | `typednotes-app` | `secret/data/thirdparty/` → `create`, `delete` |
+| `typednotes-app` | `typednotes-app` | `secret/data/thirdparty/`, `secret/data/graph/`, `secret/data/compute/` → `create`, `delete` |
 | `liaison` | `liaison` | `secret/data/thirdparty/` → `read`, `create` |
+| `lun` | `lun` | `secret/data/graph/`, `secret/data/compute/` → `read` ([`computations.md`](computations.md) §3.4, §4.1) |
 
 The app can write and delete credentials but **cannot read them**. `liaison` needs `create`
 only to write back a refreshed OAuth token. Both log in with `userpass` and log in again
@@ -281,6 +283,14 @@ seconds. `id`, `orgId` and `runId` are UUIDs (ledger's `credit_holds.run_id` is 
 | app, liaison | `SECRETS_USERNAME`, `SECRETS_PASSWORD` | `typednotes-app` / `liaison` |
 | app | `LIAISON_URL`, `LIAISON_ROOT_KEY` | the same root key liaison verifies with (liaison ≥ 0.4.0) |
 | app | `TYPEDNOTES_WELCOME_CREDITS` | default `1000` |
+| app | `LODE_URL`, `LODE_TOKEN` | lode, which implements notebooks ([`computations.md`](computations.md)) |
+| app | `LUN_URL`, `LUN_TOKEN` | lun, which builds and runs them |
+| app | `COMPUTE_DB_URL` | compute-db, with an identity that may create roles and schemas there only (`db` sinks) |
+| app | `TYPEDNOTES_SOURCE_CHECKS_PER_HOUR` | per org, default `120` |
+| app | `TYPEDNOTES_ENDPOINT_CALLS_PER_MINUTE` | per notebook endpoint, default `60` |
+| app | `TYPEDNOTES_MODEL_CALL_COST` | credits held per lode model call, default `10` |
+| app | `TYPEDNOTES_AUTO_REPAIRS` | rewrites lode is sent by the app itself (failed build, node error) before a member asks again, default `2`; an org can set its own on its settings page |
+| app | `TYPEDNOTES_STORAGE_WRITE_COST` | budget of a `storage` sink's write warrant, default `1` |
 
 ## 9. Verified end to end
 
@@ -334,8 +344,10 @@ Slack, WhatsApp, Azure, GitHub/GitLab repository APIs.
   connection's `base_url`; only the RPC API is reachable.
 - A Slack app with token rotation on is refused at connect time (its bot tokens expire).
 - Linking by verified email trusts GitHub's and Google's verification.
-- Warrants are minted for tests, repository reads and messaging; agent runs do not exist
-  yet, so nothing answers inbound messages.
+- Warrants are minted for tests, repository reads, messaging and notebooks (lode's repo
+  `write`, model and lun `read` warrants; `storage` sink writes — [`computations.md`](computations.md)
+  §5); agent runs do not exist yet, so nothing answers inbound messages except a notebook's
+  `channel` source.
 
 ## 10. Projects and their primary repository
 

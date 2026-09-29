@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 dioxus = { workspace = true, features = ["fullstack"] }
 serde = { version = "1", features = ["derive"] }
+# Shared: graph nodes carry JSON values to the client.
+serde_json = "1"
 
 # Server only: the client (wasm) build never links a database driver, an HTTP
 # client, or any crypto — sessions, OAuth, the vault and warrants are all
@@ -19,7 +21,6 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "json",
 ], optional = true }
-serde_json = { version = "1", optional = true }
 sha2 = { version = "0.11", optional = true }
 hmac = { version = "0.13", optional = true }
 hex = { version = "0.4", optional = true }
@@ -27,13 +28,17 @@ base64 = { version = "0.22", optional = true }
 getrandom = { version = "0.3", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 url = { version = "2", optional = true }
+# The source scheduler's tick and the SSRF guard's DNS lookups.
+tokio = { version = "1", features = ["net", "time", "rt"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [features]
 server = [
     "dioxus/server",
     "dep:sqlx",
     "dep:reqwest",
-    "dep:serde_json",
     "dep:sha2",
     "dep:hmac",
     "dep:hex",
@@ -41,4 +46,5 @@ server = [
     "dep:getrandom",
     "dep:uuid",
     "dep:url",
+    "dep:tokio",
 ]

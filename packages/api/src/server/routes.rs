@@ -15,6 +15,11 @@
 //!
 //! - `POST /hooks/slack` — Slack's Events API
 //! - `GET|POST /hooks/whatsapp` — Meta's webhook verification and deliveries
+//!
+//! And the notebooks' endpoints (docs/computations.md §3.5), authenticated
+//! by their URL alone — the token is the capability:
+//!
+//! - `POST /hooks/graphs/{token}` — the JSON body feeds the cell's input
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -30,9 +35,9 @@ use serde::Deserialize;
 
 use super::channels::{self, SlackEvent};
 use super::connections::NewConnection;
+use super::errors::message;
 use super::oauth::{self, Idp, Purpose};
 use super::vault::OAuthIssuer;
-use super::errors::message;
 use super::{config, connections, db, projects, session, vault};
 use crate::{Provider, User};
 
@@ -43,6 +48,22 @@ pub fn router() -> Router {
         .route("/auth/connect/{provider}", get(connect))
         .route("/hooks/slack", post(slack_hook))
         .route("/hooks/whatsapp", get(whatsapp_verify).post(whatsapp_hook))
+        .route("/hooks/graphs/{token}", post(graph_hook))
+}
+
+/// A notebook endpoint's delivery: at most 1 MiB of JSON, answered with the
+/// nodes that changed.
+async fn graph_hook(Path(token): Path<String>, body: Bytes) -> Response {
+    use dioxus::server::axum::Json;
+    if token.len() < 16 || token.len() > 128 {
+        return (StatusCode::NOT_FOUND, "no such endpoint").into_response();
+    }
+    if body.len() > 1 << 20 {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "the body is over 1 MiB").into_response();
+    }
+    let (status, answer) = super::graphs::endpoint_delivery(&token, &body).await;
+    let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    (status, Json(answer)).into_response()
 }
 
 /// Percent-encode a query value with `%20` for spaces: the Dioxus router
@@ -57,6 +78,24 @@ fn encode(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn connect_flows_come_back_to_the_settings_they_started_from() {
+        use crate::Provider;
+        assert_eq!(
+            super::project_settings_path("acme", "web site", Some(Provider::Github)),
+            "/orgs/acme/projects/web%20site/settings/repository"
+        );
+        assert_eq!(
+            super::project_settings_path("acme", "web", Some(Provider::Slack)),
+            "/orgs/acme/projects/web/settings/interfaces"
+        );
+        let r = super::back("acme", None, "connected=s3");
+        assert_eq!(
+            r.headers()["location"],
+            "/orgs/acme/settings/connections?connected=s3"
+        );
+    }
+
     #[test]
     fn query_values_use_percent_20() {
         assert_eq!(super::encode("a b+c/é"), "a%20b%2Bc%2F%C3%A9");
@@ -80,18 +119,28 @@ fn to_path(path: &str, query: &str) -> Response {
     Redirect::to(&format!("{path}?{query}")).into_response()
 }
 
-/// Where a connect flow comes back to: the project page it started from,
-/// else the org page.
+/// Where a connect flow comes back to: the project settings it started
+/// from, else the org's connections (the settings section that lists them).
 fn back(slug: &str, return_to: Option<&str>, query: &str) -> Response {
     match return_to {
         Some(path) => to_path(path, query),
-        None => to_org(slug, query),
+        None => to_path(
+            &format!("/orgs/{}/settings/connections", encode(slug)),
+            query,
+        ),
     }
 }
 
-fn project_path(org_slug: &str, project_slug: &str) -> String {
+/// A project's settings section, where its connect flows start: the
+/// repository (a code host) or the interfaces (a messaging app).
+fn project_settings_path(org_slug: &str, project_slug: &str, provider: Option<Provider>) -> String {
+    let section = if provider.is_some_and(|p| p.is_code()) {
+        "repository"
+    } else {
+        "interfaces"
+    };
     format!(
-        "/orgs/{}/projects/{}",
+        "/orgs/{}/projects/{}/settings/{section}",
         encode(org_slug),
         encode(project_slug)
     )
@@ -132,7 +181,11 @@ async fn connect(
     let return_to = match q.project.as_deref().filter(|p| !p.is_empty()) {
         None => None,
         Some(project) => match projects::get(&org, project).await {
-            Ok((project, _)) => Some(project_path(&org.slug, &project.slug)),
+            Ok((project, _)) => Some(project_settings_path(
+                &org.slug,
+                &project.slug,
+                Provider::from_id(&provider),
+            )),
             Err(_) => return to_org_error(&org.slug, "no such project"),
         },
     };

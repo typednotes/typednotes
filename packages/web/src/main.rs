@@ -1,7 +1,10 @@
 use dioxus::prelude::*;
 
 use ui::{Navbar, UserMenu};
-use views::{Home, Login, OrgView, ProjectView};
+use views::{
+    AccountView, GraphView, Home, Login, OrgSettingsHome, OrgSettingsView, OrgView,
+    ProjectSettingsHome, ProjectSettingsView, ProjectView,
+};
 
 mod views;
 
@@ -15,8 +18,20 @@ enum Route {
     Login { error: String },
     #[route("/orgs/:slug?:connected&:error")]
     OrgView { slug: String, connected: String, error: String },
+    #[route("/settings")]
+    AccountView {},
+    #[route("/orgs/:slug/settings")]
+    OrgSettingsHome { slug: String },
+    #[route("/orgs/:slug/settings/:section?:connected&:error")]
+    OrgSettingsView { slug: String, section: String, connected: String, error: String },
     #[route("/orgs/:slug/projects/:project?:connected&:error")]
     ProjectView { slug: String, project: String, connected: String, error: String },
+    #[route("/orgs/:slug/projects/:project/settings")]
+    ProjectSettingsHome { slug: String, project: String },
+    #[route("/orgs/:slug/projects/:project/settings/:section?:connected&:error")]
+    ProjectSettingsView { slug: String, project: String, section: String, connected: String, error: String },
+    #[route("/orgs/:slug/projects/:project/graphs/:graph")]
+    GraphView { slug: String, project: String, graph: String },
 }
 
 const FAVICON: Asset = asset!("/assets/favicon.ico");
@@ -26,8 +41,12 @@ fn main() {
     // The server also serves the OAuth round trips (`/auth/...`): plain
     // redirects, merged into the router next to the app and its server
     // functions.
+    // And it runs the notebooks' source scheduler (docs/computations.md §3.1).
     #[cfg(feature = "server")]
-    dioxus::serve(|| async move { Ok(dioxus::server::router(App).merge(api::auth_routes())) });
+    dioxus::serve(|| async move {
+        api::start_background();
+        Ok(dioxus::server::router(App).merge(api::auth_routes()))
+    });
 
     #[cfg(not(feature = "server"))]
     dioxus::launch(App);

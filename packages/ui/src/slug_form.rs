@@ -1,6 +1,6 @@
 use api::{
-    check_org_slug, check_project_slug, create_org, create_project, slugify, validate_org,
-    validate_slug, SlugCheck,
+    check_graph_slug, check_org_slug, check_project_slug, create_graph, create_org, create_project,
+    slugify, validate_org, validate_slug, SlugCheck,
 };
 use dioxus::prelude::*;
 
@@ -16,6 +16,11 @@ pub(crate) enum Scope {
     /// A project of the org with this slug.
     Project {
         org: String,
+    },
+    /// A notebook of the project `project` of the org `org`.
+    Graph {
+        org: String,
+        project: String,
     },
 }
 
@@ -57,6 +62,7 @@ pub(crate) fn NewSlugForm(
             let answer = match scope {
                 Scope::Org => check_org_slug(s).await,
                 Scope::Project { org } => check_project_slug(org, s).await,
+                Scope::Graph { org, project } => check_graph_slug(org, project, s).await,
             };
             Some(answer.unwrap_or_else(|e| SlugCheck {
                 available: false,
@@ -80,6 +86,9 @@ pub(crate) fn NewSlugForm(
             let created = match scope {
                 Scope::Org => create_org(s, n).await.map(|o| o.slug),
                 Scope::Project { org } => create_project(org, s, n).await.map(|p| p.slug),
+                Scope::Graph { org, project } => {
+                    create_graph(org, project, s, n).await.map(|g| g.slug)
+                }
             };
             match created {
                 Ok(created) => {

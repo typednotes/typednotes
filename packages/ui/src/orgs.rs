@@ -46,7 +46,7 @@ pub fn OrgsPanel() -> Element {
 }
 
 /// What this deployment is missing, so a fresh deploy says so (no database,
-/// migrations not applied, vault or liaison not configured) instead of
+/// migrations not applied, vault or broker not configured) instead of
 /// failing opaquely later.
 #[component]
 fn StatusLine(health: Option<api::Health>) -> Element {
@@ -60,13 +60,25 @@ fn StatusLine(health: Option<api::Health>) -> Element {
         missing.push("core schema not applied");
     }
     if h.database && !h.ledger {
-        missing.push("ledger schema absent (no credits)");
+        missing.push("credits schema absent (no credits)");
     }
     if !h.vault {
         missing.push("vault not configured or refusing the app (no connections)");
     }
     if !h.liaison {
-        missing.push("liaison not configured (no tests)");
+        missing.push("credential broker not configured (no tests)");
+    }
+    if h.database && h.schema && !h.computations {
+        missing.push("computations schema not applied (no notebooks)");
+    }
+    if !h.lode {
+        missing.push("code writing not configured (notebooks cannot be implemented)");
+    }
+    if !h.lun {
+        missing.push("code runtime not configured (notebooks cannot run)");
+    }
+    if !h.compute {
+        missing.push("notebook database not configured (no database sinks)");
     }
     let class = if !h.database || !h.schema {
         "err"
@@ -76,7 +88,7 @@ fn StatusLine(health: Option<api::Health>) -> Element {
         "warn"
     };
     let text = if missing.is_empty() {
-        "database, ledger, vault and liaison all configured".to_string()
+        "every service is configured".to_string()
     } else {
         missing.join(" · ")
     };

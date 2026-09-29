@@ -1,6 +1,6 @@
 # Computations
 
-**Status:** design · **Last updated:** 2026-09-29
+**Status:** app side implemented (lun's contract additions pending, §9) · **Last updated:** 2026-09-29
 
 The product: a notebook where each cell is a **natural-language description of a
 node** of a reactive graph — like a Jupyter notebook whose cells are prose, and
@@ -84,6 +84,22 @@ once the graph is built — the node's last outcome. Inputs appear as `ui` cells
 with widgets (§3.3); a change feeds the session and only what depends on it
 runs again. The implementation log (lode's session) is followed in the same
 page while it runs.
+
+Each cell has a life of two phases, shown on the cell:
+
+1. **lode writes its code** from the description — the cell says so, and
+   expands to follow the writing: the steps of lode's run that mention the
+   cell (the files it writes, `check` and `lun_build` results) and the
+   unpublished code (the hunks of lode's diff that mention it);
+2. **lun runs it** — the cell shows its outcome, and expands to the code the
+   published commit holds for its function.
+
+A cell goes back to phase 1 when the code fails — lun cannot build it, or
+reports an error for the cell's node — or when a member reports that it does
+not do the right thing ("Not doing the right thing?"): a new lode run
+rewrites that cell's code with the reason, while the current code keeps
+running on lun until the rewrite is built. A description edited after its
+code was written marks the code out of date, with a one-click rewrite.
 
 ## 2. From description to running graph
 
@@ -466,7 +482,8 @@ Two new containers in the fleet, declared in `Fleet.lean` like the others
 Plus: **`compute-db`** (a `typednotes-`-prefixed Serverless SQL database — one
 more billed instance, once, not per user), a **`compute` connection string for
 the app** (DDL on that database only), the **`lun` vault service identity**, and
-the app's new env: `LODE_URL`, `LODE_TOKEN`, `COMPUTE_DB_URL`. Neither lode nor
+the app's new env: `LODE_URL`, `LODE_TOKEN`, `LUN_URL`, `LUN_TOKEN` (the app
+submits builds and drives sessions itself, §2), `COMPUTE_DB_URL`. Neither lode nor
 lun has migrations — a `postgresMigrations` history for `compute-db` applies one
 bootstrap file that creates nothing but a marker schema, so `plan` shows the
 database as managed from its first apply.
@@ -494,8 +511,18 @@ holds only short-lived warrants — which is the same containment story as
 
 ## 7. The app's schema (migration `0004_computations.sql`)
 
-Sketch, the same conventions as [`services/core.md`](services/core.md) §4; the
-SQL itself lands with the implementation:
+The sketch below is what [`migrations/0004_computations.sql`](../migrations/0004_computations.sql)
+implements, with these differences (§10 says why):
+
+- `graph_cells` has a `name` (the identifier lode names the cell's function and
+  input after), a `variant` column (the source's trigger or the sink's kind,
+  none for a plain node), and `next_due_at` (the scheduler's due table); an
+  endpoint's `token_hash` has a unique expression index;
+- `graphs` also keeps the model (`model_connection_id`, `model_name`),
+  `commit_sha`, the session's user (`session_user_id`), the last nodes and
+  lun's reading of the structure;
+- `source_checks` has `org_id` (for the hourly cap) and `latency_ms`;
+- `compute_schemas` records which (org, user) got a schema and role (§4.1).
 
 ```sql
 -- a graph (notebook) belongs to a project
@@ -583,3 +610,93 @@ admins add a user to an org by email, creating the `memberships` row (TODO.md).
 | `typednotes-infra` | `lode` + `lun` containers; `compute-db` + its connection strings; `lun` vault identity; `LODE_TOKEN`/`LUN_TOKEN` secrets; app `minScale := 1` when sources ship |
 | `lun` | vet the `PostgreSQL` and `SecretStore` effects + handlers bound per session to the vault-read credentials; relay `ObjectStore` writes through liaison with the attached warrants; refuse non-`http(s)` and private-range URLs in `HTTP`; add the compute and graph-secret credential kinds |
 | `lode` | `fetch` tool; Lean LSP loop; the computation session prompt (the cell taxonomy → `lun.json` with sources/sinks) |
+
+## 10. The app, as implemented
+
+`packages/api/src/computation.rs` (shared rules: cells, cron, `lun.json`,
+widgets, the message to lode), `packages/api/src/server/{graphs,lode,lun,
+scheduler,compute,members}.rs`, `packages/ui/src/{notebook,render,members}.rs`.
+Decisions the design left open, or that the implementation had to make:
+
+- **Naming.** Every cell has a `name`; lode is told to declare each cell's
+  function under exactly that name and one graph named `main`, and each
+  source's input as `input "{input}" T` (the input defaults to the name). The
+  app maps lun's answers back to cells by these names. A notebook's Lean
+  project lives at `typednotes/{graph_slug}` in the primary repository.
+- **The implementing state** (`graphs.status = 'implementing'`) moves on when
+  lode's run is over — noticed by the notebook's long poll or the scheduler's
+  tick, which also refreshes lode's 300 s warrants while it runs: the app
+  reads `lun.json` at lode's `workspace.remoteHead` through the repository
+  connection, submits the build with a repo `read` warrant, and, once lun
+  reports it ready, records each cell's implementation and registers the
+  session. "Rebuild from the repository" does the same from the branch head.
+- **Scheduled and watch functions** take the page URL as their argument
+  (`String → Eff [HTTP] T`), so the URL the SSRF guard checked is the URL
+  fetched. The guard resolves the host and refuses any private, loopback,
+  link-local, CGNAT, multicast or documentation address — at save time and
+  before each check; lun resolving again is the DNS-rebinding gap its own
+  `HTTP` guard has to close.
+- **Caps.** `TYPEDNOTES_SOURCE_CHECKS_PER_HOUR` (default 120 per org; refused
+  checks are audited but not counted) and `TYPEDNOTES_ENDPOINT_CALLS_PER_MINUTE`
+  (default 60 per endpoint).
+- **Endpoints answer with what changed** (§8's open question, decided as
+  specified): `{"changed": [nodes]}`. A body whose JSON does not fit the
+  input's base type (`Nat`, `Int`, `Float`, `String`, `Bool`, lists) is a
+  `400`, recorded, session untouched.
+- **Session binding.** A session is bound to the user who registered it
+  (`session_user_id`); the scheduler, webhooks and channel messages act as
+  that user, and `db` sinks write to that user's schema.
+- **Re-registration** feeds the last recorded value of every input the build
+  declares; an update lun answers `404` for re-registers first.
+- **Channel sources** are fed in the background, so a Slack or WhatsApp
+  webhook is still answered within seconds.
+- **Role names.** `{org_slug}_{user_id}` with dashes as underscores is up to
+  77 characters, over Postgres's 63: a longer one keeps the slug's first 21
+  characters and adds the org id's first 8 hex digits
+  (`{slug21}_{org8}_{user32}`). Provisioning grants the role to the app's
+  identity for the length of its transaction (to create the schema owned by
+  it) and commits only once the vault holds the credential.
+- **A cell's phases** (§1.2) are `graph_cells.writing` (set for the cells a
+  run writes — all of them for "implement", one for a report or a failure —
+  and cleared when the run's build is adopted), `issue` (why it is being
+  rewritten) and `code_at`/`edited_at` (out-of-date code). The session runs
+  `session_build_id`, the last adopted build, so inputs, checks and webhooks
+  keep working while lode writes the next one as `lun_build_id`.
+- **Automatic rewrites.** A failed build (lun's diagnostics, naming the cells
+  they point at), a commit without a usable `lun.json`, or a node error on
+  the recorded inputs sends the concerned cells back to lode by itself —
+  once per distinct node error (`auto_issue`), and at most
+  N times in a row until a member asks for a run again — N is set by the
+  org's owners and admins on its settings page (`/orgs/{slug}/settings`, 0
+  to 10, `0` disables; `orgs.auto_repairs`), else the deployment's
+  `TYPEDNOTES_AUTO_REPAIRS` (default 2) — so a model that cannot fix it does not spend the
+  org's credits in a loop. A node error can also be the data's fault (an
+  unknown code in an input); the rewrite is told the arguments it failed on.
+- **Vocabulary.** The services behind Typednotes (lode, lun, liaison,
+  ledger, compute-db) are never named in the UI or in the messages it
+  shows: they are "writing the code", "running", "the credential broker",
+  "credits", "the notebook database". The first line of each message lode
+  is sent is what the notebook's log shows of it, so it stays neutral, and
+  lode's `lun_build`/`lun_call` tools show as "build"/"try". What the model
+  itself writes in its steps is shown as written.
+- **Members.** Adding an address nobody signed in with yet creates its
+  `users` row: the first sign-in with that verified address links to it.
+  Owners manage everyone, admins manage admins and members; an org keeps at
+  least one owner.
+
+Verified locally on 2026-09-29 against Postgres 16 (both databases, SCRAM
+enforced for the compute roles) with mock vault, liaison, lode and lun:
+members; notebook and cells; the secret written to the vault and nowhere in
+the database; lode's three warrants; build, adoption and session binding;
+compute provisioning, the role logging in with the vault's password and
+refused outside its schema; ui feeds, type refusals; endpoint delivery, bad
+bodies, unknown and rotated tokens; the scheduler's tick feeding a check and a
+watch seeing no change; a channel sink sending once and not again on an
+unchanged recompute; a signed Slack message feeding a channel source, its
+retry feeding nothing; re-registration from the input log; deleting a
+notebook with its secrets; and a cell's life — every cell writing during
+the first run, the steps and unpublished hunks that mention a cell, its
+published definition, a member's report rewriting one cell while the old code
+keeps answering, a node error sending its cell back once (not again for the
+same error), a failed build rewritten twice and then failed, a description
+edit marking the code out of date. Not exercised: a real lode, lun or model.

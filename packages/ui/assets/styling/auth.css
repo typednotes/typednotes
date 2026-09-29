@@ -30,6 +30,21 @@
   min-width: 0;
 }
 
+.user-menu-account {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0.2rem 0.5rem 0.2rem 0.2rem;
+  border-radius: 999px;
+  text-decoration: none;
+  transition: background-color 120ms ease;
+}
+
+.user-menu-account:hover { background: var(--app-surface-2); }
+.user-menu-account:hover .user-menu-name { color: var(--app-text); }
+.user-menu-account:focus-visible { outline: 2px solid var(--app-accent-ring); outline-offset: 2px; }
+
 .user-menu-avatar {
   display: inline-grid;
   flex-shrink: 0;

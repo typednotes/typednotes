@@ -15,12 +15,11 @@ use crate::connections::{connect_url, oauth_ready};
 use crate::error_message;
 use crate::navigate_to;
 
-/// A project's messaging interfaces and its inbox, which share the list of
-/// channels: adding an interface makes it available to reply through.
+/// A project's messaging interfaces: where people reach it (project
+/// settings).
 #[component]
-pub(crate) fn ChannelsSection(slug: ReadSignal<String>, project: ReadSignal<String>) -> Element {
+pub(crate) fn InterfacesPanel(slug: ReadSignal<String>, project: ReadSignal<String>) -> Element {
     let mut channels = use_server_future(move || list_channels(slug(), project()))?;
-    let mut inbox = use_server_future(move || list_messages(slug(), project()))?;
     let status = use_server_future(health)?;
     let h = status().and_then(|r| r.ok());
     let list: Vec<Channel> = match channels() {
@@ -31,15 +30,14 @@ pub(crate) fn ChannelsSection(slug: ReadSignal<String>, project: ReadSignal<Stri
         Some(Err(e)) => Some(error_message(&e)),
         _ => None,
     };
-    // Where a reply goes, set by "Reply" on an inbound message.
-    let reply_to = use_signal(|| None::<(String, String)>);
 
     rsx! {
         Card {
             CardHeader {
                 CardTitle { "Interfaces" }
                 CardDescription {
-                    "Where people reach this project. Their messages land in the inbox below."
+                    "Where people reach this project: a Slack channel, a WhatsApp or a Signal number. "
+                    "Their messages land in the project's inbox, and notebooks can listen and reply."
                 }
             }
             CardContent {
@@ -57,10 +55,7 @@ pub(crate) fn ChannelsSection(slug: ReadSignal<String>, project: ReadSignal<Stri
                             project: project(),
                             channel,
                             health: h.clone(),
-                            on_removed: move |_| {
-                                channels.restart();
-                                inbox.restart();
-                            },
+                            on_removed: move |_| channels.restart(),
                         }
                     }
                 }
@@ -72,35 +67,58 @@ pub(crate) fn ChannelsSection(slug: ReadSignal<String>, project: ReadSignal<Stri
                 }
             }
         }
+    }
+}
+
+/// A project's inbox: the latest messages through its interfaces, both
+/// ways, and a composer to reply (project page).
+#[component]
+pub(crate) fn InboxPanel(slug: ReadSignal<String>, project: ReadSignal<String>) -> Element {
+    let channels = use_server_future(move || list_channels(slug(), project()))?;
+    let mut inbox = use_server_future(move || list_messages(slug(), project()))?;
+    let list: Vec<Channel> = match channels() {
+        Some(Ok(list)) => list,
+        _ => Vec::new(),
+    };
+    // Where a reply goes, set by "Reply" on an inbound message.
+    let reply_to = use_signal(|| None::<(String, String)>);
+
+    rsx! {
         Card {
             CardHeader {
                 CardTitle { "Inbox" }
                 CardDescription { "The latest messages through this project's interfaces, both ways." }
             }
             CardContent {
-                div { class: "conn-actions",
-                    Button {
-                        size: ButtonSize::Sm,
-                        variant: ButtonVariant::Outline,
-                        onclick: move |_| inbox.restart(),
-                        "Refresh"
+                if list.is_empty() {
+                    p { class: "orgs-empty",
+                        "No interface yet: "
+                        a { href: "/orgs/{slug}/projects/{project}/settings/interfaces", "add one in the project's settings" }
+                        "."
                     }
-                }
-                match inbox() {
-                    None => rsx! { p { "Loading…" } },
-                    Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load the inbox: {error_message(&e)}" } },
-                    Some(Ok(messages)) if messages.is_empty() => rsx! {
-                        p { class: "orgs-empty", "No message yet." }
-                    },
-                    Some(Ok(messages)) => rsx! {
-                        div { class: "inbox",
-                            for message in messages {
-                                MessageRow { key: "{message.id}", message, reply_to }
-                            }
+                } else {
+                    div { class: "conn-actions",
+                        Button {
+                            size: ButtonSize::Sm,
+                            variant: ButtonVariant::Outline,
+                            onclick: move |_| inbox.restart(),
+                            "Refresh"
                         }
-                    },
-                }
-                if !list.is_empty() {
+                    }
+                    match inbox() {
+                        None => rsx! { p { "Loading…" } },
+                        Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load the inbox: {error_message(&e)}" } },
+                        Some(Ok(messages)) if messages.is_empty() => rsx! {
+                            p { class: "orgs-empty", "No message yet." }
+                        },
+                        Some(Ok(messages)) => rsx! {
+                            div { class: "inbox",
+                                for message in messages {
+                                    MessageRow { key: "{message.id}", message, reply_to }
+                                }
+                            }
+                        },
+                    }
                     Composer {
                         slug: slug(),
                         project: project(),

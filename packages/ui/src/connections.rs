@@ -31,7 +31,7 @@ pub(crate) fn ConnectionsPanel(slug: ReadSignal<String>) -> Element {
                 CardTitle { "Connections" }
                 CardDescription {
                     "Credentials go straight to the vault — the app itself cannot read them back. "
-                    "Test runs one read-only call through liaison, the only service allowed to use them."
+                    "Test runs one read-only call through the credential broker, the only service allowed to use them."
                 }
             }
             CardContent {

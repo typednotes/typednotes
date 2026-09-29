@@ -38,6 +38,29 @@ Neither is a proof; both are review rules.
    code is attenuable by the user's browser — which is not a vulnerability by itself, since
    attenuation only narrows, but it leaks the authority model and invites the first mistake.
 
+## 4b. Where things are
+
+Work and settings are separate pages. A work page shows what the user does there and links
+to the settings section that fixes whatever is missing ("choose a repository", "connect an
+AI provider"); a settings page has a list of sections on the left and one section on the
+right, so each setting has one address.
+
+| Page | What |
+|---|---|
+| `/` | your organisations; create one |
+| `/settings` (the name in the navbar) | your account: profile (display name), sign-in methods, sessions ("sign out everywhere else"), organisations (leave) |
+| `/orgs/:org` | the org's projects; create one; credits |
+| `/orgs/:org/settings/:section` | **General** (name, credits) · **Members** · **Connections** · **Notebooks** (automatic rewrites) · **Danger zone** (leave; delete, owners only, typing the slug) |
+| `/orgs/:org/projects/:project` | its notebooks; its inbox |
+| `/orgs/:org/projects/:project/settings/:section` | **General** (name) · **Repository** · **Interfaces** · **Danger zone** (delete) |
+| `/orgs/:org/projects/:project/graphs/:graph` | a notebook |
+
+Slugs are addresses and never change; names can. Deleting an org deletes everything it
+holds outside Postgres first — connection credentials, notebook secrets and compute
+credentials in the vault, its members' compute schemas — and refuses (nothing deleted) if
+the vault does; deleting a project deletes its notebooks' secrets the same way. The names of
+the services behind the app never appear on these pages ([`../computations.md`](../computations.md) §10).
+
 ## 5. What is not proven
 
 Everything. Specifically worth testing rather than reasoning about:

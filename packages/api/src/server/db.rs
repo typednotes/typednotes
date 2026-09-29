@@ -53,7 +53,7 @@ pub async fn health() -> Health {
     // Not just configured: the vault must accept the app's login, or every
     // connection fails at its last step (after the OAuth round trip).
     let vault = vault::ready().await.is_ok();
-    let configured = |database, schema, ledger| Health {
+    let configured = |database, schema, ledger, computations| Health {
         database,
         schema,
         ledger,
@@ -66,9 +66,13 @@ pub async fn health() -> Health {
         slack: config::slack().is_some(),
         slack_events: config::slack_signing_secret().is_some(),
         whatsapp_webhook: config::whatsapp_webhook().is_some(),
+        computations,
+        lode: config::lode().is_some(),
+        lun: config::lun().is_some(),
+        compute: config::compute_db_url().is_some(),
     };
     let Ok(pool) = pool() else {
-        return configured(false, false, false);
+        return configured(false, false, false, false);
     };
     let database = sqlx::query("select 1").execute(pool).await.is_ok();
     // `channel_messages` is the newest table of the app's own history.
@@ -77,7 +81,11 @@ pub async fn health() -> Health {
         && table_exists(pool, "public.connections").await
         && table_exists(pool, "public.channel_messages").await;
     let ledger = database && table_exists(pool, "public.credit_ledger").await;
-    configured(database, schema, ledger)
+    // `compute_schemas` is the newest table of `0004_computations`.
+    let computations = schema
+        && table_exists(pool, "public.graph_cells").await
+        && table_exists(pool, "public.compute_schemas").await;
+    configured(database, schema, ledger, computations)
 }
 
 /// An org's columns plus the caller's role, from `orgs o join memberships m`.
@@ -255,6 +263,61 @@ async fn welcome_grant(org_id: &str) {
     {
         eprintln!("welcome grant for org {org_id} failed (is ledger's history applied?): {e}");
     }
+}
+
+/// The org's settings.
+pub async fn org_settings(org: &Org) -> Result<crate::OrgSettings, ServerFnError> {
+    let row = sqlx::query("select auto_repairs from orgs where id = $1::uuid")
+        .bind(&org.id)
+        .fetch_one(pool()?)
+        .await
+        .map_err(db_error)?;
+    Ok(crate::OrgSettings {
+        auto_repairs: row.get("auto_repairs"),
+        default_auto_repairs: config::auto_repairs().min(i64::from(crate::MAX_AUTO_REPAIRS)) as i32,
+        can_edit: org.role == "owner" || org.role == "admin",
+    })
+}
+
+/// Change the org's settings: owners and admins.
+pub async fn set_org_settings(
+    org: &Org,
+    auto_repairs: Option<i32>,
+) -> Result<crate::OrgSettings, ServerFnError> {
+    if org.role != "owner" && org.role != "admin" {
+        return Err(super::errors::forbidden(
+            "only the org's owners and admins can change its settings",
+        ));
+    }
+    if auto_repairs.is_some_and(|n| !(0..=crate::MAX_AUTO_REPAIRS).contains(&n)) {
+        return Err(super::errors::bad_request(format!(
+            "automatic rewrites: 0 to {}",
+            crate::MAX_AUTO_REPAIRS
+        )));
+    }
+    sqlx::query("update orgs set auto_repairs = $2 where id = $1::uuid")
+        .bind(&org.id)
+        .bind(auto_repairs)
+        .execute(pool()?)
+        .await
+        .map_err(db_error)?;
+    org_settings(org).await
+}
+
+/// The cap on automatic rewrites for the org: its setting, else the
+/// deployment's default.
+pub async fn auto_repair_cap(org_id: &str) -> i64 {
+    let set = match pool() {
+        Ok(pool) => sqlx::query("select auto_repairs from orgs where id = $1::uuid")
+            .bind(org_id)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.get::<Option<i32>, _>("auto_repairs")),
+        Err(_) => None,
+    };
+    set.map(i64::from).unwrap_or_else(config::auto_repairs)
 }
 
 /// The org's spendable credits: the ledger balance minus open holds — the

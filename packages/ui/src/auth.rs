@@ -82,8 +82,11 @@ pub fn UserMenu() -> Element {
     rsx! {
         document::Link { rel: "stylesheet", href: AUTH_CSS }
         div { class: "user-menu",
-            span { class: "user-menu-avatar", aria_hidden: "true", "{initial}" }
-            span { class: "user-menu-name", title: "{user.email}", "{who}" }
+            // Your account's settings.
+            a { class: "user-menu-account", href: "/settings", title: "Your account ({user.email})",
+                span { class: "user-menu-avatar", aria_hidden: "true", "{initial}" }
+                span { class: "user-menu-name", "{who}" }
+            }
             Button {
                 variant: ButtonVariant::Outline,
                 size: ButtonSize::Sm,

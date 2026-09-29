@@ -131,6 +131,78 @@ pub fn root_key() -> Result<Vec<u8>, String> {
     Ok(key)
 }
 
+/// Unix seconds now.
+pub fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// How long every warrant the app mints lives (docs/connections.md §7).
+pub const LIFETIME_SECS: u64 = 300;
+
+/// A warrant for one connection, and the run it is bound to.
+pub struct Grant {
+    pub warrant: Warrant,
+    pub run_id: String,
+    pub now: u64,
+}
+
+/// Mint the narrow warrant of docs/connections.md §7 for one connection of
+/// `org_id`: `expiresAt(now + 300)`, `capability(provider, action)`,
+/// `resource(connection_id)`, `budget(budget)`, `runId`, in that order.
+pub fn for_connection(
+    root: &[u8],
+    org_id: &str,
+    provider: &str,
+    action: &str,
+    connection_id: &str,
+    budget: u64,
+) -> Grant {
+    let now = now();
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let warrant = mint(
+        root,
+        &uuid::Uuid::new_v4().to_string(),
+        org_id,
+        vec![
+            Caveat::ExpiresAt(now + LIFETIME_SECS),
+            Caveat::Capability {
+                provider: provider.to_string(),
+                action: action.to_string(),
+            },
+            Caveat::Resource(connection_id.to_string()),
+            Caveat::Budget(budget),
+            Caveat::RunId(run_id.clone()),
+        ],
+    );
+    Grant {
+        warrant,
+        run_id,
+        now,
+    }
+}
+
+/// Credentials as lode and lun take them (liaison's wire format, `Lode.Liaison`):
+/// the warrant, the connection's account `{owner_id}/{connection_id}`, and —
+/// for budgeted calls — the credits each call holds.
+pub fn credentials_json(
+    grant: &Grant,
+    owner_id: &str,
+    connection_id: &str,
+    cost: Option<u64>,
+) -> Value {
+    let mut v = json!({
+        "warrant": grant.warrant.to_json(),
+        "account": format!("{owner_id}/{connection_id}"),
+    });
+    if let Some(cost) = cost {
+        v["cost"] = json!(cost);
+    }
+    v
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +278,29 @@ mod tests {
         assert_eq!(j["caveats"][0], json!({"kind": "budget", "value": "0"}));
         assert_eq!(j["caveats"][1], json!({"kind": "expiresAt", "value": "9"}));
         assert_eq!(j["tag"].as_str().unwrap().len(), 64);
+    }
+
+    /// The shape lode's `Credentials.ofJson` reads: the warrant's resource is
+    /// the account's last segment, and the caveats are §7's, newest first.
+    #[test]
+    fn connection_credentials() {
+        let g = for_connection(&[9; 32], "org", "github", "write", "conn", 0);
+        let c = credentials_json(&g, "user", "conn", None);
+        assert_eq!(c["account"], "user/conn");
+        assert!(c.get("cost").is_none());
+        let kinds: Vec<&str> = c["warrant"]["caveats"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["kind"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            kinds,
+            ["runId", "budget", "resource", "capability", "expiresAt"]
+        );
+        assert_eq!(c["warrant"]["caveats"][0]["value"], g.run_id.as_str());
+        assert_eq!(c["warrant"]["caveats"][3]["action"], "write");
+        let m = credentials_json(&g, "u", "c", Some(10));
+        assert_eq!(m["cost"], 10);
     }
 }

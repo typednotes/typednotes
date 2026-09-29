@@ -1,0 +1,77 @@
+/* Settings pages: the sections on the left, the section on the right. */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 60rem;
+  margin: 0 auto;
+}
+
+.settings-head { display: flex; flex-direction: column; gap: 0.2rem; }
+.settings-head .conn-meta { margin: 0; }
+
+.settings-frame {
+  display: grid;
+  grid-template-columns: 12rem minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  position: sticky;
+  top: 5rem;
+}
+
+.settings-link {
+  padding: 0.45rem 0.75rem;
+  border-radius: var(--app-radius-sm);
+  color: var(--app-muted);
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.settings-link:hover { background: var(--app-surface-2); color: var(--app-text); }
+
+.settings-link.active {
+  background: var(--app-accent-soft);
+  color: var(--app-accent);
+  font-weight: 600;
+}
+
+.settings-link:focus-visible { outline: 2px solid var(--app-accent-ring); outline-offset: 1px; }
+
+.settings-body { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+
+/* A frame with no sections (your account): the body alone. */
+.settings-frame:has(> .settings-body:only-child) { grid-template-columns: minmax(0, 1fr); }
+
+.settings-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+  margin: 1rem 0 0;
+  font-size: 0.875rem;
+}
+
+.settings-facts dt { color: var(--app-muted); }
+.settings-facts dd { margin: 0; overflow-wrap: anywhere; }
+
+.settings-inline { margin: 0; align-self: center; }
+
+@media (max-width: 720px) {
+  .settings-frame { grid-template-columns: minmax(0, 1fr); gap: 1rem; }
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+    gap: 0.25rem;
+    padding-bottom: 0.25rem;
+    border-bottom: 1px solid var(--app-border);
+  }
+  .settings-link { white-space: nowrap; }
+}

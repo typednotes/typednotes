@@ -26,14 +26,24 @@ pub fn auth_routes() -> dioxus::server::axum::Router {
     server::routes::router()
 }
 
+/// Start the background work of a server process: the source scheduler's
+/// tick (docs/computations.md §3.1). Call once, inside the server's runtime.
 #[cfg(feature = "server")]
-use server::{channels, connections, db, errors, projects, session};
+pub fn start_background() {
+    server::scheduler::start();
+}
+
+#[cfg(feature = "server")]
+use server::{channels, connections, db, errors, graphs, members, projects, session};
 
 mod model;
 pub use model::*;
 
 mod validate;
 pub use validate::*;
+
+mod computation;
+pub use computation::*;
 
 // ── Server functions ────────────────────────────────────────────────────
 
@@ -62,6 +72,31 @@ pub async fn logout() -> Result<(), ServerFnError> {
         }
     }
     Ok(())
+}
+
+// ── Account ─────────────────────────────────────────────────────────────
+
+/// The caller's account: profile, sign-in methods, sessions, orgs.
+#[get("/api/account")]
+pub async fn get_account() -> Result<Account, ServerFnError> {
+    let user = session::require_user().await?;
+    server::account::account(&user).await
+}
+
+/// Change the name the caller goes by (empty: their email shows instead).
+#[post("/api/account/name")]
+pub async fn set_display_name(name: String) -> Result<User, ServerFnError> {
+    let user = session::require_user().await?;
+    server::account::set_display_name(&user, &name).await
+}
+
+/// Sign out every other browser; the number of sessions ended.
+#[post("/api/account/sessions/end")]
+pub async fn sign_out_elsewhere() -> Result<u64, ServerFnError> {
+    let user = session::require_user().await?;
+    let headers = session::request_headers().await?;
+    let current = session::cookie_value(&headers).map(|t| session::hash(&t));
+    server::account::sign_out_elsewhere(&user, current).await
 }
 
 /// The caller's orgs, newest first.
@@ -105,6 +140,38 @@ pub async fn get_org(slug: String) -> Result<OrgDetail, ServerFnError> {
     let (_, org) = member_org(&slug).await?;
     let credits = db::available_credits(&org.id).await;
     Ok(OrgDetail { org, credits })
+}
+
+/// Rename the org (owners and admins).
+#[post("/api/org/rename")]
+pub async fn rename_org(slug: String, name: String) -> Result<Org, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    server::account::rename_org(&org, &name).await
+}
+
+/// Delete the org and everything in it (owners); `confirm` is its slug.
+#[post("/api/org/delete")]
+pub async fn delete_org(slug: String, confirm: String) -> Result<(), ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    server::account::delete_org(&org, &confirm).await
+}
+
+/// The org's settings.
+#[post("/api/org/settings")]
+pub async fn get_org_settings(slug: String) -> Result<OrgSettings, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    db::org_settings(&org).await
+}
+
+/// Change the org's settings (owners and admins). `auto_repairs: None`
+/// returns to the deployment's default.
+#[post("/api/org/settings/save")]
+pub async fn set_org_settings(
+    slug: String,
+    auto_repairs: Option<i32>,
+) -> Result<OrgSettings, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    db::set_org_settings(&org, auto_repairs).await
 }
 
 /// The org's connections, newest first.
@@ -278,6 +345,17 @@ pub async fn get_project(slug: String, project: String) -> Result<ProjectDetail,
     Ok(ProjectDetail { org, project })
 }
 
+/// Rename a project (its creator or an org admin).
+#[post("/api/project/rename")]
+pub async fn rename_project(
+    slug: String,
+    project: String,
+    name: String,
+) -> Result<Project, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    projects::rename(&org, &user, &project, &name).await
+}
+
 /// Delete a project with its interfaces and messages.
 #[post("/api/project/delete")]
 pub async fn delete_project(slug: String, project: String) -> Result<(), ServerFnError> {
@@ -398,4 +476,295 @@ pub async fn send_message(
 ) -> Result<Message, ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     channels::send(&org, &user, &project, &channel, &recipient, &text).await
+}
+
+// ── Members ─────────────────────────────────────────────────────────────
+
+/// The org's members, owners first.
+#[post("/api/members")]
+pub async fn list_members(slug: String) -> Result<Vec<Member>, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    members::list(&org, &user).await
+}
+
+/// Add someone to the org by email (owners and admins). An address nobody
+/// signed in with yet is linked on its first sign-in.
+#[post("/api/members/add")]
+pub async fn add_member(
+    slug: String,
+    email: String,
+    role: String,
+) -> Result<Member, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    members::add(&org, &email, role.trim()).await
+}
+
+/// Remove a member (owners and admins), or leave (anyone).
+#[post("/api/members/remove")]
+pub async fn remove_member(slug: String, user_id: String) -> Result<(), ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    members::remove(&org, &user, &user_id).await
+}
+
+// ── Notebooks (docs/computations.md) ────────────────────────────────────
+
+/// The project's notebooks, newest first.
+#[post("/api/graphs")]
+pub async fn list_graphs(slug: String, project: String) -> Result<Vec<Graph>, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    graphs::list(&org, &project).await
+}
+
+/// Whether a slug is free for a new notebook of the project.
+#[post("/api/graphs/check")]
+pub async fn check_graph_slug(
+    slug: String,
+    project: String,
+    graph: String,
+) -> Result<SlugCheck, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    graphs::check_slug(&org, &project, &graph.trim().to_lowercase()).await
+}
+
+#[post("/api/graphs/create")]
+pub async fn create_graph(
+    slug: String,
+    project: String,
+    graph: String,
+    name: String,
+) -> Result<Graph, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::create(&org, &user, &project, &graph.trim().to_lowercase(), &name).await
+}
+
+/// A notebook's page: its cells, their implementations and last outcomes.
+#[post("/api/graph")]
+pub async fn get_graph(
+    slug: String,
+    project: String,
+    graph: String,
+) -> Result<GraphDetail, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::detail(&org, &user, &project, &graph).await
+}
+
+#[post("/api/graph/delete")]
+pub async fn delete_graph(
+    slug: String,
+    project: String,
+    graph: String,
+) -> Result<(), ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::delete(&org, &user, &project, &graph).await
+}
+
+/// The AI connection and model lode implements the notebook with.
+#[post("/api/graph/model")]
+pub async fn set_graph_model(
+    slug: String,
+    project: String,
+    graph: String,
+    connection: String,
+    model: String,
+) -> Result<Graph, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::set_model(&org, &user, &project, &graph, &connection, &model).await
+}
+
+/// The app's public origin, for the URLs it shows (an endpoint's).
+#[cfg(feature = "server")]
+async fn public_url() -> Result<String, ServerFnError> {
+    Ok(server::config::public_url(
+        &session::request_headers().await?,
+    ))
+}
+
+/// Add a cell at the end of the notebook. An `endpoint` cell's URL is in
+/// the answer, and only there.
+#[post("/api/graph/cells/add")]
+pub async fn add_cell(
+    slug: String,
+    project: String,
+    graph: String,
+    cell_type: CellType,
+    name: String,
+    description: String,
+    config: CellConfig,
+) -> Result<CellSaved, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    let origin = public_url().await?;
+    let form = graphs::CellForm {
+        name: &name,
+        description: &description,
+        config: &config,
+    };
+    graphs::add_cell(&org, &user, &project, &graph, cell_type, form, &origin).await
+}
+
+#[post("/api/graph/cells/update")]
+pub async fn update_cell(
+    slug: String,
+    project: String,
+    graph: String,
+    cell: String,
+    name: String,
+    description: String,
+    config: CellConfig,
+) -> Result<Cell, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    let form = graphs::CellForm {
+        name: &name,
+        description: &description,
+        config: &config,
+    };
+    graphs::update_cell(&org, &user, &project, &graph, &cell, form).await
+}
+
+#[post("/api/graph/cells/delete")]
+pub async fn delete_cell(
+    slug: String,
+    project: String,
+    graph: String,
+    cell: String,
+) -> Result<(), ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::delete_cell(&org, &user, &project, &graph, &cell).await
+}
+
+/// Move a cell up (`-1`) or down (`1`).
+#[post("/api/graph/cells/move")]
+pub async fn move_cell(
+    slug: String,
+    project: String,
+    graph: String,
+    cell: String,
+    delta: i32,
+) -> Result<(), ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::move_cell(&org, &user, &project, &graph, &cell, delta).await
+}
+
+/// Set a secret cell's value. Write-only: nothing ever reads it back.
+#[post("/api/graph/cells/secret")]
+pub async fn set_cell_secret(
+    slug: String,
+    project: String,
+    graph: String,
+    cell: String,
+    value: String,
+) -> Result<Cell, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::set_secret(&org, &user, &project, &graph, &cell, &value).await
+}
+
+/// A new URL for an endpoint cell; the old one stops working.
+#[post("/api/graph/cells/rotate")]
+pub async fn rotate_endpoint(
+    slug: String,
+    project: String,
+    graph: String,
+    cell: String,
+) -> Result<CellSaved, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    let origin = public_url().await?;
+    graphs::rotate_endpoint(&org, &user, &project, &graph, &cell, &origin).await
+}
+
+/// Feed a `ui` input cell's value to the running graph.
+#[post("/api/graph/cells/feed")]
+pub async fn feed_cell(
+    slug: String,
+    project: String,
+    graph: String,
+    cell: String,
+    value: serde_json::Value,
+) -> Result<FeedResult, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::feed_ui(&org, &user, &project, &graph, &cell, value).await
+}
+
+/// Ask lode to implement the notebook's cells (with an optional note), or
+/// — `steer` while it runs — to change course.
+#[post("/api/graph/implement")]
+pub async fn implement_graph(
+    slug: String,
+    project: String,
+    graph: String,
+    note: String,
+    steer: bool,
+) -> Result<Graph, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::implement(&org, &user, &project, &graph, &note, steer).await
+}
+
+/// Tell lode a cell does not do the right thing: it rewrites the cell's
+/// code while the current code keeps running.
+#[post("/api/graph/cells/report")]
+pub async fn report_cell(
+    slug: String,
+    project: String,
+    graph: String,
+    cell: String,
+    report: String,
+) -> Result<Graph, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::report_cell(&org, &user, &project, &graph, &cell, &report).await
+}
+
+/// A cell's code: published, and lode's unpublished changes to it.
+#[post("/api/graph/cells/code")]
+pub async fn cell_code(
+    slug: String,
+    project: String,
+    graph: String,
+    cell: String,
+) -> Result<CellCode, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::cell_code(&org, &user, &project, &graph, &cell).await
+}
+
+#[post("/api/graph/abort")]
+pub async fn abort_graph(
+    slug: String,
+    project: String,
+    graph: String,
+) -> Result<Graph, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::abort(&org, &user, &project, &graph).await
+}
+
+/// lode's log from `after`, waiting up to `wait` seconds for news; moves
+/// the notebook on (build, then session) once lode's run is over.
+#[post("/api/graph/progress")]
+pub async fn graph_progress(
+    slug: String,
+    project: String,
+    graph: String,
+    after: u64,
+    wait: u64,
+) -> Result<LodeProgress, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::progress(&org, &user, &project, &graph, after, wait).await
+}
+
+/// Build the notebook again from the repository's branch head.
+#[post("/api/graph/rebuild")]
+pub async fn rebuild_graph(
+    slug: String,
+    project: String,
+    graph: String,
+) -> Result<Graph, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::rebuild(&org, &user, &project, &graph).await
+}
+
+/// Register the session again from the recorded inputs.
+#[post("/api/graph/restart")]
+pub async fn restart_graph(
+    slug: String,
+    project: String,
+    graph: String,
+) -> Result<FeedResult, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    graphs::restart_session(&org, &user, &project, &graph).await
 }

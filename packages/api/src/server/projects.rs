@@ -130,12 +130,37 @@ pub async fn delete(org: &Org, user: &User, slug: &str) -> Result<(), ServerFnEr
             "only its creator or an org admin can delete this project",
         ));
     }
+    super::graphs::delete_project_secrets(&org.id, &project.id).await?;
     sqlx::query("delete from projects where id = $1::uuid")
         .bind(&project.id)
         .execute(pool()?)
         .await
         .map_err(db_error)?;
     Ok(())
+}
+
+/// Rename a project: its creator or an org admin. Its slug stays.
+pub async fn rename(
+    org: &Org,
+    user: &User,
+    slug: &str,
+    name: &str,
+) -> Result<Project, ServerFnError> {
+    let (project, created_by) = get(org, slug).await?;
+    let admin = org.role == "owner" || org.role == "admin";
+    if !admin && created_by.as_deref() != Some(user.id.as_str()) {
+        return Err(forbidden(
+            "only its creator or an org admin can rename this project",
+        ));
+    }
+    crate::validate_name(name).map_err(bad_request)?;
+    sqlx::query("update projects set name = $2 where id = $1::uuid")
+        .bind(&project.id)
+        .bind(name.trim())
+        .execute(pool()?)
+        .await
+        .map_err(db_error)?;
+    Ok(get(org, slug).await?.0)
 }
 
 // ── Repositories ────────────────────────────────────────────────────────
