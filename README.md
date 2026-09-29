@@ -11,8 +11,11 @@ the account; the same verified email is the same account), create orgs and proje
 connect code hosts (GitHub, GitLab), storage (S3-compatible buckets, Azure Blob Storage,
 Dropbox, Google Drive) and AI accounts (Anthropic, Mistral, OpenAI, any OpenAI-compatible
 endpoint) to them. A project has a primary repository and messaging interfaces (Slack,
-WhatsApp, Signal) whose messages land in its inbox. Credentials go into the vault; every
-provider call — "Test", listing repositories, sending a message — goes through liaison. The contract with the other services
+WhatsApp, Signal) whose messages land in its inbox. A project's computations are
+notebooks of natural-language cells — graphs implemented by `lode` in the
+repository and run by `lun` ([`docs/computations.md`](docs/computations.md), design).
+Credentials go into the vault; every provider call — "Test",
+listing repositories, sending a message — goes through liaison. The contract with the other services
 is [`docs/connections.md`](docs/connections.md). Everything else in the architecture lives in
 sibling services:
 
@@ -22,6 +25,8 @@ sibling services:
 | `ledger` — usage events, credits, holds | [`typednotes/ledger`](https://github.com/typednotes/ledger) | `typednotes-infra` |
 | `liaison` — the broker, sole egress chokepoint | [`typednotes/liaison`](https://github.com/typednotes/liaison) | `typednotes-infra` |
 | `secrets` — the vault | [`typednotes/secrets`](https://github.com/typednotes/secrets) | `typednotes-infra` |
+| `lode` — implements graph cells as Lean code in the repo | [`typednotes/lode`](https://github.com/typednotes/lode) | `typednotes-infra` |
+| `lun` — builds and runs the typed, reactive graphs | [`typednotes/lun`](https://github.com/typednotes/lun) | `typednotes-infra` |
 
 Sign-in is **interim**: GitHub and Google act as identity providers until `idp`
 (`docs/services/idp.md`) exists. They are recorded as `identities` rows, so switching providers

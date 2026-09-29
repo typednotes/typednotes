@@ -10,6 +10,8 @@ the shared proof vocabulary and its six tiers live in [`../proof-strategy.md`](.
 | [`broker`](broker.md) | Lean 4 + `linen` | sole egress chokepoint; verifies warrants, meters |
 | [`ledger`](ledger.md) | Lean 4 + `linen` | usage events, credits, holds (deployed inside `core`) |
 | [`agent`](agent.md) | Lean 4 + `linen` | planning and reasoning; no ambient authority |
+| [`lode`](lode.md) | Lean 4 + `linen` | implements NL-described graph cells as Lean code in the project's repository |
+| [`lun`](lun.md) | Lean 4 + `linen` | builds and runs the typed, reactive graphs (see [`../computations.md`](../computations.md)) |
 | [`secrets`](secrets.md) | **Rust** | vault; third-party refresh tokens |
 | [`web`](web.md) | Dioxus 0.7 | frontend |
 

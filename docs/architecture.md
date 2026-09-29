@@ -25,10 +25,13 @@ detail — types, schemas, and the specific properties each service proves — l
   an honest account of what "provably correct" can and cannot mean here. **Read this first.**
 - [`connections.md`](connections.md) — the cross-service contract for sign-in and connected
   accounts: vault paths, credential shapes, egress fields, the grant statement.
+- [`computations.md`](computations.md) — the notebook: graphs defined by natural-language
+  cells, implemented by [`lode`](services/lode.md), run by [`lun`](services/lun.md), with
+  sources (scheduled web checks), sinks (per-user Postgres) and the effect enforcement.
 - [`services/`](services/) — one document per service, all answering the same eight questions:
   [`idp`](services/idp.md) · [`core`](services/core.md) · [`broker`](services/broker.md) ·
-  [`ledger`](services/ledger.md) · [`agent`](services/agent.md) ·
-  [`secrets`](services/secrets.md) · [`web`](services/web.md)
+  [`ledger`](services/ledger.md) · [`agent`](services/agent.md) · [`lode`](services/lode.md) ·
+  [`lun`](services/lun.md) · [`secrets`](services/secrets.md) · [`web`](services/web.md)
 
 Schemas and Lean types are stated **once**, in the owning service document. Where this file
 used to carry them, it now points.
