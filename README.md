@@ -10,7 +10,8 @@ This repository is the **app**: a Dioxus 0.7 fullstack web app whose server is t
 the account; the same verified email is the same account), create orgs and projects, and
 connect code hosts (GitHub, GitLab), storage (S3-compatible buckets, Azure Blob Storage,
 Dropbox, Google Drive) and AI accounts (Anthropic, Mistral, OpenAI, any OpenAI-compatible
-endpoint) to them. A project has a primary repository and messaging interfaces (Slack,
+endpoint), calendars (Google, Microsoft, CalDAV), webmail (Gmail, Outlook, JMAP/Fastmail)
+and Notion workspaces to them. A project has a primary repository and messaging interfaces (Slack,
 WhatsApp, Signal) whose messages land in its inbox. A project's computations are
 notebooks of natural-language cells — graphs implemented by `lode` in the
 repository and run by `lun`, fed by scheduled checks, widgets, webhooks and channel
@@ -68,7 +69,8 @@ status line on the home page lists what is missing.
 | Variable | Enables |
 |---|---|
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub sign-in and connection (OAuth App, callback `http://localhost:8080/auth/github/callback`) |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google sign-in and Drive connection (callback `…/auth/google/callback`) |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google sign-in, Drive, Calendar and Gmail connections (callback `…/auth/google/callback`); enable Calendar/Gmail APIs and consent scopes, same client pair on liaison |
+| `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | Microsoft Calendar and Outlook connections (Entra Web app, personal + work/school accounts, callback `…/auth/microsoft/callback`); same pair on liaison with `microsoft_oauth` support |
 | `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET` | GitLab connection (gitlab.com OAuth application, callback `…/auth/gitlab/callback`); liaison needs the same pair to refresh |
 | `DROPBOX_CLIENT_ID`, `DROPBOX_CLIENT_SECRET` | Dropbox connection (scoped app, callback `…/auth/dropbox/callback`); liaison needs the same pair to refresh |
 | `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | installing the Slack app in a workspace (callback `…/auth/slack/callback`, token rotation off) |
@@ -88,6 +90,13 @@ warrant encoding, credential shapes, ledger's grant SQL, webhook signatures and 
 cron, cells, `lun.json`, SCRAM verifiers, renderers);
 `cargo check -p web --features server` and
 `cargo check -p web --features web --target wasm32-unknown-unknown` check both halves.
+
+Calendar, webmail and Notion connections live in **Organization settings → Connections**.
+Apply `0005_productivity_connections.sql` first. Google/Microsoft connections request
+read-only access. CalDAV uses a calendar URL and app password; JMAP uses a session URL and
+mail-enabled API token; Notion uses an internal integration or personal access token.
+Provider setup, Gmail verification requirements and broker compatibility are documented in
+[`docs/connections.md` §3.4](docs/connections.md#34-calendar-webmail-and-workspace-setup).
 
 ## Migrations
 

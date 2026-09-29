@@ -61,6 +61,7 @@ pub async fn health() -> Health {
         liaison: liaison::configured(),
         github: config::github().is_some(),
         google: config::google().is_some(),
+        microsoft: config::microsoft().is_some(),
         gitlab: config::gitlab().is_some(),
         dropbox: config::dropbox().is_some(),
         slack: config::slack().is_some(),

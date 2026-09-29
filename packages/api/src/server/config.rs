@@ -30,9 +30,15 @@ pub fn github() -> Option<OAuthClient> {
     client("GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET")
 }
 
-/// The Google OAuth client: sign-in and the `gdrive` connection.
+/// The Google OAuth client: sign-in, Drive, Calendar and Gmail connections.
 pub fn google() -> Option<OAuthClient> {
     client("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET")
+}
+
+/// Microsoft Graph: personal Outlook and work/school Microsoft 365 accounts.
+/// The app and liaison use the same client pair and the fixed `common` tenant.
+pub fn microsoft() -> Option<OAuthClient> {
+    client("MICROSOFT_CLIENT_ID", "MICROSOFT_CLIENT_SECRET")
 }
 
 /// The GitLab (gitlab.com) OAuth application: the `gitlab` connection.

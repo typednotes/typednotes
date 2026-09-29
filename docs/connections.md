@@ -1,6 +1,6 @@
 # Users and connections — the cross-service contract
 
-**Status:** implemented v0.3 · **Last updated:** 2026-09-24
+**Status:** implemented · **Last updated:** 2026-09-29
 
 This document is the single contract that the app (`core` + `web`), `secrets`, `liaison`,
 `ledger` and `typednotes-infra` implement for:
@@ -9,7 +9,8 @@ This document is the single contract that the app (`core` + `web`), `secrets`, `
 2. **connections** — code hosts (GitHub, GitLab), storage (an S3-compatible bucket, an Azure
    Blob Storage container, Dropbox, Google Drive), an AI account (Anthropic, Mistral, OpenAI,
    or any OpenAI-compatible endpoint) with an API token, and messaging accounts (Slack,
-   WhatsApp, Signal);
+    WhatsApp, Signal), calendars (Google Calendar, Microsoft Calendar, CalDAV), webmail
+    (Gmail, Outlook, JMAP/Fastmail), and Notion workspaces;
 3. **projects** — a project's primary repository (§10) and its messaging interfaces and
    inbox (§11).
 
@@ -64,13 +65,16 @@ Callback URLs to register with the providers (`PUBLIC_URL` is the app's origin):
 
 - GitHub OAuth App: `{PUBLIC_URL}/auth/github/callback`
 - Google OAuth client (web): `{PUBLIC_URL}/auth/google/callback`
+- Microsoft Entra app (Web redirect, personal + work/school accounts):
+  `{PUBLIC_URL}/auth/microsoft/callback`
 - GitLab application (gitlab.com): `{PUBLIC_URL}/auth/gitlab/callback`
 - Dropbox app (scoped access): `{PUBLIC_URL}/auth/dropbox/callback`
 - Slack app: `{PUBLIC_URL}/auth/slack/callback` (token rotation **off**: the bot token is
   stored as a plain `bearer`)
 
 The same GitHub and Google clients serve sign-in and connections; `oauth_flows.purpose` tells
-them apart. GitLab, Dropbox and Slack only connect accounts. A connect flow comes back to the
+them apart. Google Drive, Calendar and Gmail each request their own scopes. Microsoft,
+GitLab, Dropbox and Slack only connect accounts. A connect flow comes back to the
 settings section it started from: the org's connections (`/orgs/{org}/settings/connections`),
 or — recorded in `oauth_flows.return_to` — a project's repository or interfaces
 (`/orgs/{org}/projects/{project}/settings/{repository|interfaces}`, by provider).
@@ -89,6 +93,13 @@ and as the warrant `capability` provider.
 | `github` | OAuth (scopes `read:user repo`) | `https://api.github.com` | `bearer` |
 | `gitlab` | OAuth (scopes `read_user read_api read_repository write_repository`) | `https://gitlab.com/api/v4` | `gitlab_oauth` |
 | `gdrive` | OAuth (scope `https://www.googleapis.com/auth/drive.file` — only the files the app creates or the user picks for it; the full `…/auth/drive` is a restricted scope, refused to unverified apps — `access_type=offline`, `prompt=consent`) | `https://www.googleapis.com` | `google_oauth` |
+| `google-calendar` | OAuth (`openid email https://www.googleapis.com/auth/calendar.readonly`, offline access, consent) | `https://www.googleapis.com` | `google_oauth` |
+| `microsoft-calendar` | OAuth (`offline_access User.Read Calendars.Read`) | `https://graph.microsoft.com/v1.0` | `microsoft_oauth` |
+| `caldav` | form: calendar collection/home URL, username, app password | as entered, without trailing `/` | `header` (`authorization: Basic …`) |
+| `gmail` | OAuth (`openid email https://www.googleapis.com/auth/gmail.readonly`, offline access, consent) | `https://www.googleapis.com` | `google_oauth` |
+| `outlook` | OAuth (`offline_access User.Read Mail.Read`) | `https://graph.microsoft.com/v1.0` | `microsoft_oauth` |
+| `jmap` | form: session URL and bearer API token (Fastmail preset) | session URL's origin | `bearer` |
+| `notion` | form: connection name and internal integration or personal access token | `https://api.notion.com/v1` | `bearer`, static `notion-version: 2026-03-11` |
 | `dropbox` | OAuth (the app's scopes, `token_access_type=offline`) | `https://api.dropboxapi.com` | `dropbox_oauth` |
 | `s3` | form: endpoint (presets: AWS `https://s3.{region}.amazonaws.com`, Cloudflare R2, Scaleway, other), region, bucket, access key id, secret | `{endpoint}/{bucket}` (path-style) | `s3` |
 | `azure` | form: storage account, container, SAS token (or SAS URL) | `https://{account}.blob.core.windows.net/{container}` | `azure_sas` |
@@ -101,7 +112,8 @@ and as the warrant `capability` provider.
 | `signal` | form (project page): signal-cli-rest-api bridge URL + registered number + bridge token | as entered | `bearer` |
 
 `connections.external_id` holds the provider-side identity the app needs without the
-credential: the Slack team id, the WhatsApp phone number id, the Signal number.
+credential: the Slack team id, the WhatsApp phone number id, the Signal number. For JMAP,
+it holds the session URL; its token remains only in the vault.
 
 ### 3.2 Vault path
 
@@ -133,7 +145,20 @@ Every value is a JSON **string** (numbers too), so no side parses floats. Every 
 // dropbox_oauth, gitlab_oauth — the same fields as google_oauth, refreshed at the
 // issuer's own token endpoint (fixed in liaison, never read from the credential)
 {"kind": "gitlab_oauth", "base_url": "https://gitlab.com/api/v4",
- "access_token": "…", "refresh_token": "…", "expires_at": "1790007200"}
+  "access_token": "…", "refresh_token": "…", "expires_at": "1790007200"}
+
+// microsoft_oauth — same token fields; the fixed common tenant supports personal
+// Outlook.com and work/school Microsoft 365 accounts. Replace refresh_token when returned.
+{"kind": "microsoft_oauth", "base_url": "https://graph.microsoft.com/v1.0",
+ "access_token": "…", "refresh_token": "…", "expires_at": "1790003600"}
+
+// CalDAV uses the existing header kind, with a base64-encoded username:app-password.
+{"kind": "header", "base_url": "https://cloud.example.com/calendars/me/personal",
+ "header": "authorization", "token": "Basic …", "headers": {}}
+
+// Notion's pinned version is supplied on every broker call, not just its probe.
+{"kind": "bearer", "base_url": "https://api.notion.com/v1", "token": "…",
+ "headers": {"notion-version": "2026-03-11"}}
 
 // s3 — AWS Signature Version 4, service "s3"
 {"kind": "s3", "base_url": "https://s3.us-east-1.amazonaws.com/my-bucket", "region": "us-east-1",
@@ -147,6 +172,40 @@ Every value is a JSON **string** (numbers too), so no side parses floats. Every 
 `expires_at` is Unix seconds. A credential without a known `kind` is refused. A `sas` may
 contain only SAS parameters (`sv ss srt sp se st spr sig si sr sdd skoid sktid skt ske sks`),
 including `sv` and `sig`.
+
+### 3.4 Calendar, webmail and workspace setup
+
+Apply `0005_productivity_connections.sql` before deploying the new app, and deploy the
+broker with `microsoft_oauth` support before connecting Microsoft accounts.
+
+- **Google:** reuse the app's Google client on both app and broker. Enable the Calendar API
+  and Gmail API in its Cloud project and configure the corresponding consent scopes.
+  Calendar and Gmail connections request read access only, separately from Drive and sign-in.
+  `gmail.readonly` is a [restricted scope](https://developers.google.com/workspace/gmail/api/auth/scopes):
+  use configured test users during development; public server-side access needs Google's
+  restricted-scope verification and applicable security assessment. Testing-mode refresh
+  tokens for these scopes typically expire after seven days.
+- **Microsoft:** register a confidential Web app with the callback above, supporting both
+  organizational and personal Microsoft accounts. Configure delegated `User.Read`,
+  `Calendars.Read` and `Mail.Read` permissions. Set `MICROSOFT_CLIENT_ID` and
+  `MICROSOFT_CLIENT_SECRET` on both app and broker. Authorization and refresh use the fixed
+  `common` tenant; a tenant's consent policy can still require administrator approval.
+- **CalDAV:** supply the final calendar collection or calendar-home URL (e.g. Nextcloud's
+  `/remote.php/dav/calendars/{user}/{calendar}/`) and an app password. The probe uses
+  `PROPFIND`, Depth 1, and validates successful CalDAV properties in the XML multistatus.
+  Authentication/discovery redirects are not followed by the broker; use the final URL.
+- **JMAP / Fastmail:** create a mail-enabled API token in Fastmail's Settings → Privacy &
+  Security → Manage API tokens and use `https://api.fastmail.com/jmap/session`. Other
+  bearer-token JMAP servers work when their session and API URLs share the same origin.
+  The test verifies a mail-capable account and a confined API URL. This is HTTP JMAP
+  access; providers offering only IMAP/SMTP need a separate broker adapter.
+- **Notion:** create an internal integration, choose its capabilities and share the pages
+  and databases it needs via Notion's Connections menu. Paste its token and a connection
+  name. Personal access tokens also work. The probe identifies the token's user/bot;
+  accessible content and write permissions are determined by Notion's token capabilities.
+
+These additions manage accounts, store credentials and test provider access through liaison.
+They do not introduce automatic mailbox/calendar synchronization or new notebook cell types.
 
 ## 4. `secrets`
 
@@ -221,6 +280,7 @@ have a `kind`:
 | `google_oauth` | `https://oauth2.googleapis.com/token` | `GOOGLE_CLIENT_ID` / `_SECRET` | kept |
 | `dropbox_oauth` | `https://api.dropboxapi.com/oauth2/token` | `DROPBOX_CLIENT_ID` / `_SECRET` | kept |
 | `gitlab_oauth` | `https://gitlab.com/oauth/token` | `GITLAB_CLIENT_ID` / `_SECRET` | rotated every refresh |
+| `microsoft_oauth` | `https://login.microsoftonline.com/common/oauth2/v2.0/token` | `MICROSOFT_CLIENT_ID` / `_SECRET` | replaced when returned |
 
 - `azure_sas` (0.4.0): liaison appends the SAS to the call's query; a caller URL whose query
   uses any SAS parameter name (case-insensitively, percent-decoded) is `url_denied`.
@@ -258,6 +318,13 @@ seconds. `id`, `orgId` and `runId` are UUIDs (ledger's `credit_holds.run_id` is 
 | `github` | `GET https://api.github.com/user` |
 | `gitlab` | `GET {base_url}/user` |
 | `gdrive` | `GET https://www.googleapis.com/drive/v3/about?fields=user` |
+| `google-calendar` | `GET {base_url}/calendar/v3/users/me/calendarList?maxResults=1` |
+| `microsoft-calendar` | `GET {base_url}/me/calendars?$top=1&$select=id,name` |
+| `caldav` | `PROPFIND {base_url}/`, Depth 1, calendar properties; requires a successful CalDAV propstat |
+| `gmail` | `GET {base_url}/gmail/v1/users/me/profile` |
+| `outlook` | `GET {base_url}/me/mailFolders/inbox?$select=id,displayName,totalItemCount` |
+| `jmap` | `GET {external_id}` (the session URL); requires mail access and a same-origin API URL |
+| `notion` | `GET {base_url}/users/me` (version header from the vault credential) |
 | `dropbox` | `POST {base_url}/2/users/get_current_account` (body `null`) |
 | `s3` | `GET {base_url}?list-type=2&max-keys=1` |
 | `azure` | `GET {base_url}?restype=container&comp=list&maxresults=1` |
@@ -273,7 +340,8 @@ seconds. `id`, `orgId` and `runId` are UUIDs (ledger's `credit_holds.run_id` is 
 | app | `DATABASE_URL` | unchanged |
 | app | `PUBLIC_URL` | optional; otherwise derived from `X-Forwarded-Proto` + `Host` |
 | app | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | sign-in and the `github` connection |
-| app, liaison | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | sign-in and `gdrive`; liaison refreshes |
+| app, liaison | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | sign-in, `gdrive`, `google-calendar`, `gmail`; liaison refreshes |
+| app, liaison | `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET` | `microsoft-calendar` and `outlook`; Web callback `/auth/microsoft/callback`, common tenant |
 | app, liaison | `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET` | the `gitlab` connection; liaison refreshes |
 | app, liaison | `DROPBOX_CLIENT_ID`, `DROPBOX_CLIENT_SECRET` | the `dropbox` connection; liaison refreshes |
 | app | `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` | installing the Slack app (`slack` connection) |
@@ -293,6 +361,21 @@ seconds. `id`, `orgId` and `runId` are UUIDs (ledger's `credit_holds.run_id` is 
 | app | `TYPEDNOTES_STORAGE_WRITE_COST` | budget of a `storage` sink's write warrant, default `1` |
 
 ## 9. Verified end to end
+
+On 2026-09-29, for the productivity connectors:
+
+- The app's 82 unit tests passed, including provider-specific read-only scopes, credential
+  shapes, CalDAV namespace/propstat validation, JMAP mail access and origin confinement,
+  and agreement between the provider catalog and migration constraint.
+- Server and wasm web builds passed.
+- The sibling broker's test suite and executable build passed with Microsoft credential
+  parsing, fixed refresh endpoint, client selection and replacement-refresh-token tests.
+- All five app migrations applied to an isolated PostgreSQL 16 database. Inserts accepted
+  all 20 connection providers and nine OAuth connection providers; unknown provider/issuer
+  inserts were rejected by their check constraints.
+
+Real calendar, mail and Notion account authorization/probes were not exercised with live
+credentials in these checks.
 
 On 2026-09-24, against Postgres 16 with every service's migrations applied in order, the local
 `secrets-server` (its service users then created over HTTP), liaison 0.3.0 and the app. The provider

@@ -31,6 +31,8 @@ base64 = { version = "0.23", optional = true }
 getrandom = { version = "0.4", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 url = { version = "2", optional = true }
+# CalDAV PROPFIND replies are XML multistatus documents.
+roxmltree = { version = "0.21", optional = true }
 # The source scheduler's tick and the SSRF guard's DNS lookups.
 tokio = { version = "1", features = ["net", "time", "rt"], optional = true }
 
@@ -49,5 +51,6 @@ server = [
     "dep:getrandom",
     "dep:uuid",
     "dep:url",
+    "dep:roxmltree",
     "dep:tokio",
 ]

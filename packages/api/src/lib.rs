@@ -296,6 +296,85 @@ pub async fn connect_ai(
     .await
 }
 
+/// Connect a Notion internal integration or personal access token. Access is
+/// limited to pages shared with the integration and its configured capabilities.
+#[post("/api/connections/notion")]
+pub async fn connect_notion(
+    slug: String,
+    label: String,
+    token: String,
+) -> Result<Connection, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    validate_name(&label).map_err(errors::bad_request)?;
+    let token = validate_api_key(&token).map_err(errors::bad_request)?;
+    connections::store(
+        &org,
+        &user,
+        connections::NewConnection {
+            provider: Provider::Notion,
+            label: label.trim(),
+            base_url: Provider::Notion.fixed_base_url().unwrap(),
+            external_id: None,
+        },
+        server::vault::notion(&token),
+    )
+    .await
+}
+
+/// Connect a CalDAV calendar collection/home with an app password.
+#[post("/api/connections/caldav")]
+pub async fn connect_caldav(
+    slug: String,
+    endpoint: String,
+    username: String,
+    password: String,
+) -> Result<Connection, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    let (base_url, username) =
+        validate_caldav(&endpoint, &username, &password).map_err(errors::bad_request)?;
+    connections::store(
+        &org,
+        &user,
+        connections::NewConnection {
+            provider: Provider::Caldav,
+            label: &username,
+            base_url: &base_url,
+            external_id: None,
+        },
+        server::vault::basic(&base_url, &username, &password),
+    )
+    .await
+}
+
+/// Connect Fastmail or another JMAP mail server. The credential is scoped to
+/// the session URL's origin, so its API endpoint is reachable on that host too.
+#[post("/api/connections/jmap")]
+pub async fn connect_jmap(
+    slug: String,
+    endpoint: String,
+    token: String,
+) -> Result<Connection, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    let (endpoint, token) = validate_jmap(&endpoint, &token).map_err(errors::bad_request)?;
+    let url =
+        url::Url::parse(&endpoint).map_err(|_| errors::bad_request("invalid JMAP session URL"))?;
+    let base_url = url.origin().ascii_serialization();
+    // Use the same canonical authority for both confinement and the probe.
+    let endpoint = url.to_string();
+    connections::store(
+        &org,
+        &user,
+        connections::NewConnection {
+            provider: Provider::Jmap,
+            label: url.host_str().unwrap_or("JMAP"),
+            base_url: &base_url,
+            external_id: Some(&endpoint),
+        },
+        server::vault::bearer(&base_url, &token),
+    )
+    .await
+}
+
 /// Remove a connection and its credential.
 #[post("/api/connections/delete")]
 pub async fn delete_connection(slug: String, id: String) -> Result<(), ServerFnError> {

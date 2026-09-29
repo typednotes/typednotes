@@ -1,6 +1,5 @@
-//! OAuth 2.0 authorization-code flows with PKCE, against GitHub and Google,
-//! for both purposes the app has (docs/connections.md §2–3): signing in, and
-//! connecting a `github` or `gdrive` account.
+//! OAuth 2.0 authorization-code flows with PKCE for sign-in and connections
+//! (docs/connections.md §2–3). Scopes are specific to each connection kind.
 //!
 //! Each round trip is a row in `oauth_flows`, keyed by the `state` sent to the
 //! provider and holding the PKCE verifier. The callback *deletes* the row it
@@ -40,6 +39,7 @@ pub fn http() -> &'static reqwest::Client {
 pub enum Idp {
     Github,
     Google,
+    Microsoft,
     Gitlab,
     Dropbox,
     Slack,
@@ -50,6 +50,7 @@ impl Idp {
         match self {
             Idp::Github => "github",
             Idp::Google => "google",
+            Idp::Microsoft => "microsoft",
             Idp::Gitlab => "gitlab",
             Idp::Dropbox => "dropbox",
             Idp::Slack => "slack",
@@ -60,6 +61,7 @@ impl Idp {
         [
             Idp::Github,
             Idp::Google,
+            Idp::Microsoft,
             Idp::Gitlab,
             Idp::Dropbox,
             Idp::Slack,
@@ -79,6 +81,7 @@ impl Idp {
         match self {
             Idp::Github => "https://github.com",
             Idp::Google => "https://accounts.google.com",
+            Idp::Microsoft => "https://login.microsoftonline.com/common/v2.0",
             Idp::Gitlab => "https://gitlab.com",
             Idp::Dropbox => "https://www.dropbox.com",
             Idp::Slack => "https://slack.com",
@@ -89,6 +92,7 @@ impl Idp {
         match self {
             Idp::Github => super::config::github(),
             Idp::Google => super::config::google(),
+            Idp::Microsoft => super::config::microsoft(),
             Idp::Gitlab => super::config::gitlab(),
             Idp::Dropbox => super::config::dropbox(),
             Idp::Slack => super::config::slack(),
@@ -100,7 +104,8 @@ impl Idp {
         match provider {
             Provider::Github => Some(Idp::Github),
             Provider::Gitlab => Some(Idp::Gitlab),
-            Provider::Gdrive => Some(Idp::Google),
+            Provider::Gdrive | Provider::GoogleCalendar | Provider::Gmail => Some(Idp::Google),
+            Provider::MicrosoftCalendar | Provider::Outlook => Some(Idp::Microsoft),
             Provider::Dropbox => Some(Idp::Dropbox),
             Provider::Slack => Some(Idp::Slack),
             _ => None,
@@ -111,6 +116,7 @@ impl Idp {
         match self {
             Idp::Github => "https://github.com/login/oauth/authorize",
             Idp::Google => "https://accounts.google.com/o/oauth2/v2/auth",
+            Idp::Microsoft => "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
             Idp::Gitlab => "https://gitlab.com/oauth/authorize",
             Idp::Dropbox => "https://www.dropbox.com/oauth2/authorize",
             Idp::Slack => "https://slack.com/oauth/v2/authorize",
@@ -121,6 +127,7 @@ impl Idp {
         match self {
             Idp::Github => "https://github.com/login/oauth/access_token",
             Idp::Google => "https://oauth2.googleapis.com/token",
+            Idp::Microsoft => "https://login.microsoftonline.com/common/oauth2/v2.0/token",
             Idp::Gitlab => "https://gitlab.com/oauth/token",
             Idp::Dropbox => "https://api.dropboxapi.com/oauth2/token",
             Idp::Slack => "https://slack.com/api/oauth.v2.access",
@@ -155,9 +162,25 @@ fn scopes(idp: Idp, purpose: &Purpose) -> (&'static str, &'static [(&'static str
         // as restricted — unverified apps are refused (403 access_denied)
         // for anyone but test users, and verification needs a yearly
         // security assessment — while `drive.file` is not.
+        (Idp::Google, Purpose::Connect { provider: Provider::GoogleCalendar, .. }) => (
+            "openid email https://www.googleapis.com/auth/calendar.readonly",
+            &[("access_type", "offline"), ("prompt", "consent")],
+        ),
+        (Idp::Google, Purpose::Connect { provider: Provider::Gmail, .. }) => (
+            "openid email https://www.googleapis.com/auth/gmail.readonly",
+            &[("access_type", "offline"), ("prompt", "consent")],
+        ),
         (Idp::Google, Purpose::Connect { .. }) => (
             "openid email https://www.googleapis.com/auth/drive.file",
             &[("access_type", "offline"), ("prompt", "consent")],
+        ),
+        (Idp::Microsoft, Purpose::Connect { provider: Provider::MicrosoftCalendar, .. }) => (
+            "offline_access User.Read Calendars.Read",
+            &[("response_mode", "query"), ("prompt", "consent")],
+        ),
+        (Idp::Microsoft, _) => (
+            "offline_access User.Read Mail.Read",
+            &[("response_mode", "query"), ("prompt", "consent")],
         ),
         (Idp::Gitlab, _) => ("read_user read_api read_repository write_repository", &[]),
         // Dropbox scopes are the app's own (set in its console); `offline`
@@ -186,6 +209,15 @@ pub async fn start(
     purpose: Purpose,
     public_url: &str,
 ) -> Result<String, ServerFnError> {
+    let valid = match &purpose {
+        Purpose::Login => idp.signs_in(),
+        Purpose::Connect { provider, .. } => Idp::for_connection(*provider) == Some(idp),
+    };
+    if !valid {
+        return Err(super::errors::bad_request(
+            "the provider does not support this OAuth flow",
+        ));
+    }
     let state = random_token(32)?;
     let verifier = random_token(32)?;
     let (user_id, org_id, provider, return_to) = match &purpose {
@@ -455,6 +487,29 @@ pub async fn google_identity(token: &str) -> Result<ProviderIdentity, String> {
     })
 }
 
+/// Only labels a Microsoft connection; this is not a Typednotes sign-in identity.
+pub async fn microsoft_label(token: &str) -> Result<String, String> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Account {
+        id: String,
+        mail: Option<String>,
+        user_principal_name: Option<String>,
+        display_name: Option<String>,
+    }
+    let account: Account = get_json(
+        "https://graph.microsoft.com/v1.0/me?$select=id,mail,userPrincipalName,displayName",
+        token,
+    )
+    .await?;
+    Ok(account
+        .mail
+        .filter(|s| !s.trim().is_empty())
+        .or(account.user_principal_name.filter(|s| !s.trim().is_empty()))
+        .or(account.display_name.filter(|s| !s.trim().is_empty()))
+        .unwrap_or(account.id))
+}
+
 /// The GitLab username, to label a `gitlab` connection.
 pub async fn gitlab_username(token: &str) -> Result<String, String> {
     #[derive(Deserialize)]
@@ -518,13 +573,58 @@ mod tests {
         };
         let (scope, extra) = scopes(Idp::Google, &purpose);
         // Per-file access only: the full-Drive scope is restricted.
-        let drive: Vec<&str> = scope.split(' ').filter(|s| s.contains("auth/drive")).collect();
+        let drive: Vec<&str> = scope
+            .split(' ')
+            .filter(|s| s.contains("auth/drive"))
+            .collect();
         assert_eq!(drive, ["https://www.googleapis.com/auth/drive.file"]);
         assert!(extra.contains(&("access_type", "offline")));
         assert!(extra.contains(&("prompt", "consent")));
         assert_eq!(
             scopes(Idp::Google, &Purpose::Login).0,
             "openid email profile"
+        );
+    }
+
+    #[test]
+    fn productivity_scopes_are_separate_and_read_only() {
+        for (provider, expected) in [
+            (
+                Provider::GoogleCalendar,
+                "openid email https://www.googleapis.com/auth/calendar.readonly",
+            ),
+            (
+                Provider::Gmail,
+                "openid email https://www.googleapis.com/auth/gmail.readonly",
+            ),
+            (
+                Provider::MicrosoftCalendar,
+                "offline_access User.Read Calendars.Read",
+            ),
+            (Provider::Outlook, "offline_access User.Read Mail.Read"),
+        ] {
+            let purpose = Purpose::Connect {
+                user_id: "u".into(),
+                org_id: "o".into(),
+                provider,
+                return_to: None,
+            };
+            let idp = Idp::for_connection(provider).unwrap();
+            let (scope, extra) = scopes(idp, &purpose);
+            assert_eq!(scope, expected);
+            assert!(extra.contains(&("prompt", "consent")));
+            if idp == Idp::Google {
+                assert!(extra.contains(&("access_type", "offline")));
+                assert!(!scope.contains("drive"));
+            }
+        }
+        assert_eq!(
+            redirect_uri("https://a.b", Idp::Microsoft),
+            "https://a.b/auth/microsoft/callback"
+        );
+        assert_eq!(
+            Idp::Microsoft.token_endpoint(),
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token"
         );
     }
 
@@ -552,6 +652,7 @@ mod tests {
         for idp in [
             Idp::Github,
             Idp::Google,
+            Idp::Microsoft,
             Idp::Gitlab,
             Idp::Dropbox,
             Idp::Slack,
@@ -559,7 +660,7 @@ mod tests {
             assert_eq!(Idp::from_id(idp.id()), Some(idp));
         }
         assert!(Idp::Github.signs_in() && Idp::Google.signs_in());
-        assert!(!Idp::Gitlab.signs_in() && !Idp::Slack.signs_in());
+        assert!(!Idp::Gitlab.signs_in() && !Idp::Slack.signs_in() && !Idp::Microsoft.signs_in());
         for p in Provider::ALL {
             assert_eq!(Idp::for_connection(p).is_some(), p.is_oauth(), "{p:?}");
         }

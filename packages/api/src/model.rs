@@ -119,6 +119,8 @@ pub struct Health {
     pub liaison: bool,
     pub github: bool,
     pub google: bool,
+    #[serde(default)]
+    pub microsoft: bool,
     pub gitlab: bool,
     pub dropbox: bool,
     pub slack: bool,
@@ -144,6 +146,13 @@ pub enum Provider {
     Github,
     Gitlab,
     Gdrive,
+    GoogleCalendar,
+    MicrosoftCalendar,
+    Caldav,
+    Gmail,
+    Outlook,
+    Jmap,
+    Notion,
     Dropbox,
     S3,
     Azure,
@@ -157,10 +166,17 @@ pub enum Provider {
 }
 
 impl Provider {
-    pub const ALL: [Provider; 13] = [
+    pub const ALL: [Provider; 20] = [
         Provider::Github,
         Provider::Gitlab,
         Provider::Gdrive,
+        Provider::GoogleCalendar,
+        Provider::MicrosoftCalendar,
+        Provider::Caldav,
+        Provider::Gmail,
+        Provider::Outlook,
+        Provider::Jmap,
+        Provider::Notion,
         Provider::Dropbox,
         Provider::S3,
         Provider::Azure,
@@ -195,11 +211,28 @@ impl Provider {
     /// Messaging: a project's interfaces.
     pub const CHANNELS: [Provider; 3] = [Provider::Signal, Provider::Slack, Provider::Whatsapp];
 
+    pub const CALENDARS: [Provider; 3] = [
+        Provider::GoogleCalendar,
+        Provider::MicrosoftCalendar,
+        Provider::Caldav,
+    ];
+
+    pub const MAIL: [Provider; 3] = [Provider::Gmail, Provider::Outlook, Provider::Jmap];
+
+    pub const WORKSPACES: [Provider; 1] = [Provider::Notion];
+
     pub fn id(self) -> &'static str {
         match self {
             Provider::Github => "github",
             Provider::Gitlab => "gitlab",
             Provider::Gdrive => "gdrive",
+            Provider::GoogleCalendar => "google-calendar",
+            Provider::MicrosoftCalendar => "microsoft-calendar",
+            Provider::Caldav => "caldav",
+            Provider::Gmail => "gmail",
+            Provider::Outlook => "outlook",
+            Provider::Jmap => "jmap",
+            Provider::Notion => "notion",
             Provider::Dropbox => "dropbox",
             Provider::S3 => "s3",
             Provider::Azure => "azure",
@@ -222,6 +255,13 @@ impl Provider {
             Provider::Github => "GitHub",
             Provider::Gitlab => "GitLab",
             Provider::Gdrive => "Google Drive",
+            Provider::GoogleCalendar => "Google Calendar",
+            Provider::MicrosoftCalendar => "Microsoft Calendar",
+            Provider::Caldav => "CalDAV",
+            Provider::Gmail => "Gmail",
+            Provider::Outlook => "Outlook Mail",
+            Provider::Jmap => "JMAP / Fastmail",
+            Provider::Notion => "Notion",
             Provider::Dropbox => "Dropbox",
             Provider::S3 => "S3 bucket",
             Provider::Azure => "Azure Blob Storage",
@@ -242,14 +282,25 @@ impl Provider {
         match self {
             Provider::Github => Some("https://api.github.com"),
             Provider::Gitlab => Some("https://gitlab.com/api/v4"),
-            Provider::Gdrive => Some("https://www.googleapis.com"),
+            Provider::Gdrive | Provider::GoogleCalendar | Provider::Gmail => {
+                Some("https://www.googleapis.com")
+            }
+            Provider::MicrosoftCalendar | Provider::Outlook => {
+                Some("https://graph.microsoft.com/v1.0")
+            }
+            Provider::Notion => Some("https://api.notion.com/v1"),
             Provider::Dropbox => Some("https://api.dropboxapi.com"),
             Provider::Mistral => Some("https://api.mistral.ai/v1"),
             Provider::Openai => Some("https://api.openai.com/v1"),
             Provider::Anthropic => Some("https://api.anthropic.com/v1"),
             Provider::Slack => Some("https://slack.com/api"),
             Provider::Whatsapp => Some("https://graph.facebook.com/v21.0"),
-            Provider::S3 | Provider::Azure | Provider::OpenaiCompatible | Provider::Signal => None,
+            Provider::S3
+            | Provider::Azure
+            | Provider::OpenaiCompatible
+            | Provider::Signal
+            | Provider::Caldav
+            | Provider::Jmap => None,
         }
     }
 
@@ -260,6 +311,10 @@ impl Provider {
             Provider::Github
                 | Provider::Gitlab
                 | Provider::Gdrive
+                | Provider::GoogleCalendar
+                | Provider::MicrosoftCalendar
+                | Provider::Gmail
+                | Provider::Outlook
                 | Provider::Dropbox
                 | Provider::Slack
         )
@@ -286,7 +341,7 @@ pub struct Connection {
     pub label: String,
     pub base_url: String,
     /// The provider-side identity, where the app keeps one: a Slack team id,
-    /// a WhatsApp phone number id, a Signal number.
+    /// a WhatsApp phone number id, a Signal number; for JMAP, the session URL.
     pub external_id: Option<String>,
     /// `pending`, `active` or `failed`.
     pub status: String,

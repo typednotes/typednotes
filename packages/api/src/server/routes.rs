@@ -374,7 +374,7 @@ async fn finish_connect(
                 ),
             )
         }
-        Provider::Gdrive => {
+        Provider::Gdrive | Provider::GoogleCalendar | Provider::Gmail => {
             let refresh = refresh("Google")?;
             let email = oauth::google_identity(access_token)
                 .await
@@ -383,6 +383,20 @@ async fn finish_connect(
                 email,
                 vault::oauth(
                     OAuthIssuer::Google,
+                    base_url,
+                    access_token,
+                    &refresh,
+                    expiry(tokens.expires_in),
+                ),
+            )
+        }
+        Provider::MicrosoftCalendar | Provider::Outlook => {
+            let refresh = refresh("Microsoft")?;
+            let label = oauth::microsoft_label(access_token).await?;
+            (
+                label,
+                vault::oauth(
+                    OAuthIssuer::Microsoft,
                     base_url,
                     access_token,
                     &refresh,

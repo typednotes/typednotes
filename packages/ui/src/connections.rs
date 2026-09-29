@@ -1,7 +1,8 @@
 use api::{
-    aws_s3_endpoint, connect_ai, connect_azure, connect_s3, delete_connection, health,
-    list_connections, test_connection, validate_api_key, validate_azure, validate_base_url,
-    validate_s3, Connection, Health, Provider, TestResult,
+    aws_s3_endpoint, connect_ai, connect_azure, connect_caldav, connect_jmap, connect_notion,
+    connect_s3, delete_connection, health, list_connections, test_connection, validate_api_key,
+    validate_azure, validate_base_url, validate_caldav, validate_jmap, validate_name, validate_s3,
+    Connection, Health, Provider, TestResult,
 };
 use dioxus::prelude::*;
 
@@ -159,7 +160,8 @@ pub(crate) fn oauth_ready(h: Option<&Health>, provider: Provider) -> bool {
         && match provider {
             Provider::Github => h.github,
             Provider::Gitlab => h.gitlab,
-            Provider::Gdrive => h.google,
+            Provider::Gdrive | Provider::GoogleCalendar | Provider::Gmail => h.google,
+            Provider::MicrosoftCalendar | Provider::Outlook => h.microsoft,
             Provider::Dropbox => h.dropbox,
             Provider::Slack => h.slack,
             _ => false,
@@ -207,14 +209,15 @@ fn ProviderSelect(
     }
 }
 
-/// The ways to add a connection, by what it is for: code (GitHub, GitLab),
-/// storage (S3, Azure, Dropbox, Google Drive) and AI.
+/// The ways to add a connection, grouped by what it is for.
 #[component]
 fn AddConnection(slug: String, on_added: EventHandler<()>) -> Element {
     let status = use_server_future(health)?;
     let h = status().and_then(|r| r.ok());
     let vault = h.as_ref().is_some_and(|h| h.vault);
     let mut storage = use_signal(|| Provider::S3);
+    let mut calendar = use_signal(|| Provider::GoogleCalendar);
+    let mut mail = use_signal(|| Provider::Gmail);
 
     let oauth_button = |provider: Provider, primary: bool| {
         let url = connect_url(provider, &slug, None);
@@ -269,8 +272,217 @@ fn AddConnection(slug: String, on_added: EventHandler<()>) -> Element {
                         },
                     }
                 }
+                div { class: "conn-section",
+                    h4 { "Calendars" }
+                    ProviderSelect {
+                        options: Provider::CALENDARS.to_vec(),
+                        value: calendar(),
+                        on_change: move |p| calendar.set(p),
+                        label: "Calendar provider",
+                    }
+                    if calendar() == Provider::Caldav {
+                        CaldavForm { slug: slug.clone(), disabled: !vault, on_added }
+                    } else {
+                        ProductivityOAuth { slug: slug.clone(), provider: calendar(), health: h.clone() }
+                    }
+                }
+                div { class: "conn-section",
+                    h4 { "Webmail" }
+                    ProviderSelect {
+                        options: Provider::MAIL.to_vec(),
+                        value: mail(),
+                        on_change: move |p| mail.set(p),
+                        label: "Webmail provider",
+                    }
+                    if mail() == Provider::Jmap {
+                        JmapForm { slug: slug.clone(), disabled: !vault, on_added }
+                    } else {
+                        ProductivityOAuth { slug: slug.clone(), provider: mail(), health: h.clone() }
+                    }
+                }
+                div { class: "conn-section",
+                    h4 { "Workspaces" }
+                    NotionForm { slug: slug.clone(), disabled: !vault, on_added }
+                }
                 AiForm { slug: slug.clone(), disabled: !vault, on_added }
             }
+        }
+    }
+}
+
+#[component]
+fn ProductivityOAuth(slug: String, provider: Provider, health: Option<Health>) -> Element {
+    let url = connect_url(provider, &slug, None);
+    let ready = oauth_ready(health.as_ref(), provider);
+    let note = match provider {
+        Provider::GoogleCalendar | Provider::MicrosoftCalendar => {
+            "Read calendars and events. Creating or changing events is not requested."
+        }
+        _ => "Read messages and folders. Sending, changing or deleting mail is not requested.",
+    };
+    let client = if matches!(provider, Provider::MicrosoftCalendar | Provider::Outlook) {
+        "MICROSOFT"
+    } else {
+        "GOOGLE"
+    };
+    rsx! {
+        p { class: "conn-meta", "{note} You will grant access on {provider.name()} and return here." }
+        if matches!(provider, Provider::MicrosoftCalendar | Provider::Outlook) {
+            p { class: "conn-meta", "Supports Outlook.com and Microsoft 365 work or school accounts." }
+        }
+        if !ready && health.as_ref().is_some_and(|h| h.vault) {
+            p { class: "conn-meta orgs-error", "Set {client}_CLIENT_ID and {client}_CLIENT_SECRET on the deployment to enable this connection." }
+        }
+        Button {
+            disabled: !ready,
+            onclick: move |_| navigate_to(&url),
+            "Connect {provider.name()}"
+        }
+    }
+}
+
+#[component]
+fn CaldavForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
+    let mut endpoint = use_signal(String::new);
+    let mut username = use_signal(String::new);
+    let mut password = use_signal(String::new);
+    let mut error = use_signal(|| None::<String>);
+    let mut busy = use_signal(|| false);
+    let submit = move |evt: FormEvent| {
+        let slug = slug.clone();
+        async move {
+            evt.prevent_default();
+            if let Err(message) = validate_caldav(&endpoint(), &username(), &password()) {
+                error.set(Some(message));
+                return;
+            }
+            busy.set(true);
+            match connect_caldav(slug, endpoint(), username(), password()).await {
+                Ok(_) => {
+                    password.set(String::new());
+                    error.set(None);
+                    on_added.call(());
+                }
+                Err(e) => error.set(Some(error_message(&e))),
+            }
+            busy.set(false);
+        }
+    };
+    rsx! {
+        form { class: "conn-subform", onsubmit: submit,
+            p { class: "conn-meta", "Connect Nextcloud, Fastmail or another CalDAV server using its calendar collection or calendar-home URL and an app password." }
+            div { class: "conn-grid",
+                div { class: "orgs-field",
+                    Label { html_for: "caldav-url", "Calendar URL" }
+                    Input { id: "caldav-url", placeholder: "https://cloud.example.com/remote.php/dav/calendars/me/personal/", value: endpoint(), oninput: move |e: FormEvent| endpoint.set(e.value()) }
+                }
+                div { class: "orgs-field",
+                    Label { html_for: "caldav-user", "Username" }
+                    Input { id: "caldav-user", value: username(), oninput: move |e: FormEvent| username.set(e.value()) }
+                }
+                div { class: "orgs-field",
+                    Label { html_for: "caldav-password", "App password" }
+                    Input { id: "caldav-password", r#type: "password", autocomplete: "off", value: password(), oninput: move |e: FormEvent| password.set(e.value()) }
+                }
+            }
+            Button { r#type: "submit", disabled: disabled || busy(), "Connect CalDAV" }
+            if let Some(message) = error() { p { class: "orgs-error", "{message}" } }
+        }
+    }
+}
+
+#[component]
+fn JmapForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
+    let mut endpoint = use_signal(|| "https://api.fastmail.com/jmap/session".to_string());
+    let mut token = use_signal(String::new);
+    let mut error = use_signal(|| None::<String>);
+    let mut busy = use_signal(|| false);
+    let submit = move |evt: FormEvent| {
+        let slug = slug.clone();
+        async move {
+            evt.prevent_default();
+            if let Err(message) = validate_jmap(&endpoint(), &token()) {
+                error.set(Some(message));
+                return;
+            }
+            busy.set(true);
+            match connect_jmap(slug, endpoint(), token()).await {
+                Ok(_) => {
+                    token.set(String::new());
+                    error.set(None);
+                    on_added.call(());
+                }
+                Err(e) => error.set(Some(error_message(&e))),
+            }
+            busy.set(false);
+        }
+    };
+    rsx! {
+        form { class: "conn-subform", onsubmit: submit,
+            p { class: "conn-meta", "Fastmail: Settings → Privacy & Security → Manage API tokens. Give the token mail access. Other JMAP servers must support bearer tokens and serve the session and API on the same origin." }
+            div { class: "conn-grid",
+                div { class: "orgs-field",
+                    Label { html_for: "jmap-url", "JMAP session URL" }
+                    Input { id: "jmap-url", value: endpoint(), oninput: move |e: FormEvent| endpoint.set(e.value()) }
+                }
+                div { class: "orgs-field",
+                    Label { html_for: "jmap-token", "API token" }
+                    Input { id: "jmap-token", r#type: "password", autocomplete: "off", value: token(), oninput: move |e: FormEvent| token.set(e.value()) }
+                }
+            }
+            Button { r#type: "submit", disabled: disabled || busy(), "Connect JMAP mail" }
+            if let Some(message) = error() { p { class: "orgs-error", "{message}" } }
+        }
+    }
+}
+
+#[component]
+fn NotionForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
+    let mut label = use_signal(|| "Notion workspace".to_string());
+    let mut token = use_signal(String::new);
+    let mut error = use_signal(|| None::<String>);
+    let mut busy = use_signal(|| false);
+    let submit = move |evt: FormEvent| {
+        let slug = slug.clone();
+        async move {
+            evt.prevent_default();
+            if let Err(message) =
+                validate_name(&label()).and_then(|_| validate_api_key(&token()).map(|_| ()))
+            {
+                error.set(Some(message));
+                return;
+            }
+            busy.set(true);
+            match connect_notion(slug, label(), token()).await {
+                Ok(_) => {
+                    token.set(String::new());
+                    error.set(None);
+                    on_added.call(());
+                }
+                Err(e) => error.set(Some(error_message(&e))),
+            }
+            busy.set(false);
+        }
+    };
+    rsx! {
+        form { class: "conn-subform", onsubmit: submit,
+            p { class: "conn-meta",
+                "Create an internal integration in "
+                a { href: "https://www.notion.so/profile/integrations", target: "_blank", rel: "noopener noreferrer", "Notion's integrations settings" }
+                ", choose its capabilities, then share the pages and databases it should access with that integration. Personal access tokens are also supported."
+            }
+            div { class: "conn-grid",
+                div { class: "orgs-field",
+                    Label { html_for: "notion-label", "Connection name" }
+                    Input { id: "notion-label", value: label(), oninput: move |e: FormEvent| label.set(e.value()) }
+                }
+                div { class: "orgs-field",
+                    Label { html_for: "notion-token", "Integration or personal access token" }
+                    Input { id: "notion-token", r#type: "password", autocomplete: "off", value: token(), oninput: move |e: FormEvent| token.set(e.value()) }
+                }
+            }
+            Button { r#type: "submit", disabled: disabled || busy(), "Connect Notion" }
+            if let Some(message) = error() { p { class: "orgs-error", "{message}" } }
         }
     }
 }

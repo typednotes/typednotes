@@ -119,6 +119,38 @@ pub fn validate_api_key(key: &str) -> Result<String, String> {
     }
 }
 
+/// An explicitly supplied CalDAV collection or calendar-home URL and app
+/// password. Preserve password whitespace; `:` cannot occur in a Basic username.
+pub fn validate_caldav(
+    endpoint: &str,
+    username: &str,
+    password: &str,
+) -> Result<(String, String), String> {
+    let endpoint = validate_base_url(endpoint, true)?;
+    let username = username.trim();
+    if username.is_empty()
+        || username.len() > 256
+        || username.chars().any(|c| c == ':' || c.is_control())
+    {
+        return Err("username: 1–256 characters, without colons or control characters".to_string());
+    }
+    if password.is_empty() || password.len() > 1024 || password.chars().any(char::is_control) {
+        return Err("app password: 1–1024 characters, without control characters".to_string());
+    }
+    Ok((endpoint, username.to_string()))
+}
+
+/// A JMAP session URL (e.g. Fastmail's `/jmap/session`) and bearer API token.
+pub fn validate_jmap(endpoint: &str, token: &str) -> Result<(String, String), String> {
+    let mut url = validate_base_url(endpoint, true)?;
+    // Session resources may distinguish `/session` from `/session/`; the broker
+    // does not follow redirects, so retain the user's explicit trailing slash.
+    if endpoint.trim().ends_with('/') {
+        url.push('/');
+    }
+    Ok((url, validate_api_key(token)?))
+}
+
 /// A normalized S3 connection form.
 #[derive(Clone, Debug, PartialEq)]
 pub struct S3Form {
@@ -320,6 +352,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn productivity_forms_validate_urls_and_preserve_passwords() {
+        assert_eq!(
+            validate_caldav(
+                " https://cloud.example.com/calendars/me/ ",
+                " me ",
+                " spaced password "
+            )
+            .unwrap(),
+            ("https://cloud.example.com/calendars/me".into(), "me".into())
+        );
+        for username in ["", "me:other"] {
+            assert!(validate_caldav("https://a.b/calendar", username, "password").is_err());
+        }
+        assert!(validate_caldav("https://a.b/calendar", "me\nother", "password").is_err());
+        assert!(validate_caldav("https://a.b/calendar", "me", "bad\npassword").is_err());
+        assert!(validate_caldav("https://a.b/calendar", "me", "").is_err());
+        assert!(validate_jmap("https://api.fastmail.com/jmap/session", " mail-token ").is_ok());
+        assert!(validate_jmap("https://me:secret@a.b/jmap", "mail-token").is_err());
+        assert!(validate_jmap("https://a.b/jmap?token=secret", "mail-token").is_err());
+        assert!(validate_jmap("https://a.b/jmap", "short").is_err());
+        assert_eq!(
+            validate_jmap("https://a.b/jmap/", "mail-token").unwrap().0,
+            "https://a.b/jmap/"
+        );
+    }
+
+    #[test]
+    fn database_provider_constraint_matches_the_catalog() {
+        let migration = include_str!("../../../migrations/0005_productivity_connections.sql");
+        let clause = migration
+            .split("connections_provider_check check (provider in")
+            .nth(1)
+            .unwrap()
+            .split("));")
+            .next()
+            .unwrap();
+        let ids: Vec<&str> = clause
+            .split('\'')
+            .enumerate()
+            .filter_map(|(i, s)| (i % 2 == 1).then_some(s))
+            .collect();
+        assert_eq!(ids.len(), Provider::ALL.len());
+        for provider in Provider::ALL {
+            assert_eq!(ids.iter().filter(|id| **id == provider.id()).count(), 1);
+        }
+    }
+
+    #[test]
     fn accepts_a_plain_slug() {
         assert!(validate_org("acme-labs", "Acme Labs").is_ok());
     }
@@ -354,7 +434,7 @@ mod tests {
         for p in Provider::ALL {
             assert_eq!(Provider::from_id(p.id()), Some(p));
         }
-        assert_eq!(Provider::from_id("notion"), None);
+        assert_eq!(Provider::from_id("unknown-provider"), None);
         assert!(Provider::Anthropic.is_ai() && !Provider::S3.is_ai());
         assert!(Provider::Gitlab.is_code() && Provider::Signal.is_channel());
     }

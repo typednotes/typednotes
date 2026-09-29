@@ -196,6 +196,50 @@ fn probe(c: &Connection) -> ProviderCall<'static> {
             "https://www.googleapis.com/drive/v3/about?fields=user".to_string(),
             json,
         ),
+        Provider::GoogleCalendar => get(
+            format!(
+                "{}/calendar/v3/users/me/calendarList?maxResults=1",
+                c.base_url
+            ),
+            json,
+        ),
+        Provider::MicrosoftCalendar => get(
+            format!("{}/me/calendars?$top=1&$select=id,name", c.base_url),
+            json,
+        ),
+        Provider::Gmail => get(format!("{}/gmail/v1/users/me/profile", c.base_url), json),
+        Provider::Outlook => get(
+            format!(
+                "{}/me/mailFolders/inbox?$select=id,displayName,totalItemCount",
+                c.base_url
+            ),
+            json,
+        ),
+        Provider::Notion => get(format!("{}/users/me", c.base_url), json),
+        Provider::Jmap => get(
+            c.external_id
+                .clone()
+                .unwrap_or_else(|| format!("{}/.well-known/jmap", c.base_url)),
+            json,
+        ),
+        Provider::Caldav => ProviderCall {
+            action: "read",
+            method: "PROPFIND",
+            url: format!("{}/", c.base_url),
+            headers: vec![
+                ("content-type", "application/xml; charset=utf-8"),
+                ("depth", "1"),
+            ],
+            body: Some(
+                concat!(
+                    "<?xml version=\"1.0\" encoding=\"utf-8\"?>",
+                    "<d:propfind xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\">",
+                    "<d:prop><d:displayname/><d:resourcetype/><c:calendar-home-set/></d:prop>",
+                    "</d:propfind>"
+                )
+                .to_string(),
+            ),
+        },
         Provider::Dropbox => ProviderCall {
             action: "read",
             method: "POST",
@@ -242,6 +286,9 @@ pub fn slack_error(body: &[u8]) -> Option<String> {
 /// A one-line description of a successful probe's answer, or why a `2xx`
 /// answer is still a failure.
 fn describe(c: &Connection, body: &[u8]) -> Result<String, String> {
+    if c.provider == Provider::Caldav {
+        return describe_caldav(body);
+    }
     let json: Option<Value> = serde_json::from_slice(body).ok();
     let field = |ptr: &str| {
         json.as_ref()
@@ -253,6 +300,71 @@ fn describe(c: &Connection, body: &[u8]) -> Result<String, String> {
         Provider::Github => field("/login").map(|l| format!("signed in to GitHub as @{l}")),
         Provider::Gitlab => field("/username").map(|l| format!("signed in to GitLab as @{l}")),
         Provider::Gdrive => field("/user/emailAddress").map(|e| format!("Google Drive of {e}")),
+        Provider::GoogleCalendar => {
+            if json
+                .as_ref()
+                .and_then(|j| j.get("kind"))
+                .and_then(Value::as_str)
+                != Some("calendar#calendarList")
+            {
+                return Err("Google returned no calendar list".to_string());
+            }
+            Some("Google calendars are readable".to_string())
+        }
+        Provider::MicrosoftCalendar => {
+            if !json
+                .as_ref()
+                .and_then(|j| j.get("value"))
+                .is_some_and(Value::is_array)
+            {
+                return Err("Microsoft returned no calendar list".to_string());
+            }
+            Some("Microsoft calendars are readable".to_string())
+        }
+        Provider::Gmail => Some(format!(
+            "Gmail of {}",
+            field("/emailAddress").ok_or("Gmail returned no mailbox profile")?
+        )),
+        Provider::Outlook => Some(format!(
+            "Outlook folder {}",
+            field("/displayName").ok_or("Outlook returned no mailbox folder")?
+        )),
+        Provider::Notion => {
+            if field("/object").as_deref() != Some("user") || field("/id").is_none() {
+                return Err("Notion returned no token identity".to_string());
+            }
+            field("/bot/workspace_name")
+                .map(|name| format!("connected to Notion workspace {name}"))
+                .or_else(|| field("/name").map(|name| format!("connected to Notion as {name}")))
+        }
+        Provider::Jmap => {
+            let session = json.as_ref().ok_or("the server returned no JMAP session")?;
+            let accounts = session
+                .get("accounts")
+                .and_then(Value::as_object)
+                .ok_or("the server returned no JMAP accounts")?;
+            if !accounts.values().any(|a| {
+                a.get("accountCapabilities")
+                    .and_then(|v| v.get("urn:ietf:params:jmap:mail"))
+                    .is_some_and(Value::is_object)
+            }) {
+                return Err("the JMAP token has no mail access".to_string());
+            }
+            let api_url = session
+                .get("apiUrl")
+                .and_then(Value::as_str)
+                .ok_or("the JMAP session has no API URL")?;
+            if !same_origin(&c.base_url, api_url) {
+                return Err("the JMAP API is on another origin; this connection confines credentials to the session origin".to_string());
+            }
+            Some(
+                field("/username")
+                    .filter(|n| !n.is_empty())
+                    .map(|n| format!("JMAP mail of {n}"))
+                    .unwrap_or_else(|| "JMAP mail is accessible".to_string()),
+            )
+        }
+        Provider::Caldav => unreachable!("CalDAV was described above"),
         Provider::Dropbox => field("/email").map(|e| format!("Dropbox of {e}")),
         Provider::S3 => Some("bucket listed".to_string()),
         Provider::Azure => Some("container listed".to_string()),
@@ -287,6 +399,66 @@ fn describe(c: &Connection, body: &[u8]) -> Result<String, String> {
         }
     };
     Ok(described.unwrap_or_else(|| "the provider answered".to_string()))
+}
+
+fn same_origin(base: &str, target: &str) -> bool {
+    let (Ok(base), Ok(target)) = (url::Url::parse(base), url::Url::parse(target)) else {
+        return false;
+    };
+    target.username().is_empty()
+        && target.password().is_none()
+        && target.fragment().is_none()
+        && base.origin() == target.origin()
+}
+
+/// A 207 may contain only failed properties. Only successful DAV propstats
+/// with a CalDAV collection or calendar home prove access; HTML is not success.
+fn describe_caldav(body: &[u8]) -> Result<String, String> {
+    let text = std::str::from_utf8(body).map_err(|_| "the CalDAV reply is not UTF-8")?;
+    let doc = roxmltree::Document::parse(text).map_err(|_| "the CalDAV reply is not valid XML")?;
+    if !doc.root_element().has_tag_name(("DAV:", "multistatus")) {
+        return Err("the server returned no CalDAV multistatus".to_string());
+    }
+    for propstat in doc
+        .descendants()
+        .filter(|n| n.has_tag_name(("DAV:", "propstat")))
+    {
+        let success = propstat
+            .children()
+            .find(|n| n.has_tag_name(("DAV:", "status")))
+            .and_then(|n| n.text())
+            .and_then(|s| s.split_whitespace().nth(1))
+            == Some("200");
+        if !success {
+            continue;
+        }
+        let Some(prop) = propstat
+            .children()
+            .find(|n| n.has_tag_name(("DAV:", "prop")))
+        else {
+            continue;
+        };
+        let calendar = prop.children().any(|n| {
+            (n.has_tag_name(("DAV:", "resourcetype"))
+                && n.children()
+                    .any(|c| c.has_tag_name(("urn:ietf:params:xml:ns:caldav", "calendar"))))
+                || (n.has_tag_name(("urn:ietf:params:xml:ns:caldav", "calendar-home-set"))
+                    && n.children().any(|c| {
+                        c.has_tag_name(("DAV:", "href"))
+                            && c.text().is_some_and(|s| !s.trim().is_empty())
+                    }))
+        });
+        if calendar {
+            let name = prop
+                .children()
+                .find(|n| n.has_tag_name(("DAV:", "displayname")))
+                .and_then(|n| n.text());
+            return Ok(name
+                .map(|n| format!("CalDAV calendar {n}"))
+                .unwrap_or_else(|| "CalDAV calendar access confirmed".to_string()));
+        }
+    }
+    Err("the URL is not an accessible CalDAV calendar collection or calendar home".to_string())
 }
 
 /// Make one call on `connection`'s credential through liaison: mint a
@@ -405,7 +577,11 @@ mod tests {
             provider,
             label: "l".into(),
             base_url: base_url.into(),
-            external_id: Some("+33612345678".into()),
+            external_id: Some(if provider == Provider::Jmap {
+                format!("{base_url}/jmap/session")
+            } else {
+                "+33612345678".into()
+            }),
             status: "active".into(),
             owner_email: "a@b.c".into(),
             created_at: String::new(),
@@ -460,6 +636,105 @@ mod tests {
         .contains("invalid_auth"));
         assert!(describe(&c(Provider::Signal), br#"["+33612345678"]"#).is_ok());
         assert!(describe(&c(Provider::Signal), br#"["+1555"]"#).is_err());
+    }
+
+    #[test]
+    fn productivity_probes_reject_unexpected_success_bodies() {
+        for (provider, body, expected) in [
+            (
+                Provider::GoogleCalendar,
+                br#"{"kind":"calendar#calendarList","items":[]}"#.as_slice(),
+                "Google calendars are readable",
+            ),
+            (
+                Provider::MicrosoftCalendar,
+                br#"{"value":[]}"#.as_slice(),
+                "Microsoft calendars are readable",
+            ),
+            (
+                Provider::Gmail,
+                br#"{"emailAddress":"me@example.com"}"#.as_slice(),
+                "Gmail of me@example.com",
+            ),
+            (
+                Provider::Outlook,
+                br#"{"id":"inbox","displayName":"Inbox"}"#.as_slice(),
+                "Outlook folder Inbox",
+            ),
+            (
+                Provider::Notion,
+                br#"{"object":"user","id":"bot","bot":{"workspace_name":"Acme"}}"#.as_slice(),
+                "connected to Notion workspace Acme",
+            ),
+        ] {
+            let c = connection(provider, provider.fixed_base_url().unwrap());
+            assert_eq!(describe(&c, body).unwrap(), expected);
+            assert!(describe(&c, b"<html>Sign in</html>").is_err());
+            assert!(describe(&c, br#"{"error":"unauthorized"}"#).is_err());
+        }
+    }
+
+    #[test]
+    fn jmap_requires_mail_access_and_a_confined_api_endpoint() {
+        let c = connection(Provider::Jmap, "https://api.fastmail.com");
+        let session = |api_url: &str, capabilities: Value| {
+            serde_json::to_vec(&serde_json::json!({
+                "username": "me@example.com", "apiUrl": api_url,
+                "accounts": {"a": {"accountCapabilities": capabilities}}
+            }))
+            .unwrap()
+        };
+        let mail = serde_json::json!({"urn:ietf:params:jmap:mail": {}});
+        assert_eq!(
+            describe(
+                &c,
+                &session("https://api.fastmail.com/jmap/api/", mail.clone())
+            )
+            .unwrap(),
+            "JMAP mail of me@example.com"
+        );
+        assert!(describe(&c, &session("https://other.example.com/api", mail.clone())).is_err());
+        assert!(describe(
+            &c,
+            &session(
+                "https://api.fastmail.com@other.example.com/api",
+                mail.clone()
+            )
+        )
+        .is_err());
+        assert!(describe(
+            &c,
+            &session("https://api.fastmail.com/api", serde_json::json!({}))
+        )
+        .is_err());
+        assert!(describe(&c, b"not json").is_err());
+    }
+
+    #[test]
+    fn caldav_checks_namespaces_and_each_propstat_status() {
+        let reply = |status: &str, namespace: &str| {
+            format!(
+                "<d:multistatus xmlns:d=\"DAV:\" xmlns:c=\"{namespace}\"><d:response>\
+             <d:propstat><d:prop><d:displayname>Team &amp; friends</d:displayname>\
+             <d:resourcetype><d:collection/><c:calendar/></d:resourcetype></d:prop>\
+             <d:status>HTTP/1.1 {status}</d:status></d:propstat></d:response></d:multistatus>"
+            )
+        };
+        let namespace = "urn:ietf:params:xml:ns:caldav";
+        assert_eq!(
+            describe_caldav(reply("200 OK", namespace).as_bytes()).unwrap(),
+            "CalDAV calendar Team & friends"
+        );
+        assert!(describe_caldav(reply("403 Forbidden", namespace).as_bytes()).is_err());
+        assert!(describe_caldav(reply("200 OK", "wrong:namespace").as_bytes()).is_err());
+        assert!(describe_caldav(b"<html>Login</html>").is_err());
+        assert!(describe_caldav(br#"<d:multistatus xmlns:d="DAV:"/>"#).is_err());
+        let c = connection(Provider::Caldav, "https://cloud.example.com/calendars/me");
+        let call = probe(&c);
+        assert_eq!(call.method, "PROPFIND");
+        assert_eq!(call.url, "https://cloud.example.com/calendars/me/");
+        assert!(call.headers.contains(&("depth", "1")));
+        roxmltree::Document::parse(call.body.as_deref().unwrap()).unwrap();
     }
 
     #[test]

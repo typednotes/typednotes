@@ -168,6 +168,21 @@ pub fn bearer(base_url: &str, token: &str) -> Value {
     json!({ "kind": "bearer", "base_url": base_url, "token": token })
 }
 
+/// CalDAV app passwords use the broker's existing header credential kind.
+pub fn basic(base_url: &str, username: &str, password: &str) -> Value {
+    use base64::Engine;
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
+    header(base_url, "authorization", &format!("Basic {encoded}"), &[])
+}
+
+/// Pin the API version on every call, including notebook calls through liaison.
+pub fn notion(token: &str) -> Value {
+    let mut credential = bearer(Provider::Notion.fixed_base_url().unwrap(), token);
+    credential["headers"] = json!({"notion-version": "2026-03-11"});
+    credential
+}
+
 pub fn header(base_url: &str, header: &str, token: &str, headers: &[(&str, &str)]) -> Value {
     let headers: serde_json::Map<String, Value> = headers
         .iter()
@@ -182,6 +197,7 @@ pub fn header(base_url: &str, header: &str, token: &str, headers: &[(&str, &str)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OAuthIssuer {
     Google,
+    Microsoft,
     Dropbox,
     Gitlab,
 }
@@ -191,6 +207,7 @@ impl OAuthIssuer {
     pub fn kind(self) -> &'static str {
         match self {
             OAuthIssuer::Google => "google_oauth",
+            OAuthIssuer::Microsoft => "microsoft_oauth",
             OAuthIssuer::Dropbox => "dropbox_oauth",
             OAuthIssuer::Gitlab => "gitlab_oauth",
         }
@@ -295,6 +312,43 @@ mod tests {
             s3("https://s3.fr-par.scw.cloud/b", "fr-par", "AK", "SK"),
             json!({"kind": "s3", "base_url": "https://s3.fr-par.scw.cloud/b", "region": "fr-par",
                    "access_key_id": "AK", "secret_access_key": "SK"})
+        );
+    }
+
+    #[test]
+    fn productivity_credentials_match_the_broker_contract() {
+        use base64::Engine;
+        let cred = basic("https://a.b/calendar", "me", " spaced password ");
+        assert_eq!(cred["kind"], "header");
+        assert_eq!(cred["header"], "authorization");
+        let encoded = cred["token"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("Basic ")
+            .unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .unwrap(),
+            b"me: spaced password "
+        );
+        assert_eq!(
+            notion("secret-token"),
+            json!({
+                "kind": "bearer", "base_url": "https://api.notion.com/v1", "token": "secret-token",
+                "headers": {"notion-version": "2026-03-11"}
+            })
+        );
+        assert_eq!(
+            oauth(
+                OAuthIssuer::Microsoft,
+                "https://graph.microsoft.com/v1.0",
+                "a",
+                "r",
+                123
+            ),
+            json!({"kind": "microsoft_oauth", "base_url": "https://graph.microsoft.com/v1.0",
+                "access_token": "a", "refresh_token": "r", "expires_at": "123"})
         );
     }
 }
