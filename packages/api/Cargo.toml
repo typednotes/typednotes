@@ -12,6 +12,9 @@ serde_json = "1"
 # Server only: the client (wasm) build never links a database driver, an HTTP
 # client, or any crypto — sessions, OAuth, the vault and warrants are all
 # server-side (docs/connections.md).
+# reqwest stays on 0.12, the version dioxus-fullstack 0.7 depends on: one
+# reqwest and one TLS stack (rustls on ring, which sqlx uses too) in the
+# server, rather than a second of each for 0.13.
 sqlx = { version = "0.9", default-features = false, features = [
     "runtime-tokio",
     "tls-rustls",
@@ -24,8 +27,8 @@ reqwest = { version = "0.12", default-features = false, features = [
 sha2 = { version = "0.11", optional = true }
 hmac = { version = "0.13", optional = true }
 hex = { version = "0.4", optional = true }
-base64 = { version = "0.22", optional = true }
-getrandom = { version = "0.3", optional = true }
+base64 = { version = "0.23", optional = true }
+getrandom = { version = "0.4", optional = true }
 uuid = { version = "1", features = ["v4"], optional = true }
 url = { version = "2", optional = true }
 # The source scheduler's tick and the SSRF guard's DNS lookups.
