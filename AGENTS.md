@@ -13,6 +13,55 @@ workflow seems to imply it. Pushing is the user's action, always.
 Committing locally is fine when the user asks for it. If work seems ready to push, say so
 and stop there.
 
+# Connector capabilities and `Eff` permissions
+
+**Keep connector possibilities and effect-level permissions in sync.** Adding,
+removing, or changing a connector operation must update its capability contract,
+permission catalog, presets, UI, runtime/broker enforcement, and documentation
+together. This applies to every connector: AI, repositories, S3/Azure, Drive/Dropbox,
+calendars, email, Notion, and messaging—not just anonymous HTTP.
+
+- Model permissions as **operations plus structured resource scopes**, not a
+  single read/write flag. Distinguish, for example, object read/write/delete and
+  bucket prefixes; file read/update/share and folders; event read/create/delete
+  and calendars; message read/draft/send/delete and mailboxes or recipients.
+- Effective authority is the intersection of organization policy, connection
+  permissions, the cell's `Eff` capability, and its warrant. A cell, generated
+  implementation, or session update must never widen any of these bounds.
+- Enforce permissions where effects execute in `lun` and where credentials are
+  used in `liaison`; UI validation and instructions to the model are not enforcement.
+  Unknown or unsupported operations/scopes must fail closed; never fall back to
+  unrestricted HTTP, raw IO, or a broader credential.
+- Make common setups easy: provide sensible, narrowly scoped presets and infer
+  resource boundaries from the chosen bucket, folder, calendar, or cell URL.
+  Keep advanced grants available without making them mandatory for simple tasks.
+- Preserve hard organization/user boundaries for database schemas and temporary
+  files. Authentication/OAuth scopes are additional ceilings, not permission to
+  bypass the application's capability model.
+- Add drift/coverage tests for every advertised operation, presets, scope
+  boundaries, narrowing, and denied calls. Verify the actual runtime/broker path
+  before marking an operation or permission TODO complete; update dependent
+  service contracts and migrations when their wire/storage shapes change.
+
+# Guarantees through Lean's type system
+
+**Whenever a guarantee is required, encode it in Lean's types and proofs—not
+only in tests, conventions, UI checks, or instructions to a model.** Make invalid
+states and unauthorized operations unrepresentable where possible.
+
+- Carry the required evidence in the operation's type: scoped resources,
+  operation permissions, verified warrants, bounded authority, and validated
+  state transitions. Keep constructors private when callers must not forge it.
+- For runtime inputs, validate at the boundary and return a typed witness or a
+  structured refusal. Execution must consume that witness; it must not bypass it
+  through raw strings, unrestricted IO, or a broader alternative API.
+- Prove the properties the design promises, including scope confinement,
+  narrowing/attenuation, and authority intersections. Do not label a guarantee
+  complete merely because a test suite passes.
+- Use tests in addition to types and proofs to verify parsers, integrations,
+  transports, FFI, and the correspondence between the proved model and actual
+  execution. State any remaining trusted boundary explicitly.
+
 # Dioxus Dependency
 
 You can add Dioxus to your `Cargo.toml` like this:

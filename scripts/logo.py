@@ -1,34 +1,27 @@
 #!/usr/bin/env python3
-"""Generate the Typednotes logo: the "T" of www.typednotes.com's title, with
-a soft shadow drawn in Lean 4 symbols.
+"""Generate the shared Typednotes ⊢ logo, with an outlined mathematical shadow.
 
-The site draws its title in the figlet font ANSI Shadow on a character grid:
-solid `█` cells with a shadow one step down and to the right. The logo keeps
-the solid T and replaces the shadow with a soft one: the T shifted down and
-right (OFFSET), blurred over a radius of RADIUS cells. Softness is ASCII-art
-softness, twice over — the further from the shifted T, the fainter the grey
-and the lighter the symbol, from dense (ℕ Σ Π ∃ …) through medium (λ → ⊢ …)
-to sparse (· : ¬ …). Distances are measured in pixels on the site's cell
-(0.6 em × 1.25 em), so the blur is round, not squashed. Transparent
-background:
+The base foreground is black on light backgrounds and white on dark backgrounds.
+The shadow fades by alpha, never by mixing in an assumed background. One adaptive
+SVG covers both themes. The app uses the full logo SVG at icon scale.
 
-  logo-dark.svg   for dark backgrounds  (light glyph, the site's own greys)
-  logo-light.svg  for light backgrounds (dark glyph)
-  logo.svg        both, switched by prefers-color-scheme
+  python3 scripts/logo.py                         # canonical SVGs + one 1024 PNG
+  python3 scripts/logo.py --format svg            # no rasterizer required
+  python3 scripts/logo.py --sizes 28 56 84 256 --output-dir out/logos
+  python3 scripts/logo.py --mark-color '#386ee0' --shadow-color '#64748b'
+  python3 scripts/logo.py --components-root .. --format svg
 
-and the same three as `mark-*.svg`: the variant for small sizes (the app's
-navbar pill, 28 px), with only the hard shadow band, since a
-soft edge is noise at that size.
-
-Symbols are outlined from Fira Code (fontTools), so the SVGs need no font.
-PNGs (logo 1024 px; mark 28, 56 and 84 px: 1x, 2x, 3x, and 1024 px like the logo) come from rsvg-convert:
-
-  scripts/logo.py              # LOGO_FONT=… to use another .ttf
+Dependencies: fonttools, Fira Code (or --font/LOGO_FONT), and rsvg-convert for
+PNG output. Extra sizes/colors belong in a generated output directory.
 """
 
 import math
+import argparse
+import html
 import os
 import random
+import re
+import tempfile
 import subprocess
 from pathlib import Path
 
@@ -37,13 +30,13 @@ from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.ttLib import TTFont
 
-# The T's solid cells, from the ANSI Shadow glyph on the site.
+# A T rotated onto its side: the logical turnstile, ⊢.
 T = [
+    "██      ",
+    "██      ",
     "████████",
-    "   ██   ",
-    "   ██   ",
-    "   ██   ",
-    "   ██   ",
+    "██      ",
+    "██      ",
 ]
 
 CW, CH = 12.0, 25.0             # the site's cell at 20 px: 0.6 em wide, 1.25 em tall
@@ -63,11 +56,10 @@ BANDS = [
     "λαβ→↔×=∧∨⊢",
     "·:¬,⟨⟩'",
 ]
-PALETTES = {
-    # Dark: the site's #f2f2f2 blocks and #7a7a7a shadow, fading out.
-    "dark": dict(block="#f2f2f2", band0="#7a7a7a", band1="#545454", band2="#353535"),
-    "light": dict(block="#111111", band0="#8c8c8c", band1="#b0b0b0", band2="#d2d2d2"),
-}
+MARK_COLOR = None               # adaptive black/white; --mark-color overrides it
+SHADOW_COLOR = "#64748b"
+SHADOW_ALPHA = 0.55
+ALPHA_RAMP = (1.0, 0.5, 0.2)
 SEED = 7                        # a fixed arrangement; never the same symbol twice side by side
 
 SOLID = {(r, c) for r, line in enumerate(T) for c, g in enumerate(line) if g == "█"}
@@ -75,7 +67,25 @@ SOLID = {(r, c) for r, line in enumerate(T) for c, g in enumerate(line) if g == 
 # name -> (blur radius, margin in cells, PNG sizes)
 VARIANTS = {
     "logo": (RADIUS, 1, [1024]),
-    "mark": (0, 1, [28, 56, 84, 1024]),
+    "mark": (0, 1, [1024]),
+}
+
+COMPONENT_TARGETS = {
+    "ledger": ("logo.svg", ""), "liaison": ("logo.svg", ""),
+    "lode": ("logo.svg", ""), "lun": ("logo.svg", ""),
+    "web-data": ("logo.svg", "web-data"),
+    "secrets": ("logo.svg", "secrets"),
+}
+
+# Fixed bicolor light-logo palettes retained from each project's previous T.
+# These are module variants; only the application's base mark adapts to a theme.
+COMPONENT_COLORS = {
+    "ledger": ("#1f5c3f", "#b8892b"),
+    "liaison": ("#0e6b6f", "#e0763a"),
+    "lode": ("#3730a3", "#c2417a"),
+    "lun": ("#3b2f7a", "#e0a526"),
+    "web-data": ("#1d4ed8", "#ea580c"),
+    "secrets": ("#1d4ed8", "#ea580c"),
 }
 
 
@@ -92,10 +102,15 @@ class Layout:
         cells = SOLID | set(self.bands)
         r0, c0 = min(r for r, _ in cells), min(c for _, c in cells)
         r1, c1 = max(r for r, _ in cells), max(c for _, c in cells)
-        w, h = (c1 - c0 + 1) * CW, (r1 - r0 + 1) * CH
-        self.size = max(w, h) + 2 * margin * CW
-        self.ox = (self.size - w) / 2 - c0 * CW
-        self.oy = (self.size - h) / 2 - r0 * CH
+        # Center on the foreground character, not its asymmetric shadow.
+        sr0, sc0 = min(r for r, _ in SOLID), min(c for _, c in SOLID)
+        sr1, sc1 = max(r for r, _ in SOLID), max(c for _, c in SOLID)
+        center_x, center_y = (sc0 + sc1 + 1) * CW / 2, (sr0 + sr1 + 1) * CH / 2
+        extent = max(center_x - c0 * CW, (c1 + 1) * CW - center_x,
+                     center_y - r0 * CH, (r1 + 1) * CH - center_y)
+        self.size = 2 * (extent + margin * CW)
+        self.ox = self.size / 2 - center_x
+        self.oy = self.size / 2 - center_y
 
 
 def shadow_bands(radius: int) -> dict[tuple[int, int], int]:
@@ -141,7 +156,7 @@ def blocks(lay: Layout) -> str:
                 rects.append([r, r, start, c - 1])
     return "\n".join(
         f'<rect x="{f(lay.ox + c0 * CW)}" y="{f(lay.oy + r0 * CH)}" '
-        f'width="{f((c1 - c0 + 1) * CW)}" height="{f((r1 - r0 + 1) * CH + 0.5)}"/>'
+        f'width="{f((c1 - c0 + 1) * CW)}" height="{f((r1 - r0 + 1) * CH + (0.5 if r1 < max(r for r, _ in SOLID) else 0))}"/>'
         for r0, r1, c0, c1 in rects
     )
 
@@ -192,47 +207,139 @@ def shadow(lay: Layout) -> dict[int, str]:
     return {band: "".join(paths[band]) for band in sorted(paths, reverse=True)}
 
 
-def svg(lay: Layout, body: str, style: str = "") -> str:
+def svg(lay: Layout, body: str, title: str = "Typednotes", wordmark: str = "", color: str | None = MARK_COLOR, theme: str = "auto") -> str:
+    width = lay.size
+    if wordmark:
+        font = TTFont(font_path())
+        glyphs, cmap = font.getGlyphSet(), font.getBestCmap() or {}
+        units = getattr(font["head"], "unitsPerEm")
+        scale = 42 / units
+        x = lay.size + 12
+        paths = []
+        cap = getattr(font["OS/2"], "sCapHeight", 0) or units * .7
+        baseline = lay.size / 2 + cap * scale / 2
+        for character in wordmark:
+            if ord(character) not in cmap:
+                raise ValueError(f"Font has no glyph for {character!r}")
+            glyph = glyphs[cmap[ord(character)]]
+            outline = DecomposingRecordingPen(glyphs)
+            glyph.draw(outline)
+            pen = SVGPathPen(glyphs, ntos=f)
+            outline.replay(TransformPen(pen, (scale, 0, 0, -scale, x, baseline)))
+            paths.append(pen.getCommands())
+            x += glyph.width * scale
+        width = x + 12
+        body += f'<path data-layer="wordmark" class="foreground" fill="{color or "#000000"}" d="{"".join(paths)}"/>\n'
+    if color:
+        style = ""
+    elif theme == "auto":
+        style = '<style>.foreground{fill:#000000}@media(prefers-color-scheme:dark){.foreground{fill:#ffffff}}</style>\n'
+    else:
+        style = f'<style>.foreground{{fill:{"#ffffff" if theme == "dark" else "#000000"}}}</style>\n'
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {f(lay.size)} {f(lay.size)}" '
-        f'width="{f(lay.size)}" height="{f(lay.size)}" role="img" aria-label="Typednotes">\n'
-        f"<title>Typednotes</title>\n{style}{body}</svg>\n"
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {f(width)} {f(lay.size)}" '
+        f'width="{f(width)}" height="{f(lay.size)}" role="img" aria-label="{html.escape(title, quote=True)}">\n'
+        f"<title>{html.escape(title)}</title>\n{style}{body}</svg>\n"
     )
 
 
-def body(lay: Layout, paint) -> str:
-    """`paint(tone)` is the attribute that colours `block` or `band0`…`band2`."""
-    parts = [f'<path {paint(f"band{band}")} d="{d}"/>' for band, d in shadow(lay).items()]
-    parts.append(f'<g {paint("block")}>\n{blocks(lay)}\n</g>')
+def body(lay: Layout, color: str | None, shadow_color: str, alpha: float) -> str:
+    parts = [f'<path data-layer="shadow" fill="{shadow_color}" fill-opacity="{f(alpha * ALPHA_RAMP[band])}" d="{d}"/>'
+             for band, d in shadow(lay).items()]
+    parts.append(f'<g data-layer="mark" class="foreground" fill="{color or "#000000"}">\n{blocks(lay)}\n</g>')
     return "\n".join(parts) + "\n"
 
 
+def color_arg(value: str) -> str:
+    if not re.fullmatch(r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?", value):
+        raise argparse.ArgumentTypeError("use a #RGB or #RRGGBB color")
+    return value.lower()
+
+
+def size_arg(value: str) -> int:
+    try:
+        size = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("sizes must be integers") from error
+    if not 1 <= size <= 8192:
+        raise argparse.ArgumentTypeError("sizes must be between 1 and 8192 pixels")
+    return size
+
+
+def render_png(source: Path, target: Path, size: int) -> None:
+    subprocess.run(["rsvg-convert", "-w", str(size), "-h", str(size), str(source), "-o", str(target)], check=True)
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--mark-color", type=color_arg, default=MARK_COLOR)
+    parser.add_argument("--theme", choices=["auto", "light", "dark"], default="auto", help="SVG foreground theme; PNG defaults to light unless dark is explicit")
+    parser.add_argument("--shadow-color", type=color_arg, help="override the base or component shadow RGB")
+    parser.add_argument("--shadow-opacity", type=float, help="override alpha (base .55; component light logos 1.0)")
+    parser.add_argument("--font", type=Path)
+    parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent.parent / "packages/ui/assets/logo")
+    parser.add_argument("--format", choices=["svg", "png", "both"], default="both")
+    parser.add_argument("--sizes", nargs="+", type=size_arg, default=[1024])
+    parser.add_argument("--variant", choices=["logo", "mark", "all"], default="all")
+    parser.add_argument("--title", default="Typednotes")
+    parser.add_argument("--wordmark", default="")
+    parser.add_argument("--components-root", type=Path, help="regenerate canonical first-party component SVGs in sibling repositories")
+    parser.add_argument("--components", nargs="+", choices=list(COMPONENT_TARGETS), help="limit component regeneration to these repository names")
+    args = parser.parse_args()
+    if args.components and not args.components_root:
+        parser.error("--components requires --components-root")
+    if args.components_root:
+        for component in (args.components or COMPONENT_TARGETS):
+            if not (args.components_root / component).is_dir():
+                parser.error(f"missing component repository: {args.components_root / component}")
+    if args.shadow_opacity is not None and (not math.isfinite(args.shadow_opacity) or not 0 <= args.shadow_opacity <= 1):
+        parser.error("shadow opacity must be between 0 and 1")
+    if args.font:
+        os.environ["LOGO_FONT"] = str(args.font)
     if len(BANDS) != RADIUS + 1:
         raise SystemExit(f"BANDS needs {RADIUS + 1} entries (bands 0…RADIUS)")
-    out = Path(__file__).resolve().parent.parent / "packages/ui/assets/logo"
+    out = args.output_dir
+    shadow_color = args.shadow_color or SHADOW_COLOR
+    shadow_opacity = SHADOW_ALPHA if args.shadow_opacity is None else args.shadow_opacity
     out.mkdir(parents=True, exist_ok=True)
-
-    def rules(p):
-        return "".join(f".{t}{{fill:{v}}}" for t, v in p.items())
-
-    style = (
-        "<style>\n"
-        f"{rules(PALETTES['light'])}\n"
-        f"@media (prefers-color-scheme: dark){{{rules(PALETTES['dark'])}}}\n"
-        "</style>\n"
-    )
     for name, (radius, margin, sizes) in VARIANTS.items():
+        if args.variant != "all" and args.variant != name:
+            continue
         lay = Layout(radius, margin)
-        for mode, p in PALETTES.items():
-            path = out / f"{name}-{mode}.svg"
-            path.write_text(svg(lay, body(lay, lambda t: f'fill="{p[t]}"')))
-            for px in sizes:
-                png = out / (f"{name}-{mode}.png" if len(sizes) == 1 else f"{name}-{mode}-{px}.png")
-                subprocess.run(["rsvg-convert", "-w", str(px), "-h", str(px), str(path), "-o", str(png)],
-                               check=True)
-        (out / f"{name}.svg").write_text(svg(lay, body(lay, lambda t: f'class="{t}"'), style))
-        print(f"{name}: {name}.svg, {name}-light.svg, {name}-dark.svg, PNGs at {sizes} px")
+        path = out / f"{name}.svg"
+        artwork = svg(lay, body(lay, args.mark_color, shadow_color, shadow_opacity), args.title, args.wordmark, args.mark_color, args.theme)
+        if args.format != "png":
+            path.write_text(artwork)
+        # Canonical defaults retain just one main raster; custom sizes can
+        # request both names explicitly without adding theme-specific assets.
+        if args.format != "svg" and (name == "logo" or args.variant == "mark" or args.sizes != [1024] or args.format == "png"):
+            with tempfile.NamedTemporaryFile(suffix=".svg") as source:
+                source.write(artwork.encode()); source.flush()
+                for size in args.sizes:
+                    target = out / (f"{name}.png" if args.sizes == [1024] else f"{name}-{size}.png")
+                    render_png(Path(source.name), target, size)
+                    print(target)
+        if args.format != "png":
+            print(path)
+    if args.components_root:
+        root = args.components_root.resolve()
+        lay = Layout(RADIUS, 1)
+        targets = COMPONENT_TARGETS
+        if args.components:
+            targets = {name: targets[name] for name in args.components}
+        for component, (filename, label) in targets.items():
+            directory = root / component
+            if not directory.is_dir():
+                raise SystemExit(f"Missing component repository: {directory}")
+            target = directory / filename
+            target.parent.mkdir(parents=True, exist_ok=True)
+            foreground, shadow = COMPONENT_COLORS[component]
+            foreground = args.mark_color or foreground
+            shadow = args.shadow_color or shadow
+            alpha = 1.0 if args.shadow_opacity is None else args.shadow_opacity
+            artwork = svg(lay, body(lay, foreground, shadow, alpha), component, label, foreground, "light")
+            target.write_text(artwork)
+            print(target)
 
 
 if __name__ == "__main__":

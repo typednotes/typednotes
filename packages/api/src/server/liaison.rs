@@ -16,13 +16,11 @@ pub fn configured() -> bool {
 }
 
 /// One outbound call, as liaison's `call` object.
-pub struct Call<'a> {
+pub struct Call {
     pub account: String,
-    pub method: &'a str,
-    pub url: String,
-    pub headers: Vec<(&'a str, &'a str)>,
-    /// UTF-8 request body, e.g. the JSON of a message to send.
-    pub body: Option<String>,
+    pub operation: String,
+    pub resource: Vec<String>,
+    pub payload: String,
 }
 
 /// The request fields next to `warrant` and `call`.
@@ -44,21 +42,13 @@ pub enum Outcome {
 }
 
 pub fn body(warrant: &Warrant, r: &Request, call: &Call) -> Value {
-    let headers: serde_json::Map<String, Value> = call
-        .headers
-        .iter()
-        .map(|(k, v)| (k.to_string(), Value::from(*v)))
-        .collect();
-    let mut call_json = json!({
-        "kind": "provider",
+    let call_json = json!({
+        "kind": "connector",
         "account": call.account,
-        "method": call.method,
-        "url": call.url,
-        "headers": headers,
+        "operation": call.operation,
+        "resource": call.resource,
+        "payload": call.payload,
     });
-    if let Some(body) = &call.body {
-        call_json["body"] = Value::from(body.as_str());
-    }
     json!({
         "warrant": warrant.to_json(),
         "now": r.now.to_string(),
@@ -75,7 +65,7 @@ pub fn body(warrant: &Warrant, r: &Request, call: &Call) -> Value {
 pub async fn egress(
     warrant: &Warrant,
     r: &Request<'_>,
-    call: &Call<'_>,
+    call: &Call,
 ) -> Result<Outcome, String> {
     let base = env("LIAISON_URL").ok_or("LIAISON_URL is not set")?;
     let response = http()

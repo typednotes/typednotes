@@ -193,16 +193,7 @@ pub async fn slack_channels(
         org,
         &connection,
         &owner,
-        ProviderCall {
-            action: "read",
-            method: "GET",
-            url: format!(
-                "{}/conversations.list?types=public_channel,private_channel&exclude_archived=true&limit=200",
-                connection.base_url
-            ),
-            headers: vec![("accept", "application/json")],
-            body: None,
-        },
+        ProviderCall::new("channels.list", Vec::new(), json!({})),
     )
     .await?;
     parse_slack_channels(&body).map_err(bad_gateway)
@@ -416,14 +407,8 @@ fn send_call(
     connection: &Connection,
     recipient: &str,
     text: &str,
-) -> Result<(ProviderCall<'static>, String), String> {
-    let post = |url: String, body: Value| ProviderCall {
-        action: "write",
-        method: "POST",
-        url,
-        headers: vec![("content-type", "application/json; charset=utf-8")],
-        body: Some(body.to_string()),
-    };
+) -> Result<(ProviderCall, String), String> {
+    let post = |resource: Vec<String>| ProviderCall::new("messages.send", resource, json!({"text": text}));
     match connection.provider {
         Provider::Slack => {
             let channel = routed
@@ -431,31 +416,21 @@ fn send_call(
                 .clone()
                 .ok_or("this Slack interface has no channel")?;
             Ok((
-                post(
-                    format!("{}/chat.postMessage", connection.base_url),
-                    json!({ "channel": channel, "text": text }),
-                ),
+                post(vec![channel.clone()]),
                 channel,
             ))
         }
         Provider::Whatsapp => {
             let to = validate_phone(recipient)?;
             Ok((
-                post(
-                    format!("{}/{}/messages", connection.base_url, routed.external_id),
-                    json!({ "messaging_product": "whatsapp", "recipient_type": "individual",
-                            "to": to, "type": "text", "text": { "body": text } }),
-                ),
+                post(vec![routed.external_id.clone(), to.clone()]),
                 to,
             ))
         }
         Provider::Signal => {
             let to = format!("+{}", validate_phone(recipient)?);
             Ok((
-                post(
-                    format!("{}/v2/send", connection.base_url),
-                    json!({ "message": text, "number": routed.external_id, "recipients": [to] }),
-                ),
+                post(vec![routed.external_id.clone(), to.clone()]),
                 to,
             ))
         }
@@ -493,10 +468,29 @@ pub async fn send(
     recipient: &str,
     text: &str,
 ) -> Result<Message, ServerFnError> {
+    send_scoped(org, user, project_slug, channel_id, recipient, text, &[], None).await
+}
+
+/// Automatic delivery consumes the cell's requested ceiling and fixed resource.
+/// Output text cannot replace the connection, sender, channel or recipient.
+pub async fn send_scoped(
+    org: &Org,
+    user: &User,
+    project_slug: &str,
+    channel_id: &str,
+    recipient: &str,
+    text: &str,
+    connectors: &[crate::CellConnector],
+    cell_id: Option<&str>,
+) -> Result<Message, ServerFnError> {
     let text = validate_message(text).map_err(bad_request)?;
     let routed = get(org, project_slug, channel_id).await?;
     let (connection, owner) = connections::get(org, user, &routed.channel.connection_id).await?;
     let (call, peer) = send_call(&routed, &connection, recipient, &text).map_err(bad_request)?;
+    let scoped = super::connector::scoped(&connection, &call.operation, call.resource.clone(), false);
+    let scoped = connectors.iter().find(|grant| grant.connection == connection.id).and_then(|grant| grant.permissions.as_ref())
+        .map_or(scoped.clone(), |permissions| scoped.intersect(permissions));
+    let call = call.with_permissions(scoped).with_cell(cell_id);
     let body = connections::call_ok(org, &connection, &owner, call).await?;
     let external_id = sent_id(connection.provider, &body).map_err(bad_gateway)?;
     let id = record(NewMessage {
@@ -526,6 +520,7 @@ pub struct Inbound {
 
 /// signal-cli-rest-api's `GET /v1/receive/{number}`: an array of envelopes;
 /// only data messages with text count.
+#[cfg(test)]
 fn parse_signal(body: &[u8]) -> Result<Vec<Inbound>, String> {
     let json: Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
     let envelopes = json.as_array().ok_or("the bridge's answer is not a list")?;
@@ -562,32 +557,8 @@ async fn pull_signal(
     project_slug: &str,
     channel_id: &str,
 ) -> Result<usize, ServerFnError> {
-    let routed = get(org, project_slug, channel_id).await?;
-    let (connection, owner) = connections::get(org, user, &routed.channel.connection_id).await?;
-    let body = connections::call_ok(
-        org,
-        &connection,
-        &owner,
-        ProviderCall {
-            action: "read",
-            method: "GET",
-            url: format!(
-                "{}/v1/receive/{}",
-                connection.base_url,
-                routed.external_id.replace('+', "%2B")
-            ),
-            headers: vec![("accept", "application/json")],
-            body: None,
-        },
-    )
-    .await?;
-    let mut recorded = 0;
-    for m in parse_signal(&body).map_err(bad_gateway)? {
-        if record_inbound(&routed.channel.id, &m).await? {
-            recorded += 1;
-        }
-    }
-    Ok(recorded)
+    let _ = (org, user, project_slug, channel_id);
+    Err(bad_request("Signal history is unsupported by the native broker; use inbound delivery instead"))
 }
 
 /// Pull a Signal channel by id, as its connection's owner — for the
@@ -1000,6 +971,7 @@ mod tests {
     #[test]
     fn sends_are_writes_under_base_url() {
         let connection = |provider: Provider, base: &str| Connection {
+            permissions: None,
             id: "c".into(),
             provider,
             label: "l".into(),
@@ -1030,8 +1002,9 @@ mod tests {
             "hi",
         )
         .unwrap();
-        assert_eq!(call.url, "https://slack.com/api/chat.postMessage");
-        assert_eq!(call.action, "write");
+        assert_eq!(call.resource, ["C1"]);
+        assert_eq!(call.operation, "messages.send");
+        assert_eq!(call.payload, json!({"text":"hi"}));
         assert_eq!(peer, "C1");
         let (call, peer) = send_call(
             &routed("106", None),
@@ -1040,7 +1013,7 @@ mod tests {
             "hi",
         )
         .unwrap();
-        assert_eq!(call.url, "https://graph.facebook.com/v21.0/106/messages");
+        assert_eq!(call.resource, ["106", "33612345678"]);
         assert_eq!(peer, "33612345678");
         let (call, peer) = send_call(
             &routed("+33600000000", None),
@@ -1049,9 +1022,9 @@ mod tests {
             "hi",
         )
         .unwrap();
-        assert_eq!(call.url, "https://signal.example.com/v2/send");
+        assert_eq!(call.resource, ["+33600000000", "+33611111111"]);
         assert_eq!(peer, "+33611111111");
-        assert!(call.body.unwrap().contains("\"number\":\"+33600000000\""));
+        assert_eq!(call.payload, json!({"text":"hi"}));
         assert!(send_call(
             &routed("106", None),
             &connection(Provider::Whatsapp, "https://graph.facebook.com/v21.0"),

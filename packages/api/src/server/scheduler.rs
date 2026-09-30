@@ -209,7 +209,15 @@ async fn check(d: Due) {
         return;
     }
     let started = Instant::now();
-    let called = lun::call_function(&d.build_id, &function, &json!(url)).await;
+    let ctx = match background_ctx(&d.graph_id).await {
+        Ok(ctx) => ctx,
+        Err(e) => return audit(&d, None, false, &e, false).await,
+    };
+    let execution = match graphs::source_execution(&ctx, &function).await {
+        Ok(execution) => execution,
+        Err(e) => return audit(&d, None, false, &e, false).await,
+    };
+    let called = lun::call_function(&d.build_id, &function, &json!(url), &execution).await;
     let latency = Some(started.elapsed());
     let value = match called {
         Ok(Ok(value)) => value,

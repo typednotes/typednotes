@@ -1,6 +1,12 @@
 # Users and connections — the cross-service contract
 
-**Status:** implemented · **Last updated:** 2026-09-29
+The rich `Eff` native migration, trusted policy namespaces, revocation history,
+verified callers and coordinated deployment requirements are specified in
+[App/native connector integration](native-connectors.md). Generic provider HTTP
+is unconditionally denied by the current broker; the legacy HTTP examples below
+describe the previous contract and must not be used as a fallback.
+
+**Status:** implemented · **Last updated:** 2026-09-30
 
 This document is the single contract that the app (`core` + `web`), `secrets`, `liaison`,
 `ledger` and `typednotes-infra` implement for:
@@ -206,6 +212,20 @@ broker with `microsoft_oauth` support before connecting Microsoft accounts.
 
 These additions manage accounts, store credentials and test provider access through liaison.
 They do not introduce automatic mailbox/calendar synchronization or new notebook cell types.
+
+### 3.5 Expanded AI providers
+
+`0006_ai_providers.sql` expands the provider check constraint to the shared AI
+catalog in `packages/api/src/ai.rs`. Each account retains its own provider id,
+credential base URL and warrant capability. Compatible endpoints use bearer keys;
+Messages/Gemini providers carry their required authentication/version headers in
+the vault credential. No deployment key is returned to a client.
+
+See [`ai-providers.md`](ai-providers.md) for all named providers, environment names,
+Scaleway project endpoints, native protocols, classifier calls and pricing units.
+The updated writer accepts generative provider warrants and routes Messages,
+Chat Completions, Responses, Gemini and Radius Pi messages. TypeSafe classifiers
+use the budgeted `/systemone` call rather than the code-writing model selector.
 
 ## 4. `secrets`
 

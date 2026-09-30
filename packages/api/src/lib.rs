@@ -39,11 +39,20 @@ use server::{channels, connections, db, errors, graphs, members, projects, sessi
 mod model;
 pub use model::*;
 
+mod ai;
+pub use ai::*;
+
 mod validate;
 pub use validate::*;
 
 mod computation;
 pub use computation::*;
+
+mod notebook;
+pub use notebook::*;
+
+mod permissions;
+pub use permissions::*;
 
 // ── Server functions ────────────────────────────────────────────────────
 
@@ -174,11 +183,23 @@ pub async fn set_org_settings(
     db::set_org_settings(&org, auto_repairs).await
 }
 
+#[post("/api/org/settings/permissions")]
+pub async fn set_notebook_permissions(slug: String, policy: EffectPolicy) -> Result<OrgSettings, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    db::set_effect_policy(&org, &policy).await
+}
+
 /// The org's connections, newest first.
 #[post("/api/connections")]
 pub async fn list_connections(slug: String) -> Result<Vec<Connection>, ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     connections::list(&org, &user).await
+}
+
+#[post("/api/connections/permissions")]
+pub async fn set_connection_permissions(slug: String, connection_id: String, permissions: ConnectorPermissions) -> Result<Connection, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    connections::set_permissions(&org, &user, &connection_id, &permissions).await
 }
 
 /// Connect an S3-compatible bucket with an access key.
@@ -213,7 +234,7 @@ pub async fn connect_s3(
             provider: Provider::S3,
             label: &form.bucket,
             base_url: &form.base_url,
-            external_id: None,
+            external_id: Some(&form.bucket),
         },
         credential,
     )
@@ -238,15 +259,15 @@ pub async fn connect_azure(
             provider: Provider::Azure,
             label: &label,
             base_url: &form.base_url,
-            external_id: None,
+            external_id: Some(&form.container),
         },
         server::vault::azure_sas(&form.base_url, &form.sas),
     )
     .await
 }
 
-/// Connect an AI account with an API token. `base_url` is used only for
-/// `OpenaiCompatible`.
+/// Connect an AI account. An empty URL uses the provider's documented default;
+/// an explicit URL supports regional/project endpoints and private deployments.
 #[post("/api/connections/ai")]
 pub async fn connect_ai(
     slug: String,
@@ -258,30 +279,24 @@ pub async fn connect_ai(
     if !provider.is_ai() {
         return Err(errors::bad_request("not an AI provider"));
     }
-    let key = validate_api_key(&api_key).map_err(errors::bad_request)?;
-    let base_url = match provider.fixed_base_url() {
-        Some(fixed) => fixed.to_string(),
-        None => validate_base_url(&base_url, true).map_err(errors::bad_request)?,
+    let key = if api_key.trim().is_empty() {
+        server::ai::environment_key(&org, provider).ok_or_else(|| {
+            errors::bad_request("no org-scoped environment key is available; paste an API key")
+        })?
+    } else {
+        api_key
     };
-    let (label, credential) = match provider {
-        Provider::Anthropic => (
-            provider.name().to_string(),
-            server::vault::header(
-                &base_url,
-                "x-api-key",
-                &key,
-                &[("anthropic-version", "2023-06-01")],
-            ),
-        ),
-        Provider::OpenaiCompatible => {
-            let host = base_url.split("://").nth(1).unwrap_or(&base_url);
-            (host.to_string(), server::vault::bearer(&base_url, &key))
-        }
-        _ => (
-            provider.name().to_string(),
-            server::vault::bearer(&base_url, &key),
-        ),
+    let key = validate_api_key(&key).map_err(errors::bad_request)?;
+    let base_url = if base_url.trim().is_empty() {
+        provider
+            .fixed_base_url()
+            .ok_or_else(|| errors::bad_request("enter an API base URL"))?
+            .to_string()
+    } else {
+        validate_base_url(&base_url, true).map_err(errors::bad_request)?
     };
+    let label = provider.name().to_string();
+    let credential = server::vault::ai(provider, &base_url, &key);
     connections::store(
         &org,
         &user,
@@ -294,6 +309,41 @@ pub async fn connect_ai(
         credential,
     )
     .await
+}
+
+/// Only reports availability, never values. Deployment keys are importable by
+/// admins of the explicitly configured TYPEDNOTES_AI_ENV_ORG only.
+#[post("/api/connections/ai/environment")]
+pub async fn ai_environment(slug: String) -> Result<Vec<Provider>, ServerFnError> {
+    let (_, org) = member_org(&slug).await?;
+    Ok(Provider::AI
+        .iter()
+        .copied()
+        .filter(|p| server::ai::environment_key(&org, *p).is_some())
+        .collect())
+}
+
+#[post("/api/ai/pricing")]
+pub async fn ai_token_pricing(
+    provider: Provider,
+    model: String,
+) -> Result<TokenPricing, ServerFnError> {
+    session::require_user().await?;
+    if !provider.is_ai() || model.len() > 256 {
+        return Err(errors::bad_request("invalid AI provider or model"));
+    }
+    Ok(server::ai::pricing(provider, model.trim()).await)
+}
+
+/// TypeSafe's typed classifier API, through the org's connection and broker.
+#[post("/api/ai/classify")]
+pub async fn classify_with_ai(
+    slug: String,
+    connection_id: String,
+    request: serde_json::Value,
+) -> Result<serde_json::Value, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    server::ai::classify(&org, &user, &connection_id, request).await
 }
 
 /// Connect a Notion internal integration or personal access token. Access is

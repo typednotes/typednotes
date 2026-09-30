@@ -204,13 +204,6 @@ impl From<GitlabProject> for Repo {
     }
 }
 
-fn github_headers() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("accept", "application/vnd.github+json"),
-        ("user-agent", "typednotes"),
-    ]
-}
-
 /// Parse a repository listing (or, with `one`, a single repository).
 fn parse_repos(provider: Provider, body: &[u8]) -> Result<Vec<Repo>, String> {
     let unreadable = |e: serde_json::Error| format!("unreadable repository list: {e}");
@@ -225,6 +218,7 @@ fn parse_repos(provider: Provider, body: &[u8]) -> Result<Vec<Repo>, String> {
     }
 }
 
+#[cfg(test)]
 fn parse_repo(provider: Provider, body: &[u8]) -> Result<Repo, String> {
     let unreadable = |e: serde_json::Error| format!("unreadable repository: {e}");
     match provider {
@@ -240,6 +234,7 @@ fn parse_repo(provider: Provider, body: &[u8]) -> Result<Repo, String> {
 
 /// The URL of one repository on the connection's API. GitLab takes the
 /// whole path as one URL-encoded segment.
+#[cfg(test)]
 fn repo_url(provider: Provider, base_url: &str, full_name: &str) -> String {
     match provider {
         Provider::Gitlab => format!("{base_url}/projects/{}", full_name.replace('/', "%2F")),
@@ -268,28 +263,7 @@ pub async fn list_repos(
     connection_id: &str,
 ) -> Result<Vec<Repo>, ServerFnError> {
     let (connection, owner) = code_connection(org, user, connection_id).await?;
-    let request = match connection.provider {
-        Provider::Github => ProviderCall {
-            action: "read",
-            method: "GET",
-            url: format!(
-                "{}/user/repos?per_page=100&sort=updated",
-                connection.base_url
-            ),
-            headers: github_headers(),
-            body: None,
-        },
-        _ => ProviderCall {
-            action: "read",
-            method: "GET",
-            url: format!(
-                "{}/projects?membership=true&per_page=100&order_by=last_activity_at",
-                connection.base_url
-            ),
-            headers: vec![("accept", "application/json")],
-            body: None,
-        },
-    };
+    let request = ProviderCall::new("repositories.list", Vec::new(), serde_json::json!({}));
     let body = connections::call_ok(org, &connection, &owner, request).await?;
     parse_repos(connection.provider, &body).map_err(bad_gateway)
 }
@@ -307,24 +281,13 @@ pub async fn set_repo(
     let (project, _) = get(org, project_slug).await?;
     let (connection, owner) = code_connection(org, user, connection_id).await?;
     let full_name = validate_repo_name(connection.provider, full_name).map_err(bad_request)?;
-    let headers = match connection.provider {
-        Provider::Github => github_headers(),
-        _ => vec![("accept", "application/json")],
-    };
-    let body = connections::call_ok(
-        org,
-        &connection,
-        &owner,
-        ProviderCall {
-            action: "read",
-            method: "GET",
-            url: repo_url(connection.provider, &connection.base_url, &full_name),
-            headers,
-            body: None,
-        },
-    )
-    .await?;
-    let repo = parse_repo(connection.provider, &body).map_err(bad_gateway)?;
+    if full_name.split('/').count() != 2 {
+        return Err(bad_request("nested GitLab namespaces require a native repository-selector adapter"));
+    }
+    let _ = owner;
+    let repo = list_repos(org, user, connection_id).await?.into_iter()
+        .find(|repo| repo.full_name == full_name)
+        .ok_or_else(|| bad_request("the repository is not in the connection's native inventory"))?;
     sqlx::query(
         "update projects set repo_connection_id = $2::uuid, repo_provider = $3, \
          repo_full_name = $4, repo_web_url = $5, repo_default_branch = $6 where id = $1::uuid",

@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::{AssertSqlSafe, Row};
 
-use super::{config, db, vault};
+use super::{config, vault};
 
 /// The schema and role name for (org, user): `{org_slug}_{user_id}`, dashes
 /// to underscores. Postgres truncates identifiers at 63 bytes, so a longer
@@ -128,6 +128,19 @@ fn target() -> Result<(String, String), String> {
     Ok((format!("{host}:{port}"), database.to_string()))
 }
 
+/// Non-secret compilation target. The API key/password and administrative URL
+/// credentials are never part of this value or a writer/model request.
+pub fn public_target(schema: &str) -> Result<serde_json::Value, String> {
+    if !is_safe_ident(schema) { return Err("invalid bound compute schema".into()); }
+    let (base, database) = target()?;
+    let (host, port) = base.rsplit_once(':').ok_or("invalid compute host/port")?;
+    let port: u16 = port.parse().map_err(|_| "invalid compute port")?;
+    if port == 0 || !host.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '.') {
+        return Err("the runtime requires a plain compute hostname and port".into());
+    }
+    Ok(json!({"host": host, "port": port, "database": database, "user": schema, "schema": schema}))
+}
+
 /// The vault path (under `secret/data/`) of (org, user)'s compute credential.
 pub fn credential_path(org_id: &str, user_id: &str) -> String {
     format!("compute/{org_id}/{user_id}")
@@ -135,17 +148,21 @@ pub fn credential_path(org_id: &str, user_id: &str) -> String {
 
 /// Make sure (org, user) has its schema and role; their name.
 pub async fn ensure(org_id: &str, org_slug: &str, user_id: &str) -> Result<String, String> {
-    let app = db::pool().map_err(|e| super::errors::message(&e))?;
+    let mut app = super::connector::lock(org_id).await.map_err(|e| super::errors::message(&e))?;
     if let Some(row) = sqlx::query(
         "select name from compute_schemas where org_id = $1::uuid and user_id = $2::uuid",
     )
     .bind(org_id)
     .bind(user_id)
-    .fetch_optional(app)
+    .fetch_optional(&mut *app)
     .await
     .map_err(|e| format!("database error: {e}"))?
     {
-        return Ok(row.get("name"));
+        let name: String = row.get("name");
+        if name != role_name(org_slug, org_id, user_id) || !is_safe_ident(&name) {
+            return Err("stored compute schema does not match its organization/user binding".into());
+        }
+        return Ok(name);
     }
     let name = role_name(org_slug, org_id, user_id);
     if !is_safe_ident(&name) {
@@ -200,10 +217,27 @@ pub async fn ensure(org_id: &str, org_slug: &str, user_id: &str) -> Result<Strin
     .bind(org_id)
     .bind(user_id)
     .bind(&name)
-    .execute(app)
+    .execute(&mut *app)
     .await
     .map_err(|e| format!("database error: {e}"))?;
+    app.commit().await.map_err(|_| "could not commit the compute binding")?;
     Ok(name)
+}
+
+/// The conventional database sink stores one JSON value column. Provisioning
+/// is trusted app DDL, separate from the runtime's operation-scoped query API.
+pub async fn ensure_sink_table(org_id: &str, org_slug: &str, user_id: &str, table: &str) -> Result<String, String> {
+    if !is_safe_ident(table) { return Err("invalid database sink table identifier".into()); }
+    let schema = ensure(org_id, org_slug, user_id).await?;
+    let _guard = super::connector::lock(org_id).await.map_err(|e| super::errors::message(&e))?;
+    let mut tx = pool()?.begin().await.map_err(|_| "compute database unavailable")?;
+    for statement in [format!("grant \"{schema}\" to current_user"), format!("set local role \"{schema}\""),
+        format!("create table if not exists \"{schema}\".\"{table}\" (value jsonb not null)"),
+        "reset role".into(), format!("revoke \"{schema}\" from current_user")] {
+        sqlx::query(AssertSqlSafe(statement)).execute(&mut *tx).await.map_err(|_| "could not provision the bound database sink table")?;
+    }
+    tx.commit().await.map_err(|_| "could not commit database sink provisioning")?;
+    Ok(schema)
 }
 
 /// Drop a compute schema, the data in it, and its role — when the org is

@@ -40,15 +40,19 @@
 .navbar-logo {
   display: block;
   flex-shrink: 0;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 2rem;
+  height: 2rem;
 }
 
-.navbar-logo-dark { display: none; }
-
-@media (prefers-color-scheme: dark) {
-  .navbar-logo-light { display: none; }
-  .navbar-logo-dark { display: block; }
+.navbar-logo-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 999px;
+  background-color: var(--app-accent-soft);
+  border: 1px solid var(--app-accent-ring);
 }
 
 @media (max-width: 640px) {

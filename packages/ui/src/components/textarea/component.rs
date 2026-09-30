@@ -46,16 +46,23 @@ pub fn Textarea(
     onpaste: Option<EventHandler<ClipboardEvent>>,
     onmounted: Option<EventHandler<MountedEvent>>,
     #[props(default)] variant: TextareaVariant,
+    #[props(default)] value: String,
     #[props(extends=GlobalAttributes)]
     #[props(extends=textarea)]
     attributes: Vec<Attribute>,
-    children: Element,
 ) -> Element {
+    // Textareas are raw-text elements: a dynamic children slot renders a
+    // hydration comment as literal input text, and HTML's value attribute does
+    // not initialize them. Seed escaped text for SSR, then let the controlled
+    // value property handle updates. Keep the seed stable to preserve selection.
+    let initial_text = use_hook(|| value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;"));
     rsx! {
         textarea {
             class: Styles::dx_textarea,
             "data-slot": "textarea",
             "data-style": variant.class(),
+            value,
+            dangerous_inner_html: initial_text,
             oninput: move |e| _ = oninput.map(|callback| callback(e)),
             onchange: move |e| _ = onchange.map(|callback| callback(e)),
             oninvalid: move |e| _ = oninvalid.map(|callback| callback(e)),
@@ -76,7 +83,6 @@ pub fn Textarea(
             onpaste: move |e| _ = onpaste.map(|callback| callback(e)),
             onmounted: move |e| _ = onmounted.map(|callback| callback(e)),
             ..attributes,
-            {children}
         }
     }
 }

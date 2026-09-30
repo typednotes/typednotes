@@ -1,8 +1,10 @@
 use api::{
-    aws_s3_endpoint, connect_ai, connect_azure, connect_caldav, connect_jmap, connect_notion,
-    connect_s3, delete_connection, health, list_connections, test_connection, validate_api_key,
-    validate_azure, validate_base_url, validate_caldav, validate_jmap, validate_name, validate_s3,
-    Connection, Health, Provider, TestResult,
+    ai_environment, aws_s3_endpoint, connect_ai, connect_azure, connect_caldav, connect_jmap,
+    connect_notion, connect_s3, delete_connection, health, list_connections, test_connection,
+    validate_api_key, validate_azure, validate_base_url, validate_caldav, validate_jmap,
+    validate_name, validate_s3, Connection, Health, Provider, TestResult,
+    connector_operations, connector_scope_label, set_connection_permissions,
+    ConnectorPermissions, ConnectorScope, PermissionPreset,
 };
 use dioxus::prelude::*;
 
@@ -11,6 +13,7 @@ use crate::components::card::{Card, CardContent, CardDescription, CardHeader, Ca
 use crate::components::input::Input;
 use crate::components::label::Label;
 use crate::components::select::{Select, SelectOption};
+use crate::components::textarea::Textarea;
 use crate::error_message;
 use crate::navigate_to;
 
@@ -148,6 +151,219 @@ fn ConnectionRow(slug: String, connection: Connection, on_changed: EventHandler<
                     }
                 }
             }
+            ConnectionPermissions { key: "{connection.permissions:?}", slug: slug.clone(), connection: connection.clone(), on_changed }
+            if connection.provider == Provider::TypeSafe {
+                ClassifierForm { slug: slug.clone(), connection_id: connection.id.clone() }
+            }
+        }
+    }
+}
+
+/// Shared policy editor. `None` is inheritance, never an unrestricted grant.
+/// A cell's presets intersect its ceiling; execution still validates authority.
+#[component]
+pub(crate) fn PermissionEditor(
+    id: String,
+    provider: Provider,
+    value: Option<ConnectorPermissions>,
+    ceiling: Option<ConnectorPermissions>,
+    on_change: EventHandler<Option<ConnectorPermissions>>,
+    #[props(default = true)] allow_inherit: bool,
+    #[props(default = false)] disabled: bool,
+) -> Element {
+    let displayed = value.clone().or_else(|| ceiling.clone()).unwrap_or_else(|| ConnectorPermissions::preset(provider, PermissionPreset::ReadOnly));
+    let preset = |preset| {
+        let requested = ConnectorPermissions::preset(provider, preset);
+        ceiling.as_ref().map_or(requested.clone(), |limit| limit.intersect(&requested))
+    };
+    let read = preset(PermissionPreset::ReadOnly);
+    let write = preset(PermissionPreset::ReadWrite);
+    let common_root = displayed.scopes.first().map(|s| s.root.clone())
+        .filter(|root| displayed.scopes.iter().all(|s| &s.root == root));
+    let mixed_resources = !displayed.scopes.is_empty() && common_root.is_none();
+    rsx! {
+        div { class: "permission-editor",
+            div { class: "conn-actions",
+                if allow_inherit {
+                    Button { r#type: "button", size: ButtonSize::Sm, disabled, aria_pressed: value.is_none().to_string(),
+                        variant: if value.is_none() { ButtonVariant::Secondary } else { ButtonVariant::Outline },
+                        onclick: move |_| on_change.call(None), "Inherit permissions" }
+                }
+                Button { r#type: "button", size: ButtonSize::Sm, disabled, aria_pressed: (value.as_ref() == Some(&read)).to_string(),
+                    variant: if value.as_ref() == Some(&read) { ButtonVariant::Secondary } else { ButtonVariant::Outline },
+                    onclick: { let read = read.clone(); move |_| on_change.call(Some(read.clone())) }, "Read only" }
+                Button { r#type: "button", size: ButtonSize::Sm, disabled, aria_pressed: (value.as_ref() == Some(&write)).to_string(),
+                    variant: if value.as_ref() == Some(&write) { ButtonVariant::Secondary } else { ButtonVariant::Outline },
+                    onclick: { let write = write.clone(); move |_| on_change.call(Some(write.clone())) }, "Read and write" }
+            }
+            p { class: "conn-meta",
+                if value.is_none() { "Uses the connection ceiling and organization policy. Unset connections default to read only." }
+                else { "Read and write excludes delete, share, invite and send. An empty operation list denies access." }
+            }
+            div { class: "orgs-field permission-boundary",
+                Label { html_for: "{id}-boundary", "Resource boundary (optional)" }
+                Input { id: "{id}-boundary", disabled: disabled || mixed_resources,
+                    value: common_root.unwrap_or_default().join("/"),
+                    placeholder: match provider {
+                        Provider::S3 | Provider::Azure => "reports/2026",
+                        Provider::Github | Provider::Gitlab => "owner/repository",
+                        Provider::GoogleCalendar | Provider::MicrosoftCalendar | Provider::Caldav => "primary",
+                        Provider::Gdrive | Provider::Dropbox => "folder ID or folder/path",
+                        Provider::Gmail | Provider::Outlook | Provider::Jmap => "mailbox or label ID",
+                        Provider::Slack | Provider::Whatsapp | Provider::Signal => "channel or recipient ID",
+                        Provider::Notion => "page or database ID",
+                        _ => "model ID",
+                    },
+                    oninput: { let displayed = displayed.clone(); move |event: FormEvent| {
+                        let mut next = displayed.clone();
+                        let root = if event.value().is_empty() { Vec::new() } else { event.value().split('/').map(str::to_string).collect() };
+                        for scope in &mut next.scopes { scope.root = root.clone(); }
+                        on_change.call(Some(next));
+                    } }
+                }
+                p { class: "conn-meta",
+                    if mixed_resources { "Several resource boundaries are set. Edit them separately in Advanced." }
+                    else { "Applies to all selected operations. Leave empty to use the connection's base resource; it never grants access beyond that credential. Advanced can give each operation different resources." }
+                }
+            }
+            if let Some(limit) = &ceiling {
+                if let Err(message) = limit.narrow(&displayed) {
+                    p { class: "orgs-error", role: "alert", "{message}. Choose a resource inside the inherited boundary." }
+                }
+            }
+            details { class: "permission-advanced",
+                summary { "Advanced operations and resources" }
+                p { class: "conn-meta", "Requested policy grants; the broker checks operation support, scopes and credentials when a call runs." }
+                div { class: "conn-actions",
+                    for operation in connector_operations(provider) {
+                        Button { r#type: "button", size: ButtonSize::Sm, disabled: disabled || (ceiling.as_ref().is_some_and(|c| !c.scopes.iter().any(|s| s.operation == operation.id)) && !displayed.scopes.iter().any(|s| s.operation == operation.id)),
+                            aria_pressed: displayed.scopes.iter().any(|s| s.operation == operation.id).to_string(),
+                            variant: if displayed.scopes.iter().any(|s| s.operation == operation.id) { ButtonVariant::Secondary } else { ButtonVariant::Outline },
+                            onclick: {
+                                let mut next = displayed.clone();
+                                let ceiling = ceiling.clone();
+                                move |_| {
+                                    if next.scopes.iter().any(|s| s.operation == operation.id) { next.scopes.retain(|s| s.operation != operation.id); }
+                                    else if let Some(limit) = &ceiling {
+                                        next.scopes.extend(limit.scopes.iter().filter(|s| s.operation == operation.id).cloned());
+                                    } else { next.scopes.push(ConnectorScope { operation: operation.id.into(), root: Vec::new(), descendants: true }); }
+                                    on_change.call(Some(next.clone()));
+                                }
+                            }, "{operation.label}" }
+                    }
+                }
+                p { class: "conn-meta", "{connector_scope_label(provider)}. Separate resource levels with /; an empty root means the credential's base resource. Scopes match whole components, not text prefixes." }
+                for (index, grant) in displayed.scopes.iter().enumerate() {
+                    div { class: "permission-grant", key: "{index}-{grant.operation}",
+                        div { class: "orgs-field",
+                            Label { html_for: "{id}-scope-{index}", "{grant.operation} resource" }
+                            Input { id: "{id}-scope-{index}", disabled, value: grant.root.join("/"), placeholder: "reports/2026",
+                                oninput: { let mut next = displayed.clone(); move |event: FormEvent| {
+                                    next.scopes[index].root = if event.value().is_empty() { Vec::new() } else { event.value().split('/').map(str::to_string).collect() };
+                                    on_change.call(Some(next.clone()));
+                                } } }
+                        }
+                        Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Outline, disabled,
+                            aria_pressed: grant.descendants.to_string(),
+                            onclick: { let mut next = displayed.clone(); move |_| { next.scopes[index].descendants = !next.scopes[index].descendants; on_change.call(Some(next.clone())); } },
+                            if grant.descendants { "Include descendants" } else { "Exact resource only" } }
+                        Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Ghost, disabled,
+                            aria_label: "Add another resource for {grant.operation}",
+                            onclick: { let mut next = displayed.clone(); move |_| { next.scopes.push(next.scopes[index].clone()); on_change.call(Some(next.clone())); } }, "Add resource" }
+                        Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Ghost, disabled,
+                            aria_label: "Remove {grant.operation} resource {index + 1}",
+                            onclick: { let mut next = displayed.clone(); move |_| { next.scopes.remove(index); on_change.call(Some(next.clone())); } }, "Remove grant" }
+                    }
+                }
+                div { class: "conn-grid",
+                    div { class: "orgs-field",
+                        Label { html_for: "{id}-request", "Maximum request bytes" }
+                        Input { id: "{id}-request", r#type: "number", min: "1", max: "67108864", disabled, value: "{displayed.max_request_bytes}",
+                            oninput: { let mut next = displayed.clone(); move |event: FormEvent| { if let Ok(bytes) = event.value().parse() { next.max_request_bytes = bytes; on_change.call(Some(next.clone())); } } } }
+                    }
+                    div { class: "orgs-field",
+                        Label { html_for: "{id}-response", "Maximum response bytes" }
+                        Input { id: "{id}-response", r#type: "number", min: "1", max: "67108864", disabled, value: "{displayed.max_response_bytes}",
+                            oninput: { let mut next = displayed.clone(); move |event: FormEvent| { if let Ok(bytes) = event.value().parse() { next.max_response_bytes = bytes; on_change.call(Some(next.clone())); } } } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ConnectionPermissions(slug: String, connection: Connection, on_changed: EventHandler<()>) -> Element {
+    let mut permissions = use_signal(|| connection.permissions.clone().unwrap_or_else(|| ConnectorPermissions::preset(connection.provider, PermissionPreset::ReadOnly)));
+    let mut busy = use_signal(|| false);
+    let mut outcome = use_signal(|| None::<Result<String, String>>);
+    rsx! {
+        details { class: "connection-permissions",
+            summary { "Connection permissions" }
+            p { class: "conn-meta", "Base resource: " code { "{connection.base_url}" } ". Bucket, container and calendar-collection credentials keep this boundary automatically. OAuth scopes may further limit operations." }
+            PermissionEditor { id: "connection-{connection.id}", provider: connection.provider, value: Some(permissions()), ceiling: None,
+                allow_inherit: false, disabled: !connection.can_remove || busy(),
+                on_change: move |value: Option<ConnectorPermissions>| { if let Some(value) = value { permissions.set(value); } } }
+            if connection.can_remove {
+                Button { size: ButtonSize::Sm, disabled: busy(), onclick: move |_| {
+                    let (slug, id) = (slug.clone(), connection.id.clone());
+                    async move {
+                        busy.set(true);
+                        match set_connection_permissions(slug, id, permissions()).await {
+                            Ok(_) => { outcome.set(Some(Ok("Connection permissions saved.".into()))); on_changed.call(()); }
+                            Err(error) => outcome.set(Some(Err(error_message(&error)))),
+                        }
+                        busy.set(false);
+                    }
+                }, "Save connection permissions" }
+            } else { p { class: "conn-meta", "Only the creator or an organization admin can change this ceiling." } }
+            match outcome() {
+                Some(Ok(message)) => rsx! { p { class: "conn-result ok", role: "status", "{message}" } },
+                Some(Err(message)) => rsx! { p { class: "orgs-error", role: "alert", "{message}" } },
+                None => rsx! {},
+            }
+        }
+    }
+}
+
+#[component]
+fn ClassifierForm(slug: String, connection_id: String) -> Element {
+    let mut state = use_signal(String::new);
+    let mut question = use_signal(|| "Does this convey urgency?".to_string());
+    let mut answer = use_signal(|| None::<String>);
+    let mut error = use_signal(|| None::<String>);
+    let mut busy = use_signal(|| false);
+    let evaluate = move |_| {
+        let (slug, id) = (slug.clone(), connection_id.clone());
+        async move {
+            busy.set(true);
+            error.set(None);
+            let request = serde_json::json!({"model":"jev-latest","state":state(),
+                "questions":{"answer":{"type":"noul","instructions":question()}}});
+            match api::classify_with_ai(slug, id, request).await {
+                Ok(value) => answer.set(Some(
+                    serde_json::to_string_pretty(&value).unwrap_or_default(),
+                )),
+                Err(e) => error.set(Some(error_message(&e))),
+            }
+            busy.set(false);
+        }
+    };
+    rsx! {
+        div { class: "conn-subform",
+            h4 { "Typed classification" }
+            div { class: "orgs-field",
+                Label { html_for: "classifier-state", "Text / state to evaluate" }
+                Textarea { id: "classifier-state", value: state(), oninput: move |e: FormEvent| state.set(e.value()) }
+            }
+            div { class: "orgs-field",
+                Label { html_for: "classifier-question", "Yes/no question" }
+                Input { id: "classifier-question", value: question(), oninput: move |e: FormEvent| question.set(e.value()) }
+            }
+            p { class: "conn-meta", "Jev's published rate is $0.042 per million input tokens; output tokens are free. Evaluations also use Typednotes model-call credits." }
+            Button { variant: ButtonVariant::Outline, disabled: busy() || state().trim().is_empty() || question().trim().is_empty(), onclick: evaluate, "Evaluate question" }
+            if let Some(value) = answer() { pre { "{value}" } }
+            if let Some(message) = error() { p { class: "orgs-error", "{message}" } }
         }
     }
 }
@@ -696,19 +912,30 @@ fn AzureForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Elemen
 
 #[component]
 fn AiForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
-    let mut provider = use_signal(|| Provider::AI[0]);
+    let mut provider = use_signal(|| Provider::Anthropic);
     let mut base_url = use_signal(String::new);
     let mut key = use_signal(String::new);
+    let mut price_model = use_signal(|| "claude-sonnet-4-5".to_string());
+    let env_slug = slug.clone();
+    let environment = use_server_future(move || ai_environment(env_slug.clone()))?;
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
+    let key_name = provider().ai_info().map(|p| p.env).unwrap_or("API_KEY");
 
     let submit = move |evt: FormEvent| {
         let slug = slug.clone();
         async move {
             evt.prevent_default();
             let p = provider();
-            let checked = validate_api_key(&key()).and_then(|_| {
-                if p == Provider::OpenaiCompatible {
+            let checked = if key().trim().is_empty()
+                && environment().is_some_and(|v| v.is_ok_and(|ps| ps.contains(&p)))
+            {
+                Ok(String::new())
+            } else {
+                validate_api_key(&key())
+            };
+            let checked = checked.and_then(|_| {
+                if !base_url().trim().is_empty() || p.fixed_base_url().is_none() {
                     validate_base_url(&base_url(), true).map(|_| ())
                 } else {
                     Ok(())
@@ -737,34 +964,48 @@ fn AiForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
             ProviderSelect {
                 options: Provider::AI.to_vec(),
                 value: provider(),
-                on_change: move |p| provider.set(p),
+                on_change: move |p| {
+                    provider.set(p); key.set(String::new()); base_url.set(String::new());
+                    price_model.set(p.ai_info().and_then(|i| i.default_model).unwrap_or("").to_string());
+                },
                 label: "AI provider",
             }
             div { class: "conn-grid",
-                if provider() == Provider::OpenaiCompatible {
                     div { class: "orgs-field",
-                        Label { html_for: "ai-base-url", "Base URL" }
+                        Label { html_for: "ai-base-url", "Base URL (optional override)" }
                         Input {
                             id: "ai-base-url",
-                            placeholder: "https://api.scaleway.ai/v1",
+                            placeholder: provider().fixed_base_url().unwrap_or("https://api.example.com/v1"),
                             value: base_url(),
                             oninput: move |e: FormEvent| base_url.set(e.value()),
                         }
                     }
-                } else if let Some(fixed) = provider().fixed_base_url() {
-                    p { class: "conn-meta", "Calls go to " code { "{fixed}" } }
-                }
                 div { class: "orgs-field",
-                    Label { html_for: "ai-key", "API key" }
+                    Label { html_for: "ai-key", "API key / {key_name}" }
                     Input {
                         id: "ai-key",
                         r#type: "password",
                         autocomplete: "off",
+                        placeholder: provider().ai_info().map(|p| p.env).unwrap_or("API key"),
                         value: key(),
                         oninput: move |e: FormEvent| key.set(e.value()),
                     }
                 }
             }
+            if environment().is_some_and(|v| v.is_ok_and(|ps| ps.contains(&provider()))) {
+                p { class: "conn-meta", "Leave the key empty to import the org-scoped deployment environment key." }
+            }
+            if provider() == Provider::Scaleway {
+                p { class: "conn-meta", "Uses SCW_SECRET_KEY. For a non-default project, insert your project UUID between api.scaleway.ai/ and /v1. Dedicated Generative APIs and private NIM deployments may use their own endpoint." }
+            }
+            if provider() == Provider::TypeSafe {
+                p { class: "conn-meta", "Typed classifier models use /systemone. This connection evaluates questions; it is not a code-writing model." }
+            }
+            div { class: "orgs-field",
+                Label { html_for: "ai-price-model", "Model for token pricing" }
+                Input { id: "ai-price-model", value: price_model(), placeholder: "Exact provider model ID", oninput: move |e: FormEvent| price_model.set(e.value()) }
+            }
+            crate::ai_cost::ModelCost { provider: provider(), model: price_model() }
             Button { r#type: "submit", disabled: disabled || busy(), "Connect {provider().name()}" }
             if let Some(message) = error() {
                 p { class: "orgs-error", "{message}" }

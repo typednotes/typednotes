@@ -169,13 +169,20 @@ pub async fn call_function(
     build: &str,
     name: &str,
     input: &Value,
+    execution: &Value,
 ) -> Result<Result<Value, String>, String> {
     let path = format!("/v0/builds/{}/functions/{}", segment(build), segment(name));
+    let mut body = execution.clone();
+    let fields = body.as_object_mut().ok_or("execution context must be an object")?;
+    if !fields.contains_key("binding") || !fields.contains_key("policy") {
+        return Err("authenticated runtime policy and binding are required".into());
+    }
+    fields.insert("input".into(), input.clone());
     let a = rpc::call(
         &service()?,
         Method::POST,
         &path,
-        Some(&json!({ "input": input })),
+        Some(&body),
         Duration::from_secs(90),
     )
     .await

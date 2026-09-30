@@ -5,7 +5,7 @@
 pub mod components;
 
 mod navbar;
-pub use navbar::{Logo, Navbar};
+pub use navbar::{Logo, Navbar, BRAND_LOGO};
 
 mod auth;
 pub use auth::{LoginPanel, UserMenu};
@@ -59,3 +59,4 @@ pub(crate) fn error_message(e: &ServerFnError) -> String {
         other => other.to_string(),
     }
 }
+mod ai_cost;

@@ -9,12 +9,12 @@ use sqlx::Row;
 use super::db::pool;
 use super::errors::{bad_gateway, db_error, forbidden, not_found, unavailable};
 use super::liaison::{self, Call, Outcome, Request};
-use super::{vault, warrant};
+use super::{connector, vault};
 use crate::{Connection, Org, Provider, TestResult, User};
 
 macro_rules! connection_columns {
     () => {
-        "c.id::text as id, c.provider, c.label, c.base_url, c.external_id, c.status, c.last_error, \
+         "c.id::text as id, c.provider, c.label, c.base_url, c.external_id, c.status, c.last_error, c.permissions::text as permissions, \
          c.user_id::text as user_id, u.email::text as owner_email, \
          to_char(c.created_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI \"UTC\"') as created_at, \
          to_char(c.last_checked_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI \"UTC\"') as last_checked_at"
@@ -30,6 +30,7 @@ fn connection_of(row: &PgRow, org: &Org, user: &User) -> Connection {
     let provider: String = row.get("provider");
     let owner_id: String = row.get("user_id");
     Connection {
+        permissions: row.get::<Option<String>, _>("permissions").map(|s| serde_json::from_str(&s).unwrap_or(crate::ConnectorPermissions { scopes: Vec::new(), max_request_bytes: 1, max_response_bytes: 1 })),
         id: row.get("id"),
         // The check constraint lists exactly `Provider::ALL`.
         provider: Provider::from_id(&provider).unwrap_or(Provider::OpenaiCompatible),
@@ -43,6 +44,29 @@ fn connection_of(row: &PgRow, org: &Org, user: &User) -> Connection {
         last_error: row.get("last_error"),
         can_remove: can_remove(org, user, &owner_id),
     }
+}
+
+/// A separate non-secret vault document lets the write-only app update policy
+/// without retrieving or rewriting a connection's API key.
+pub async fn set_permissions(org: &Org, user: &User, id: &str, permissions: &crate::ConnectorPermissions) -> Result<Connection, ServerFnError> {
+    let (connection, owner) = get(org, user, id).await?;
+    if !connection.can_remove { return Err(forbidden("only the connection's creator or an org admin can change its permissions")); }
+    let permissions = permissions.validate(connection.provider).map_err(super::errors::bad_request)?;
+    let mut tx = connector::lock(&org.id).await?;
+    // Close the mandatory live gate before any distributed update. If either
+    // vault or SQL fails, old warrants remain denied, never partially widened.
+    connector::publish_ceiling(&org.id, connection.provider.id(), id, &crate::ConnectorPermissions::deny_all()).await?;
+    connector::revoke(&mut tx, &org.id, Some(id)).await?;
+    let path = format!("{}/permissions", vault::credential_path(connection.provider, &owner, id));
+    vault::write(&path, &serde_json::to_value(&permissions).map_err(|_| super::errors::bad_request("invalid permissions"))?)
+        .await.map_err(|_| bad_gateway("could not store the connection permissions"))?;
+    sqlx::query("update connections set permissions = $2::jsonb where id = $1::uuid")
+        .bind(id).bind(serde_json::to_string(&permissions).map_err(|_| super::errors::bad_request("invalid permissions"))?)
+        .execute(&mut *tx).await.map_err(db_error)?;
+    let organization = connector::ceiling(&connector::policy(&mut tx, &org.id).await?, &connection, &permissions);
+    connector::publish_ceiling(&org.id, connection.provider.id(), id, &organization).await?;
+    tx.commit().await.map_err(db_error)?;
+    Ok(get(org, user, id).await?.0)
 }
 
 pub async fn list(org: &Org, user: &User) -> Result<Vec<Connection>, ServerFnError> {
@@ -131,11 +155,26 @@ pub async fn store(
             "could not store the credential in the vault: {e}"
         )));
     }
-    sqlx::query("update connections set status = 'active' where id = $1::uuid")
+    let permissions = crate::ConnectorPermissions::preset(new.provider, crate::PermissionPreset::ReadOnly);
+    let path = vault::credential_path(new.provider, &user.id, &id);
+    if let Err(e) = vault::write(&format!("{path}/permissions"), &serde_json::json!(permissions)).await {
+        let _ = vault::delete(&path).await;
+        let _ = sqlx::query("delete from connections where id = $1::uuid").bind(&id).execute(pool).await;
+        return Err(bad_gateway(format!("could not provision connection permissions: {e}")));
+    }
+    let mut tx = connector::lock(&org.id).await?;
+    let policy = connector::policy(&mut tx, &org.id).await?;
+    let organization = if policy.effects.iter().any(|e| e == "Connector") && policy.allows_provider(new.provider) {
+        policy.connector_ceilings.get(new.provider.id()).cloned().unwrap_or_else(|| permissions.clone())
+    } else { crate::ConnectorPermissions::deny_all() };
+    connector::publish_ceiling(&org.id, new.provider.id(), &id, &organization).await?;
+    sqlx::query("update connections set status = 'active', permissions = $2::jsonb where id = $1::uuid")
         .bind(&id)
-        .execute(pool)
+        .bind(serde_json::json!(permissions).to_string())
+        .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
     Ok(get(org, user, &id).await?.0)
 }
 
@@ -149,6 +188,9 @@ pub async fn remove(org: &Org, user: &User, id: &str) -> Result<(), ServerFnErro
             "only its creator or an org admin can remove this connection",
         ));
     }
+    let mut tx = connector::lock(&org.id).await?;
+    connector::publish_ceiling(&org.id, connection.provider.id(), id, &crate::ConnectorPermissions::deny_all()).await?;
+    connector::revoke(&mut tx, &org.id, Some(id)).await?;
     vault::delete(&vault::credential_path(connection.provider, &owner, id))
         .await
         .map_err(|e| {
@@ -157,115 +199,60 @@ pub async fn remove(org: &Org, user: &User, id: &str) -> Result<(), ServerFnErro
         })?;
     sqlx::query("delete from connections where id = $1::uuid")
         .bind(id)
-        .execute(pool()?)
+        .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    vault::delete(&format!("{}/permissions", vault::credential_path(connection.provider, &owner, id)))
+        .await.map_err(|_| bad_gateway("could not delete connection permissions"))?;
+    tx.commit().await.map_err(db_error)?;
     Ok(())
 }
 
 /// One call through liaison on a connection's credential.
-pub struct ProviderCall<'a> {
-    /// `read`, or `write` for calls that change something (sending a message).
-    pub action: &'a str,
-    pub method: &'a str,
-    pub url: String,
-    pub headers: Vec<(&'a str, &'a str)>,
-    pub body: Option<String>,
+pub struct ProviderCall {
+    pub operation: String,
+    pub resource: Vec<String>,
+    pub payload: Value,
+    pub permissions: Option<crate::ConnectorPermissions>,
+    pub cell_id: Option<String>,
 }
 
-/// The cheap read-only call that proves a connection works (§7).
-fn probe(c: &Connection) -> ProviderCall<'static> {
-    let get = |url: String, headers: Vec<(&'static str, &'static str)>| ProviderCall {
-        action: "read",
-        method: "GET",
-        url,
-        headers,
-        body: None,
-    };
-    let json = vec![("accept", "application/json")];
-    match c.provider {
-        Provider::Github => get(
-            "https://api.github.com/user".to_string(),
-            vec![
-                ("accept", "application/vnd.github+json"),
-                ("user-agent", "typednotes"),
-            ],
-        ),
-        Provider::Gitlab => get(format!("{}/user", c.base_url), json),
-        Provider::Gdrive => get(
-            "https://www.googleapis.com/drive/v3/about?fields=user".to_string(),
-            json,
-        ),
-        Provider::GoogleCalendar => get(
-            format!(
-                "{}/calendar/v3/users/me/calendarList?maxResults=1",
-                c.base_url
-            ),
-            json,
-        ),
-        Provider::MicrosoftCalendar => get(
-            format!("{}/me/calendars?$top=1&$select=id,name", c.base_url),
-            json,
-        ),
-        Provider::Gmail => get(format!("{}/gmail/v1/users/me/profile", c.base_url), json),
-        Provider::Outlook => get(
-            format!(
-                "{}/me/mailFolders/inbox?$select=id,displayName,totalItemCount",
-                c.base_url
-            ),
-            json,
-        ),
-        Provider::Notion => get(format!("{}/users/me", c.base_url), json),
-        Provider::Jmap => get(
-            c.external_id
-                .clone()
-                .unwrap_or_else(|| format!("{}/.well-known/jmap", c.base_url)),
-            json,
-        ),
-        Provider::Caldav => ProviderCall {
-            action: "read",
-            method: "PROPFIND",
-            url: format!("{}/", c.base_url),
-            headers: vec![
-                ("content-type", "application/xml; charset=utf-8"),
-                ("depth", "1"),
-            ],
-            body: Some(
-                concat!(
-                    "<?xml version=\"1.0\" encoding=\"utf-8\"?>",
-                    "<d:propfind xmlns:d=\"DAV:\" xmlns:c=\"urn:ietf:params:xml:ns:caldav\">",
-                    "<d:prop><d:displayname/><d:resourcetype/><c:calendar-home-set/></d:prop>",
-                    "</d:propfind>"
-                )
-                .to_string(),
-            ),
-        },
-        Provider::Dropbox => ProviderCall {
-            action: "read",
-            method: "POST",
-            url: format!("{}/2/users/get_current_account", c.base_url),
-            headers: vec![("content-type", "application/json")],
-            body: Some("null".to_string()),
-        },
-        Provider::S3 => get(format!("{}?list-type=2&max-keys=1", c.base_url), vec![]),
-        Provider::Azure => get(
-            format!("{}?restype=container&comp=list&maxresults=1", c.base_url),
-            vec![],
-        ),
-        Provider::Slack => get(format!("{}/auth.test", c.base_url), json),
-        Provider::Whatsapp => get(
-            format!(
-                "{}/{}?fields=display_phone_number,verified_name",
-                c.base_url,
-                c.external_id.as_deref().unwrap_or("me")
-            ),
-            json,
-        ),
-        Provider::Signal => get(format!("{}/v1/accounts", c.base_url), json),
-        Provider::Mistral | Provider::Openai | Provider::Anthropic | Provider::OpenaiCompatible => {
-            get(format!("{}/models", c.base_url), json)
-        }
+impl ProviderCall {
+    pub fn new(operation: &str, resource: Vec<String>, payload: Value) -> Self {
+        Self { operation: operation.into(), resource, payload, permissions: None, cell_id: None }
     }
+    pub fn with_permissions(mut self, permissions: crate::ConnectorPermissions) -> Self {
+        self.permissions = Some(permissions);
+        self
+    }
+    pub fn with_cell(mut self, cell_id: Option<&str>) -> Self {
+        self.cell_id = cell_id.map(str::to_string);
+        self
+    }
+}
+
+/// A probe consumes an existing read grant. Send-only providers are never tested
+/// by sending an unsolicited message or by restoring their unsupported inventory.
+fn probe(c: &Connection) -> Result<ProviderCall, String> {
+    let permissions = c.permissions.clone().unwrap_or_else(|| crate::ConnectorPermissions::preset(c.provider, crate::PermissionPreset::ReadOnly));
+    let (operation, root) = match c.provider {
+        p if p.is_ai() => ("models.list", Vec::new()),
+        Provider::Github | Provider::Gitlab => ("repositories.list", Vec::new()),
+        Provider::S3 | Provider::Azure => ("objects.list", Vec::new()),
+        Provider::Gdrive => ("files.list", vec!["root".into()]),
+        Provider::Dropbox => ("files.list", Vec::new()),
+        Provider::GoogleCalendar | Provider::MicrosoftCalendar | Provider::Caldav => ("calendars.list", Vec::new()),
+        Provider::Gmail | Provider::Outlook => ("mailboxes.list", vec!["me".into()]),
+        Provider::Slack => ("channels.list", Vec::new()),
+        Provider::Notion => ("pages.read", Vec::new()),
+        Provider::Jmap => ("mailboxes.list", Vec::new()),
+        Provider::Signal | Provider::Whatsapp => return Err("this provider supports sending only; no read-only broker probe is available".into()),
+        _ => return Err("no supported native probe".into()),
+    };
+    let resource = if permissions.permits(operation, &root) && !matches!(c.provider, Provider::Notion | Provider::Jmap) { root }
+        else { permissions.scopes.iter().find(|scope| scope.operation == operation && !scope.root.is_empty())
+            .map(|scope| scope.root.clone()).ok_or("configure a resource-scoped read permission to test this connection")? };
+    Ok(ProviderCall::new(operation, resource, serde_json::json!({})))
 }
 
 /// Slack answers `200` with `{"ok": false, "error": …}` on failure.
@@ -297,9 +284,14 @@ fn describe(c: &Connection, body: &[u8]) -> Result<String, String> {
             .map(str::to_string)
     };
     let described = match c.provider {
-        Provider::Github => field("/login").map(|l| format!("signed in to GitHub as @{l}")),
-        Provider::Gitlab => field("/username").map(|l| format!("signed in to GitLab as @{l}")),
-        Provider::Gdrive => field("/user/emailAddress").map(|e| format!("Google Drive of {e}")),
+        Provider::Github | Provider::Gitlab => {
+            let count = json.as_ref().and_then(Value::as_array).ok_or("the provider returned no repository inventory")?.len();
+            Some(format!("{count} repositories visible"))
+        },
+        Provider::Gdrive => {
+            let count = json.as_ref().and_then(|j| j.get("files")).and_then(Value::as_array).ok_or("Google returned no file inventory")?.len();
+            Some(format!("{count} files visible"))
+        },
         Provider::GoogleCalendar => {
             if json
                 .as_ref()
@@ -321,21 +313,16 @@ fn describe(c: &Connection, body: &[u8]) -> Result<String, String> {
             }
             Some("Microsoft calendars are readable".to_string())
         }
-        Provider::Gmail => Some(format!(
-            "Gmail of {}",
-            field("/emailAddress").ok_or("Gmail returned no mailbox profile")?
-        )),
-        Provider::Outlook => Some(format!(
-            "Outlook folder {}",
-            field("/displayName").ok_or("Outlook returned no mailbox folder")?
-        )),
+        Provider::Gmail | Provider::Outlook => {
+            let key = if c.provider == Provider::Gmail { "labels" } else { "value" };
+            let count = json.as_ref().and_then(|j| j.get(key)).and_then(Value::as_array).ok_or("the provider returned no mailbox inventory")?.len();
+            Some(format!("{count} mailboxes visible"))
+        },
         Provider::Notion => {
-            if field("/object").as_deref() != Some("user") || field("/id").is_none() {
-                return Err("Notion returned no token identity".to_string());
+            if field("/object").as_deref() != Some("page") || field("/id").is_none() {
+                return Err("Notion returned no selected page".to_string());
             }
-            field("/bot/workspace_name")
-                .map(|name| format!("connected to Notion workspace {name}"))
-                .or_else(|| field("/name").map(|name| format!("connected to Notion as {name}")))
+            Some("selected Notion page is readable".into())
         }
         Provider::Jmap => {
             let session = json.as_ref().ok_or("the server returned no JMAP session")?;
@@ -365,14 +352,18 @@ fn describe(c: &Connection, body: &[u8]) -> Result<String, String> {
             )
         }
         Provider::Caldav => unreachable!("CalDAV was described above"),
-        Provider::Dropbox => field("/email").map(|e| format!("Dropbox of {e}")),
+        Provider::Dropbox => {
+            let count = json.as_ref().and_then(|j| j.get("entries")).and_then(Value::as_array).ok_or("Dropbox returned no folder inventory")?.len();
+            Some(format!("{count} files visible"))
+        },
         Provider::S3 => Some("bucket listed".to_string()),
         Provider::Azure => Some("container listed".to_string()),
         Provider::Slack => {
             if let Some(error) = slack_error(body) {
                 return Err(format!("Slack refused: {error}"));
             }
-            field("/team").map(|t| format!("installed in the {t} workspace"))
+            let count = json.as_ref().and_then(|j| j.get("channels")).and_then(Value::as_array).ok_or("Slack returned no channel inventory")?.len();
+            Some(format!("{count} channels visible"))
         }
         Provider::Whatsapp => {
             field("/display_phone_number").map(|n| match field("/verified_name") {
@@ -391,12 +382,20 @@ fn describe(c: &Connection, body: &[u8]) -> Result<String, String> {
             }
             Some(format!("the bridge sends as {number}"))
         }
-        Provider::Mistral | Provider::Openai | Provider::Anthropic | Provider::OpenaiCompatible => {
-            json.as_ref()
-                .and_then(|j| j.get("data"))
+        p if p.is_ai() => {
+            let json = json.as_ref().ok_or("the provider returned no JSON model catalog")?;
+            if json.get("error").is_some_and(|e| !e.is_null()) {
+                return Err("the provider returned an error instead of a model catalog".into());
+            }
+            let models = json
+                .get("data")
+                .or_else(|| json.get("models"))
+                .or_else(|| (p == Provider::TypeSafe).then_some(json))
                 .and_then(Value::as_array)
-                .map(|models| format!("{} models available", models.len()))
+                .ok_or("the provider returned no model catalog")?;
+            Some(format!("{} models available", models.len()))
         }
+        _ => unreachable!("all connection providers have a description"),
     };
     Ok(described.unwrap_or_else(|| "the provider answered".to_string()))
 }
@@ -469,22 +468,47 @@ pub async fn call(
     org: &Org,
     connection: &Connection,
     owner: &str,
-    request: ProviderCall<'_>,
+    request: ProviderCall,
+) -> Result<Outcome, ServerFnError> {
+    call_with_cost(org, connection, owner, request, 0).await
+}
+
+/// Budgeted inference uses the same confinement and broker as read-only probes.
+pub async fn call_with_cost(
+    org: &Org,
+    connection: &Connection,
+    owner: &str,
+    request: ProviderCall,
+    cost: u64,
 ) -> Result<Outcome, ServerFnError> {
     if !liaison::configured() {
         return Err(unavailable(
             "calls to providers are disabled: the credential broker is not configured",
         ));
     }
-    let root = warrant::root_key().map_err(unavailable)?;
+    if !crate::ConnectorPermissions::valid_resource(&request.resource) || !request.payload.is_object() {
+        return Err(super::errors::bad_request("invalid native connector resource or payload"));
+    }
+    let parent = connection.permissions.clone().unwrap_or_else(|| crate::ConnectorPermissions::preset(connection.provider, crate::PermissionPreset::ReadOnly));
+    let requested = match request.permissions {
+        Some(permissions) => parent.narrow(&permissions.validate(connection.provider).map_err(super::errors::bad_request)?).map_err(forbidden)?,
+        None => parent,
+    };
+    if !requested.permits(&request.operation, &request.resource) {
+        return Err(forbidden("the connection does not permit this native resource"));
+    }
     let provider = connection.provider.id();
-    let grant =
-        warrant::for_connection(&root, &org.id, provider, request.action, &connection.id, 0);
+    let minted = connector::mint_for_cell(org, connection, owner, &request.operation, &requested, cost, request.cell_id.as_deref()).await?;
+    if !minted.cell.permits(&request.operation, &request.resource)
+        || request.payload.to_string().len() as u64 > minted.cell.max_request_bytes {
+        return Err(forbidden("the live organization ceiling does not permit this native call"));
+    }
+    let grant = minted.grant;
     let r = Request {
         now: grant.now,
-        cost: 0,
+        cost,
         provider,
-        action: request.action,
+        action: &request.operation,
         resource: &connection.id,
         run_id: &grant.run_id,
         org_id: &org.id,
@@ -492,10 +516,9 @@ pub async fn call(
     let minted = grant.warrant;
     let c = Call {
         account: format!("{owner}/{}", connection.id),
-        method: request.method,
-        url: request.url,
-        headers: request.headers,
-        body: request.body,
+        operation: request.operation.clone(),
+        resource: request.resource,
+        payload: request.payload.to_string(),
     };
     liaison::egress(&minted, &r, &c).await.map_err(|e| {
         eprintln!(
@@ -511,7 +534,7 @@ pub async fn call_ok(
     org: &Org,
     connection: &Connection,
     owner: &str,
-    request: ProviderCall<'_>,
+    request: ProviderCall,
 ) -> Result<Vec<u8>, ServerFnError> {
     match call(org, connection, owner, request).await? {
         Outcome::Upstream { status, body } if (200..300).contains(&status) => Ok(body),
@@ -533,7 +556,8 @@ pub fn snippet(body: &[u8]) -> String {
 /// Test a connection end to end with its probe, and record the outcome.
 pub async fn test(org: &Org, user: &User, id: &str) -> Result<TestResult, ServerFnError> {
     let (connection, owner) = get(org, user, id).await?;
-    let result = match call(org, &connection, &owner, probe(&connection)).await? {
+    let request = probe(&connection).map_err(super::errors::bad_request)?;
+    let result = match call(org, &connection, &owner, request).await? {
         Outcome::Upstream { status, body } if (200..300).contains(&status) => {
             match describe(&connection, &body) {
                 Ok(message) => TestResult { ok: true, message },
@@ -573,6 +597,7 @@ mod tests {
 
     fn connection(provider: Provider, base_url: &str) -> Connection {
         Connection {
+            permissions: None,
             id: "c".into(),
             provider,
             label: "l".into(),
@@ -592,20 +617,19 @@ mod tests {
     }
 
     #[test]
-    fn probes_stay_under_base_url() {
-        for p in Provider::ALL {
+    fn probes_are_native_read_operations_and_send_only_providers_have_none() {
+        for &p in Provider::ALL {
             let base = p
                 .fixed_base_url()
                 .unwrap_or("https://storage.example.com/bucket");
             let call = probe(&connection(p, base));
-            assert!(call.url.starts_with(base), "{} is outside {base}", call.url);
-            let rest = &call.url[base.len()..];
-            assert!(
-                rest.starts_with('/') || rest.starts_with('?'),
-                "{}",
-                call.url
-            );
-            assert_eq!(call.action, "read");
+            if matches!(p, Provider::Signal | Provider::Whatsapp | Provider::Notion | Provider::Jmap) {
+                assert!(call.is_err());
+                continue;
+            }
+            let call = call.unwrap();
+            assert!(crate::connector_operations(p).iter().any(|op| op.id == call.operation && !op.write));
+            assert_eq!(call.payload, serde_json::json!({}));
         }
     }
 
@@ -613,20 +637,17 @@ mod tests {
     fn describes_answers() {
         let c = |p| connection(p, "https://x");
         assert_eq!(
-            describe(&c(Provider::Github), br#"{"login":"octo"}"#).unwrap(),
-            "signed in to GitHub as @octo"
+            describe(&c(Provider::Github), br#"[{"full_name":"octo/hello"}]"#).unwrap(),
+            "1 repositories visible"
         );
         assert_eq!(
             describe(&c(Provider::Mistral), br#"{"data":[{},{}]}"#).unwrap(),
             "2 models available"
         );
+        assert!(describe(&c(Provider::Gdrive), b"nope").is_err());
         assert_eq!(
-            describe(&c(Provider::Gdrive), b"nope").unwrap(),
-            "the provider answered"
-        );
-        assert_eq!(
-            describe(&c(Provider::Slack), br#"{"ok":true,"team":"Acme"}"#).unwrap(),
-            "installed in the Acme workspace"
+            describe(&c(Provider::Slack), br#"{"ok":true,"channels":[]}"#).unwrap(),
+            "0 channels visible"
         );
         assert!(describe(
             &c(Provider::Slack),
@@ -653,24 +674,47 @@ mod tests {
             ),
             (
                 Provider::Gmail,
-                br#"{"emailAddress":"me@example.com"}"#.as_slice(),
-                "Gmail of me@example.com",
+                br#"{"labels":[]}"#.as_slice(),
+                "0 mailboxes visible",
             ),
             (
                 Provider::Outlook,
-                br#"{"id":"inbox","displayName":"Inbox"}"#.as_slice(),
-                "Outlook folder Inbox",
+                br#"{"value":[]}"#.as_slice(),
+                "0 mailboxes visible",
             ),
             (
                 Provider::Notion,
-                br#"{"object":"user","id":"bot","bot":{"workspace_name":"Acme"}}"#.as_slice(),
-                "connected to Notion workspace Acme",
+                br#"{"object":"page","id":"page"}"#.as_slice(),
+                "selected Notion page is readable",
             ),
         ] {
             let c = connection(provider, provider.fixed_base_url().unwrap());
             assert_eq!(describe(&c, body).unwrap(), expected);
             assert!(describe(&c, b"<html>Sign in</html>").is_err());
             assert!(describe(&c, br#"{"error":"unauthorized"}"#).is_err());
+        }
+    }
+
+    #[test]
+    fn ai_probes_require_a_model_catalog_not_an_error_or_login_page() {
+        for &p in Provider::AI {
+            let c = connection(p, "https://x/v1");
+            for body in [
+                b"<html>Sign in</html>".as_slice(),
+                br#"{"error":"unauthorized"}"#,
+                br#"{"error":{"message":"denied"},"data":[]}"#,
+                br#"{"ok":true}"#,
+            ] {
+                assert!(describe(&c, body).is_err(), "{p:?} accepted {body:?}");
+            }
+            let body = if p == Provider::Radius {
+                br#"{"baseUrl":"https://radius.pi.dev/v1","models":[]}"#.as_slice()
+            } else if p == Provider::TypeSafe {
+                br#"[{"id":"jev-latest"}]"#.as_slice()
+            } else {
+                br#"{"data":[]}"#.as_slice()
+            };
+            assert!(describe(&c, body).is_ok(), "{p:?} rejected its model catalog");
         }
     }
 
@@ -730,11 +774,9 @@ mod tests {
         assert!(describe_caldav(b"<html>Login</html>").is_err());
         assert!(describe_caldav(br#"<d:multistatus xmlns:d="DAV:"/>"#).is_err());
         let c = connection(Provider::Caldav, "https://cloud.example.com/calendars/me");
-        let call = probe(&c);
-        assert_eq!(call.method, "PROPFIND");
-        assert_eq!(call.url, "https://cloud.example.com/calendars/me/");
-        assert!(call.headers.contains(&("depth", "1")));
-        roxmltree::Document::parse(call.body.as_deref().unwrap()).unwrap();
+        let call = probe(&c).unwrap();
+        assert_eq!(call.operation, "calendars.list");
+        assert!(call.resource.is_empty());
     }
 
     #[test]

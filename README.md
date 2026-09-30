@@ -55,6 +55,15 @@ Dockerfile            `dx bundle` → the `web` server binary + `public/`
 
 ## Develop
 
+The expanded AI provider catalog, environment-key setup and token-pricing UI are
+documented in [`docs/ai-providers.md`](docs/ai-providers.md). The shared shadowed
+`⊢` logo and configurable SVG/PNG generator are described in
+[`docs/branding.md`](docs/branding.md).
+Notebook declarations and permission setup are in
+[`docs/notebook-ui.md`](docs/notebook-ui.md); verified native contracts and
+coordinated deployment requirements are in
+[`docs/native-connectors.md`](docs/native-connectors.md).
+
 ```sh
 # a local Postgres, then the schema (the server never migrates itself)
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/typednotes
@@ -77,11 +86,11 @@ status line on the home page lists what is missing.
 | `SLACK_SIGNING_SECRET` | inbound Slack messages (Event Subscriptions request URL `…/hooks/slack`) |
 | `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` | inbound WhatsApp messages (Meta webhook `…/hooks/whatsapp`, field `messages`) |
 | `SECRETS_URL`, `SECRETS_PASSWORD` (`SECRETS_USERNAME`, default `typednotes-app`) | storing connections, in a `secrets-server` ≥ 1.3.0 that declares the `typednotes-app` identity (`SECRETS_SERVER_SERVICE_IDENTITIES`; `typednotes-infra` does). `/api/health` reports `vault: true` only once the app can log in |
-| `LIAISON_URL`, `LIAISON_ROOT_KEY` | provider calls through liaison ≥ 0.4.0 (same root key) |
+| `LIAISON_URL`, `LIAISON_ROOT_KEY` | native provider calls through liaison ≥ 0.6.0 (same root key and independent policy projections) |
 | `PUBLIC_URL` | overrides the origin used in OAuth redirect URIs (default: the request's forwarded host) |
 | `TYPEDNOTES_WELCOME_CREDITS` | credits granted to each new org (default 1000, `0` disables) |
-| `LODE_URL`, `LODE_TOKEN` | implementing notebooks (lode ≥ 0.2) |
-| `LUN_URL`, `LUN_TOKEN` | building and running them (lun ≥ 0.2) |
+| `LODE_URL`, `LODE_TOKEN` | implementing notebooks (lode ≥ 0.3.0) |
+| `LUN_URL`, `LUN_TOKEN` | building and running them (lun ≥ 0.3.0) |
 | `COMPUTE_DB_URL` | `db` sinks: an identity that may create roles and schemas on compute-db |
 | `TYPEDNOTES_SOURCE_CHECKS_PER_HOUR`, `TYPEDNOTES_ENDPOINT_CALLS_PER_MINUTE`, `TYPEDNOTES_MODEL_CALL_COST`, `TYPEDNOTES_STORAGE_WRITE_COST`, `TYPEDNOTES_AUTO_REPAIRS` | notebook caps and costs (defaults 120, 60, 10, 1, 2 — `docs/connections.md` §8) |
 
@@ -92,7 +101,7 @@ cron, cells, `lun.json`, SCRAM verifiers, renderers);
 `cargo check -p web --features web --target wasm32-unknown-unknown` check both halves.
 
 Calendar, webmail and Notion connections live in **Organization settings → Connections**.
-Apply `0005_productivity_connections.sql` first. Google/Microsoft connections request
+Apply the complete migration history through `0008_connector_authority.sql` first. Google/Microsoft connections request
 read-only access. CalDAV uses a calendar URL and app password; JMAP uses a session URL and
 mail-enabled API token; Notion uses an internal integration or personal access token.
 Provider setup, Gmail verification requirements and broker compatibility are documented in
@@ -112,6 +121,14 @@ To add a migration: add `migrations/NNNN_description.sql`, tag a release, then
 in `typednotes-infra` bump the app's release version and add the file to its
 history — one line. **Shipped migrations are append-only**: infra refuses a
 history whose applied prefix changed.
+
+The 0.6.0 release adds `0006_ai_providers.sql`, `0007_notebook_contracts.sql`
+and `0008_connector_authority.sql`. Apply them in order before the new app,
+with Liaison 0.6.0, Lode/Lun 0.3.0 and Linen 1.10.0. The deployment must grant
+the write-only app the new policy/projection namespaces and the runner the
+separate local-service read rights documented in
+[`docs/native-connectors.md`](docs/native-connectors.md#trusted-provisioning).
+Release pins and tags prepared locally are not a deployed environment.
 
 ## Deploy
 

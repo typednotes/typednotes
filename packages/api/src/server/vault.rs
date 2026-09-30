@@ -1,8 +1,8 @@
 //! The app's client for `typednotes/secrets` (docs/connections.md §4).
 //!
 //! The app logs in as the `typednotes-app` userpass identity, whose policy
-//! grants `create` and `delete` under `secret/data/thirdparty/` and nothing
-//! else — in particular not `read`: the app puts credentials into the vault
+//! grants credential create/delete plus policy create/update/delete under the
+//! trusted connector namespaces — in particular not `read`: the app puts credentials into the vault
 //! and can never take them out again. Only liaison reads them.
 //!
 //! Vault tokens last an hour; the token is cached and replaced five minutes
@@ -38,6 +38,7 @@ pub fn configured() -> bool {
 }
 
 static TOKEN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+static POLICY_READY: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// The last failed login and when, so a vault that refuses the app is not
 /// asked again (an Argon2 verification each time) on every page load.
@@ -59,7 +60,21 @@ pub async fn ready() -> Result<(), String> {
             return Err(error);
         }
     }
-    let result = token(&s).await.map(|_| ());
+    let result: Result<(), String> = async {
+        token(&s).await?;
+        let checked = *POLICY_READY.lock().expect("vault policy health lock");
+        if checked.is_some_and(|at| at.elapsed() < Duration::from_secs(60)) { return Ok(()); }
+        // Reserved health selectors never match a minted org/run/warrant. The
+        // documents grant nothing, and contain no credential or user data.
+        for path in ["connector-policy/_health/_health/_health", "connector-authority/_health/_health/_health",
+            "thirdparty/postgres/_health/compute/permissions", "thirdparty/vault/_health/_health/permissions"] {
+            write(path, &json!({"scopes": [], "maxRequestBytes": 1, "maxResponseBytes": 1})).await
+                .map_err(|_| "the vault must allow trusted connector policy create/update/delete without secret read access".to_string())?;
+            delete(path).await.map_err(|_| "the vault must allow connector policy revocation".to_string())?;
+        }
+        *POLICY_READY.lock().expect("vault policy health lock") = Some(Instant::now());
+        Ok(())
+    }.await;
     *LAST_FAILURE.lock().expect("vault failure lock") =
         result.as_ref().err().map(|e| (e.clone(), Instant::now()));
     result
@@ -166,6 +181,34 @@ pub async fn delete(path: &str) -> Result<(), String> {
 
 pub fn bearer(base_url: &str, token: &str) -> Value {
     json!({ "kind": "bearer", "base_url": base_url, "token": token })
+}
+
+pub fn ai(provider: Provider, base_url: &str, token: &str) -> Value {
+    use crate::AiApi;
+    if provider == Provider::Gemini {
+        return header(base_url, "x-goog-api-key", token, &[]);
+    }
+    if provider == Provider::Anthropic {
+        return header(
+            base_url,
+            "x-api-key",
+            token,
+            &[("anthropic-version", "2023-06-01")],
+        );
+    }
+    let mut value = bearer(base_url, token);
+    if provider.ai_info().is_some_and(|p| p.api == AiApi::Messages)
+        || matches!(provider, Provider::OpencodeZen | Provider::OpencodeGo)
+    {
+        value["headers"] = json!({"x-api-key": token, "anthropic-version": "2023-06-01"});
+    }
+    if provider == Provider::OpencodeZen {
+        value["headers"]["x-goog-api-key"] = Value::from(token);
+    }
+    if provider == Provider::GithubCopilot {
+        value["headers"] = json!({"anthropic-version":"2023-06-01"});
+    }
+    value
 }
 
 /// CalDAV app passwords use the broker's existing header credential kind.

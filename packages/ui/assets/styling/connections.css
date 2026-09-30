@@ -128,6 +128,20 @@
 
 .conn-meta { color: var(--app-muted); opacity: 1; }
 
+.permission-editor { display: flex; flex-direction: column; gap: .65rem; width: 100%; min-width: 0; }
+.permission-editor p { margin: 0; max-width: 76ch; }
+.permission-boundary { width: min(100%, 38rem); min-width: 0; }
+.permission-advanced, .connection-permissions, .cell-connections { width: 100%; min-width: 0; }
+.permission-advanced summary, .connection-permissions summary, .cell-connections summary, .provider-ceiling summary { cursor: pointer; padding: .5rem 0; }
+.permission-advanced[open] > :not(summary) { margin-top: .65rem; }
+.permission-grant { display: flex; flex-wrap: wrap; align-items: end; gap: .5rem; padding: .5rem 0; border-bottom: 1px solid var(--app-border); }
+.permission-grant > .orgs-field { flex: 1 1 14rem; min-width: 0; }
+.permission-editor .conn-grid > .orgs-field { flex: none; min-width: 0; }
+.cell-connection { padding: .6rem 0; border-bottom: 1px solid var(--app-border); }
+.cell-connection > .permission-editor { margin-top: .6rem; padding-left: .75rem; border-left: 2px solid var(--app-border); }
+.provider-ceiling { width: 100%; border-bottom: 1px solid var(--app-border); }
+.permission-editor button:focus-visible, .permission-editor summary:focus-visible, .cell-connections summary:focus-visible, .connection-permissions summary:focus-visible { outline: 2px solid var(--app-accent); outline-offset: 3px; }
+
 @media (max-width: 640px) {
   .conn-select,
   .conn-select-wide {

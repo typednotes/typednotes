@@ -28,3 +28,7 @@ rustc-ice-*.txt
 
 # macOS
 .DS_Store
+
+# On-demand artwork variants
+out/
+__pycache__/

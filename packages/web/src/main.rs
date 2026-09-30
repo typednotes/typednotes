@@ -34,7 +34,7 @@ enum Route {
     GraphView { slug: String, project: String, graph: String },
 }
 
-const FAVICON: Asset = asset!("/assets/favicon.ico");
+const FAVICON: Asset = ui::BRAND_LOGO;
 const MAIN_CSS: Asset = asset!("/assets/main.css");
 
 fn main() {

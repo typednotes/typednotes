@@ -84,6 +84,8 @@ pub fn may_manage(actor: &str, role: &str) -> bool {
 /// An org's settings, as its settings page shows them.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OrgSettings {
+    #[serde(default)]
+    pub effect_policy: crate::EffectPolicy,
     /// Rewrites of a notebook's code Typednotes may start by itself — after
     /// a failed build or a failing cell — before a member asks for one
     /// again. `None`: the deployment's default.
@@ -160,13 +162,47 @@ pub enum Provider {
     Openai,
     Anthropic,
     OpenaiCompatible,
+    AntLing,
+    Baseten,
+    Cerebras,
+    Deepseek,
+    Fireworks,
+    GithubCopilot,
+    Gemini,
+    Groq,
+    HuggingFace,
+    KimiCoding,
+    Meta,
+    Minimax,
+    MinimaxCn,
+    Moonshot,
+    MoonshotCn,
+    Nvidia,
+    OpencodeGo,
+    OpencodeZen,
+    Openrouter,
+    QwenTokenPlan,
+    QwenTokenPlanCn,
+    QwenTokenPlanIndividual,
+    Radius,
+    Scaleway,
+    Together,
+    TypeSafe,
+    VercelAiGateway,
+    Xiaomi,
+    XiaomiTokenPlanAms,
+    XiaomiTokenPlanCn,
+    XiaomiTokenPlanSgp,
+    ZaiCodingCn,
+    Zai,
+    Xai,
     Slack,
     Whatsapp,
     Signal,
 }
 
 impl Provider {
-    pub const ALL: [Provider; 20] = [
+    pub const ALL: &'static [Provider] = &[
         Provider::Github,
         Provider::Gitlab,
         Provider::Gdrive,
@@ -184,6 +220,40 @@ impl Provider {
         Provider::Openai,
         Provider::Anthropic,
         Provider::OpenaiCompatible,
+        Provider::AntLing,
+        Provider::Baseten,
+        Provider::Cerebras,
+        Provider::Deepseek,
+        Provider::Fireworks,
+        Provider::GithubCopilot,
+        Provider::Gemini,
+        Provider::Groq,
+        Provider::HuggingFace,
+        Provider::KimiCoding,
+        Provider::Meta,
+        Provider::Minimax,
+        Provider::MinimaxCn,
+        Provider::Moonshot,
+        Provider::MoonshotCn,
+        Provider::Nvidia,
+        Provider::OpencodeGo,
+        Provider::OpencodeZen,
+        Provider::Openrouter,
+        Provider::QwenTokenPlan,
+        Provider::QwenTokenPlanCn,
+        Provider::QwenTokenPlanIndividual,
+        Provider::Radius,
+        Provider::Scaleway,
+        Provider::Together,
+        Provider::TypeSafe,
+        Provider::VercelAiGateway,
+        Provider::Xiaomi,
+        Provider::XiaomiTokenPlanAms,
+        Provider::XiaomiTokenPlanCn,
+        Provider::XiaomiTokenPlanSgp,
+        Provider::ZaiCodingCn,
+        Provider::Zai,
+        Provider::Xai,
         Provider::Slack,
         Provider::Whatsapp,
         Provider::Signal,
@@ -201,11 +271,45 @@ impl Provider {
     ];
 
     /// The AI providers, connected with an API token, alphabetically by name.
-    pub const AI: [Provider; 4] = [
+    pub const AI: &'static [Provider] = &[
+        Provider::AntLing,
         Provider::Anthropic,
+        Provider::Baseten,
+        Provider::Cerebras,
+        Provider::Deepseek,
+        Provider::Fireworks,
+        Provider::GithubCopilot,
+        Provider::Gemini,
+        Provider::Groq,
+        Provider::HuggingFace,
+        Provider::KimiCoding,
+        Provider::Meta,
+        Provider::Minimax,
+        Provider::MinimaxCn,
         Provider::Mistral,
+        Provider::MoonshotCn,
+        Provider::Moonshot,
+        Provider::Nvidia,
         Provider::Openai,
         Provider::OpenaiCompatible,
+        Provider::OpencodeGo,
+        Provider::OpencodeZen,
+        Provider::Openrouter,
+        Provider::QwenTokenPlan,
+        Provider::QwenTokenPlanCn,
+        Provider::QwenTokenPlanIndividual,
+        Provider::Radius,
+        Provider::Scaleway,
+        Provider::Together,
+        Provider::TypeSafe,
+        Provider::VercelAiGateway,
+        Provider::Xai,
+        Provider::Xiaomi,
+        Provider::XiaomiTokenPlanAms,
+        Provider::XiaomiTokenPlanCn,
+        Provider::XiaomiTokenPlanSgp,
+        Provider::ZaiCodingCn,
+        Provider::Zai,
     ];
 
     /// Messaging: a project's interfaces.
@@ -222,6 +326,9 @@ impl Provider {
     pub const WORKSPACES: [Provider; 1] = [Provider::Notion];
 
     pub fn id(self) -> &'static str {
+        if let Some(p) = self.ai_info() {
+            return p.id;
+        }
         match self {
             Provider::Github => "github",
             Provider::Gitlab => "gitlab",
@@ -243,14 +350,18 @@ impl Provider {
             Provider::Slack => "slack",
             Provider::Whatsapp => "whatsapp",
             Provider::Signal => "signal",
+            _ => unreachable!("AI providers are described by the catalog"),
         }
     }
 
     pub fn from_id(id: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|p| p.id() == id)
+        Self::ALL.iter().copied().find(|p| p.id() == id)
     }
 
     pub fn name(self) -> &'static str {
+        if let Some(p) = self.ai_info() {
+            return p.name;
+        }
         match self {
             Provider::Github => "GitHub",
             Provider::Gitlab => "GitLab",
@@ -272,6 +383,7 @@ impl Provider {
             Provider::Slack => "Slack",
             Provider::Whatsapp => "WhatsApp",
             Provider::Signal => "Signal",
+            _ => unreachable!("AI providers are described by the catalog"),
         }
     }
 
@@ -279,6 +391,9 @@ impl Provider {
     /// the account (S3, Azure, Signal bridges and OpenAI-compatible endpoints
     /// are entered by the user).
     pub fn fixed_base_url(self) -> Option<&'static str> {
+        if let Some(p) = self.ai_info() {
+            return p.base_url;
+        }
         match self {
             Provider::Github => Some("https://api.github.com"),
             Provider::Gitlab => Some("https://gitlab.com/api/v4"),
@@ -301,6 +416,7 @@ impl Provider {
             | Provider::Signal
             | Provider::Caldav
             | Provider::Jmap => None,
+            _ => unreachable!("AI providers are described by the catalog"),
         }
     }
 
@@ -336,6 +452,9 @@ impl Provider {
 /// A connected account. Never carries its credential.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Connection {
+    /// The connection ceiling for typed notebook operations (never credentials).
+    #[serde(default)]
+    pub permissions: Option<crate::ConnectorPermissions>,
     pub id: String,
     pub provider: Provider,
     pub label: String,

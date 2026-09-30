@@ -54,8 +54,23 @@ pub async fn open(body: &Value) -> Result<String, String> {
 }
 
 /// `POST /v0/sessions/{id}/messages`: a run, or steering for the one going.
-pub async fn message(id: &str, text: &str, credentials: Value) -> Result<Reply<()>, String> {
-    let body = json!({ "text": text, "credentials": credentials });
+pub fn narrowing_tools(status: &Value, desired: &[String]) -> Result<Vec<String>, String> {
+    let tools = status.get("tools").and_then(Value::as_array).ok_or("writer status has no tool policy")?;
+    let mut current = Vec::new();
+    for value in tools {
+        let name = value.as_str().ok_or("invalid writer tool policy")?;
+        if !crate::WRITER_TOOLS.contains(&name) || current.iter().any(|tool| tool == name) {
+            return Err("unknown or duplicate writer tool policy".into());
+        }
+        current.push(name.to_string());
+    }
+    Ok(current.into_iter().filter(|tool| desired.contains(tool)).collect())
+}
+
+pub async fn message(id: &str, text: &str, credentials: Value, desired: &[String]) -> Result<Reply<()>, String> {
+    let status = match status(id).await? { Reply::Gone => return Ok(Reply::Gone), Reply::Ok(status) => status };
+    let tools = narrowing_tools(&status, desired)?;
+    let body = json!({ "text": text, "credentials": credentials, "tools": tools });
     let path = format!("/v0/sessions/{}/messages", segment(id));
     let a = rpc::quick(&service()?, Method::POST, &path, Some(&body))
         .await
@@ -68,7 +83,8 @@ pub async fn message(id: &str, text: &str, credentials: Value) -> Result<Reply<(
 }
 
 /// `PUT /v0/sessions/{id}/credentials`: fresh warrants for a run in flight.
-pub async fn refresh(id: &str, credentials: Value) -> Result<Reply<()>, String> {
+pub async fn refresh(id: &str, credentials: Value, desired: &[String]) -> Result<Reply<()>, String> {
+    if matches!(narrow(id, desired).await?, Reply::Gone) { return Ok(Reply::Gone); }
     let path = format!("/v0/sessions/{}/credentials", segment(id));
     let a = rpc::quick(&service()?, Method::PUT, &path, Some(&credentials))
         .await
@@ -78,6 +94,17 @@ pub async fn refresh(id: &str, credentials: Value) -> Result<Reply<()>, String> 
         s if (200..300).contains(&s) => Ok(Reply::Ok(())),
         _ => Err(fail("the credentials", &a)),
     }
+}
+
+/// Tool changes belong on messages. PUT credentials stays credentials-only;
+/// asking for a larger organization list cannot restore removed session tools.
+pub async fn narrow(id: &str, desired: &[String]) -> Result<Reply<()>, String> {
+    let status = match status(id).await? { Reply::Gone => return Ok(Reply::Gone), Reply::Ok(status) => status };
+    let tools = narrowing_tools(&status, desired)?;
+    if status.get("tools") == Some(&json!(tools)) { return Ok(Reply::Ok(())); }
+    let body = json!({"text": "Organization writer permissions narrowed. Continue within the allowed tools.", "tools": tools});
+    let answer = rpc::quick(&service()?, Method::POST, &format!("/v0/sessions/{}/messages", segment(id)), Some(&body)).await?;
+    match answer.status { 404 => Ok(Reply::Gone), 200..=299 => Ok(Reply::Ok(())), _ => Err(fail("tool narrowing", &answer)) }
 }
 
 /// `GET /v0/sessions/{id}`.
@@ -275,6 +302,13 @@ pub fn summarise(e: &Value) -> Option<LodeEntry> {
         kind: kind.to_string(),
         text,
         detail,
+        model: e.get("model").and_then(Value::as_str).map(str::to_string),
+        usage: e.get("usage").map(|u| crate::TokenUsage {
+            input: u.get("input").and_then(Value::as_u64).unwrap_or(0),
+            output: u.get("output").and_then(Value::as_u64).unwrap_or(0),
+            cache_read: u.get("cacheRead").and_then(Value::as_u64).unwrap_or(0),
+            cache_write: u.get("cacheWrite").and_then(Value::as_u64).unwrap_or(0),
+        }),
     })
 }
 
@@ -323,6 +357,14 @@ fn entry_detail(e: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn caller_tool_policy_only_attenuates_the_live_writer() {
+        let current = json!({"tools": ["read", "todo"]});
+        assert_eq!(narrowing_tools(&current, &["read".into(), "write".into(), "todo".into()]).unwrap(), ["read", "todo"]);
+        assert!(narrowing_tools(&current, &[]).unwrap().is_empty());
+        assert!(narrowing_tools(&json!({"tools": ["read", "read"]}), &["read".into()]).is_err());
+        assert!(narrowing_tools(&json!({}), &["read".into()]).is_err());
+    }
 
     #[test]
     fn summarises_the_log() {

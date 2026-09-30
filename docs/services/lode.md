@@ -2,6 +2,9 @@
 
 **Language:** Lean 4 + `linen` · **Repository:** [`typednotes/lode`](https://github.com/typednotes/lode)
 
+**Coordinated release target:** Lode 0.3.0, Lun 0.3.0, Typednotes 0.6.0,
+Linen 1.10.0, Liaison 0.6.0. Release files/pins/publication are parent-owned.
+
 ## 1. Purpose
 
 Turn natural-language descriptions into Lean code: a graph's cells
@@ -14,13 +17,14 @@ the graph and the `lun.json`, and never sees a secret *value*.
 
 **Not responsible for:** holding any credential (it reaches the repository host
 and the model through `liaison`, with warrants the app mints), deciding what it
-may do (the warrants and its fuel bound it), or running what it wrote
+may do (organization/session tool policy, agent selection, native authority and
+warrants bound it; fuel additionally bounds its loop), or running what it wrote
 (`lun` builds and runs it).
 
 ## 2. Dependencies
 
-`linen` — `Network/WebApp`, `Network/HTTP/Client`, `FileSystem` capabilities
-(paths never leave the checkout), `Data/Json`, `Liaison.Wire`. The Lean
+`linen` — `Network/WebApp`, `Network/HTTP/Client`, scoped filesystem/connector
+types, `Data/Json`; Liaison's pure `Liaison.Wire` SDK. The Lean
 toolchain and `lake` are on its `PATH`; the Docker image pre-builds a linen
 package cache so a workspace does not rebuild linen.
 
@@ -33,12 +37,28 @@ hover, goals or diagnostics at a point.
 An HTTP service the app is the only caller of (`POST /v0/sessions`, messages,
 long-poll the log, abort, refresh credentials; its README is the reference).
 The app opens a session with the repository, branch, project path, the model,
-and the cell list; lode's loop is then model → tools → model until the run
-answers. `check` is `lake build`; `publish` pushes; `lun_build` and `lun_call`
+and the organization tool list; cell descriptions arrive in the user message.
+The app first obtains the actual persisted session ID, binds trusted conversation
+and publication projections, then starts model → tools → model. Messages narrow
+the live allowlist; credentials-only PUT refresh cannot change tool authority.
+`check` is `lake build`; credentialed `publish` submits a broker-owned atomic
+commit plan, not a generic provider call or git-push process; `lun_build` and `lun_call`
 close the loop against `lun` itself — a session is done when the **published**
 commit builds clean and answers as intended.
 
 The `plan` agent (read-only tools) proposes; `build` writes.
+
+Model calls use named `inference.generate` through the native broker for Messages,
+Chat, Responses, Gemini and Radius Pi/SSE. Typed `NativeContext` carries the actual
+session ID and truthful user/agent initiator. The selected model fixes routing;
+bounded inline local function tools/reasoning replay are permitted, while hosted
+tools, remote retrieval and routing/header overrides are refused.
+
+Repository checkout uses immutable native branch/tree/file reads and private
+regular-file witnesses. Publication is confined to the notebook subtree and
+expected branch head, with independent deletion permission. The broker uses
+GitHub `updateRefs` head CAS and GitLab generated smart-HTTP receive-pack CAS;
+there is no archive, signed-download or racy REST-commit fallback.
 
 ## 4. State
 
@@ -46,6 +66,8 @@ The `plan` agent (read-only tools) proposes; `build` writes.
 the checkout. All of it is **reconstructible** ([`../computations.md`](../computations.md) §2):
 the notebook re-derives it, the repository keeps what it published. Warrants are
 kept **in memory only**, expire within minutes, and the caller sends fresh ones.
+Metadata persists the launch `toolCeiling`, current `tools` and non-secret
+credential bindings. Narrowing cannot be undone by a restart or credential refresh.
 
 ## 5. Core types
 
@@ -69,14 +91,20 @@ checking, not lode's own judgement.
 
 **Tier 1 · Type:**
 
-- paths cannot leave the checkout — linen's `FileSystem` capability, symbolic
-  links resolved (a `..`-escape in linen's scope check is a known open issue,
-  [`lun`'s TODO](https://github.com/typednotes/lun) — the container is the
-  boundary until it is fixed);
-- a tool call is constructible only from parsed, validated arguments.
+- tool arguments are parsed before dispatch; `AuthorizedArgs policy agent`
+  carries permission for the operation derived from those exact arguments;
+- `BoundedPolicy ceiling` retains evidence that the live tool list narrows the
+  immutable launch list. The unchecked dispatcher is private;
+- native checkout consumes private selector/bookkeeping/regular-file witnesses;
+  lexical/path/symlink checks supplement those types at the filesystem boundary;
+- `RuntimeInput` can emit only function `input`/`inputs` or graph `inputs`.
+  The model cannot inject runtime policy, bindings, grants or credentials.
 
 **Tier 3 · Theorem:** `run` terminates — structural `fuel`, no proof obligation
-needed.
+needed. `BoundedPolicy.authority_bounded` and `AuthorizedArgs.authority_bounded`
+prove actual named tool authority is bounded; narrowing is reflexive/transitive.
+The policy mutex serializes dispatch with narrowing, and metadata serialization
+prevents an acknowledged narrower list from being overwritten on restart.
 
 ## 7. What is not proven
 
@@ -85,10 +113,11 @@ description faithfully, not that it is efficient, not that it is resistant to
 adversarial content the model read. The mitigations are structural, and they
 are the whole design:
 
-- authority is only ever what the warrants carry — repo `write` on **one
-  branch**, the model with a per-call budget; nothing ambient, nothing
-  retained;
-- `publish` never force-pushes, so it cannot overwrite someone else's work;
+- authority intersects organization, connection, cell and warrant scopes at the
+  broker, plus organization/session/agent tool lists at Lode dispatch; trusted run
+  refinements bind conversation tools and the publication branch/subtree;
+- credentialed publication consumes exact-head atomic native conditions; stale
+  heads/concurrent rewinds are refused and write does not imply deletion;
 - what it writes is **reviewable** — it is a commit in the user's own
   repository, diffable like any code;
 - what it ships is **checked** — `lake build` clean, and lun's signature and
@@ -100,8 +129,20 @@ are the whole design:
 model call; that credentials sent as `LODE_MODEL_API_KEY` (development) never
 reach the log.
 
-**Tier 6 · Measure:** how reliably a real model drives a session to a green
-lun build — unmeasured today (lode has never been run against a real model);
+Allowed `bash` can make changes without the named `write` tool, and `check` executes
+the project's Lake configuration. Named-tool permission proofs are not a semantic
+read-only shell or process-sandbox proof. Build/container/trust-domain isolation,
+approved libraries, filesystem/zlib/socket/TLS FFI, broker HMAC/ledger and remote
+Git/API correspondence remain trusted boundaries.
+
+Local release verification passes the actual app → compiled Lode → real broker
+→ local Git → compiled Lun positive and denial pipeline. Supporting suites pass
+99 app API tests, 24 browser groups, 655 real broker HTTP cases and 69 compiled
+runtime cases. Models/provider APIs in those tests are controlled local peers;
+paid-provider/OAuth conformance is not measured by them.
+
+**Tier 6 · Measure:** how reliably a real paid model drives a session to a green
+lun build remains unmeasured;
 steps and fuel exhausted per session.
 
 ## 8. Open questions
@@ -116,7 +157,7 @@ steps and fuel exhausted per session.
   Cost: one more long-lived process per session.
 - **Fuel vs budget** are two caps; deriving fuel from remaining budget would
   make one knob, at the price of coupling authority and spend.
-- **One lode per org?** Its `bash` tool runs what the model asks inside the
-  container, so the container is the isolation boundary. One fleet-wide,
-  credential-less lode is acceptable at v1 ([`../computations.md`](../computations.md) §6);
-  per-org instances are the honest end state if graphs get adversarial.
+- **Trust-domain deployment.** Its `bash` tool runs inside the container; path
+  checks do not isolate allowed processes from other sessions. Separate org/trust
+  domains require process/container isolation, not merely credential-less service
+  configuration. Linux/container execution is separate from the local macOS checks.

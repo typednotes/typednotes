@@ -165,6 +165,14 @@ impl CellType {
 /// apply depends on the [`CellType`]; the others are `None`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CellConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connectors: Vec<crate::CellConnector>,
+    /// Named cell arguments, in order. None preserves pre-declaration notebooks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependencies: Option<Vec<String>>,
+    /// Optional Lean result type; argument types come from dependencies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_type: Option<String>,
     /// `scheduled`, `watch`: the page; `http` sink: where to POST.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -385,6 +393,8 @@ pub struct GraphDetail {
     pub activity: Vec<Activity>,
     /// Whether the caller may edit (every member may; kept for the UI).
     pub can_edit: bool,
+    #[serde(default)]
+    pub effect_policy: crate::EffectPolicy,
 }
 
 /// A cell just created or re-keyed: an `endpoint` cell's full URL is shown
@@ -405,6 +415,18 @@ pub struct LodeEntry {
     /// More of it, for a cell's view of the writing: tool arguments (the
     /// file written, the code), fuller tool results.
     pub detail: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub usage: Option<TokenUsage>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
 }
 
 /// Where an implementation run is.
@@ -618,6 +640,28 @@ pub fn validate_cell(
     };
     let required = |o: &Option<String>, what: &str| trimmed(o).ok_or(format!("{what}: required"));
     let mut out = CellConfig::default();
+    if config.connectors.len() > 32 || config.connectors.iter().map(|c| &c.connection).collect::<BTreeSet<_>>().len() != config.connectors.len() {
+        return Err("connectors: at most 32 distinct connections".into());
+    }
+    out.connectors = config.connectors.clone();
+    out.dependencies = config.dependencies.as_ref().map(|deps| {
+        deps.iter().map(|name| validate_ident("dependency", name)).collect::<Result<Vec<_>, _>>()
+    }).transpose()?;
+    if let Some(deps) = &out.dependencies {
+        if deps.len() > 64 || deps.iter().collect::<BTreeSet<_>>().len() != deps.len() {
+            return Err("dependencies: at most 64 distinct cell names".into());
+        }
+        if cell_type.is_source() && !deps.is_empty() {
+            return Err("sources do not take cell dependencies".into());
+        }
+    }
+    out.output_type = trimmed(&config.output_type);
+    if let Some(ty) = &out.output_type {
+        if ty.len() > 512 || ty.chars().any(|c| c.is_control() || c == ';')
+            || ty.contains("--") || ty.contains("/-") || ty.contains('#') {
+            return Err("output type: one Lean type expression, at most 512 characters".into());
+        }
+    }
     match cell_type {
         CellType::Node => {}
         CellType::Scheduled | CellType::Watch => {
@@ -1162,7 +1206,7 @@ pub fn describe_config(cell_type: CellType, c: &CellConfig) -> String {
 fn cell_instruction(cell: &Cell) -> String {
     let n = &cell.name;
     let input = cell.config.input.clone().unwrap_or_else(|| n.clone());
-    match cell.cell_type {
+    let instruction = match cell.cell_type {
         CellType::Node => format!(
             "a function `{n}` with effect row `[]`, applied in the graph to the values it needs"
         ),
@@ -1202,7 +1246,7 @@ fn cell_instruction(cell: &Cell) -> String {
         ),
         CellType::DbSink => format!(
             "a function `{n}` with `PostgreSQL` in its row, writing the table `{}` (the \
-             connection is the runtime's: name no host, role or schema)",
+             connection target and actor schema come from the trusted non-secret compute target supplied by the app; never name a password)",
             cell.config.table.clone().unwrap_or_default()
         ),
         CellType::HttpSink => format!(
@@ -1232,7 +1276,27 @@ fn cell_instruction(cell: &Cell) -> String {
             "a function `{n}` with effect row `[]` returning the message text as a String (the \
              app sends it when it changes)"
         ),
-    }
+    };
+    let deps = cell.config.dependencies.clone().unwrap_or_else(|| crate::cell_references(&cell.description));
+    let named = if cell.config.dependencies.is_some() || !deps.is_empty() {
+        if deps.is_empty() {
+            " This cell takes no cell arguments (a zero-dependency function is a source).".into()
+        } else {
+            format!(" Its arguments are exactly [{}], in that order; infer each argument type from the named cell's output. No undeclared cell dependencies.", deps.join(", "))
+        }
+    } else { String::new() };
+    let output = cell.config.output_type.as_ref().map(|ty|
+        format!(" The output type is constrained to `{ty}`; declare that exact result type, inside `Eff effs ({ty})` for functions. It will be checked by the runtime.")
+    ).unwrap_or_default();
+    let external: Vec<_> = cell.config.connectors.iter().filter(|grant| crate::LocalService::from_selection(&grant.connection).is_none()).collect();
+    let local: Vec<_> = cell.config.connectors.iter().filter(|grant| crate::LocalService::from_selection(&grant.connection).is_some()).collect();
+    let connectors = if external.is_empty() { String::new() } else {
+        format!(" This cell may use only the following connected-service grants through `Control.Monad.Effect.Connector`, in its `Eff` row: {}. Use named operations and structured resource components; never raw HTTP or IO to bypass a connector grant.", serde_json::to_string(&external).unwrap_or_default())
+    };
+    let locals = if local.is_empty() { String::new() } else {
+        format!(" Bound local-service requests: {}. Use the PostgreSQL or SecretStore effect and the trusted actor/graph bindings; these are not external Connector credentials. No raw SQL or raw vault HTTP.", serde_json::to_string(&local).unwrap_or_default())
+    };
+    format!("{instruction}{named}{output}{connectors}{locals}")
 }
 
 /// The message that asks lode to implement the notebook: the cells in

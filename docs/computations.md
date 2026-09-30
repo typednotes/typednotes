@@ -1,6 +1,10 @@
 # Computations
 
-**Status:** app side implemented (lun's contract additions pending, §9) · **Last updated:** 2026-09-29
+**Status:** native app/writer/runtime contract implemented and locally verified · **Last updated:** 2026-09-30
+
+**Coordinated release target:** Typednotes 0.6.0, Lode/Lun 0.3.0,
+Linen 1.10.0 and Liaison 0.6.0. Package/version/default pins, deployment and
+release publication remain parent/operator-owned.
 
 The product: a notebook where each cell is a **natural-language description of a
 node** of a reactive graph — like a Jupyter notebook whose cells are prose, and
@@ -20,7 +24,7 @@ is [`proof-strategy.md`](proof-strategy.md).
  the app ──(register a session; feed inputs)───────────────▶ lun
  lun ──(`PostgreSQL` effect, as the (org, user) role)──────▶ compute-db
  lun ──(read, its own vault identity)──────────────────────▶ secret/data/compute/{org_id}/{user_id}
- lun ──(storage sinks: warrants the app attaches)──────────▶ liaison ──▶ S3 / Azure / Dropbox / Drive
+  lun ──(native storage operations + scoped warrants)───────▶ liaison ──▶ S3 / Azure / Dropbox
  lode, lun ──(warrants, liaison's wire format)─────────────▶ liaison ──▶ GitHub / GitLab, the model
 ```
 
@@ -65,7 +69,8 @@ declared contract, and the user's description fixes its shape:
   a node that only computes declares `[]`; a `scheduled` or `watch` source's
   function declares `HTTP`; a `db` sink declares `PostgreSQL`; a function that
   reads a secret cell declares `SecretStore`; a `storage` sink declares
-  `ObjectStore`. A `ui`, `endpoint` or `channel` source compiles to no function
+   `ObjectStore` for S3/Azure or native `Connector` for Dropbox. General connected
+   service operations use scoped `Connector` requests. A `ui`, `endpoint` or `channel` source compiles to no function
   at all — it is an input with a trigger (§3) — and a `channel` sink's node is
   plain (`[]`): the sending is the app's, after the recompute (§4.5).
 
@@ -75,6 +80,13 @@ acyclic by construction, and a failing node's error stays with its node — its
 dependents are skipped, everything else carries on. The notebook UI displays,
 per cell, the sources, the sinks, and the dependencies (direct and closure)
 that `lun`'s build answer reports for the graph.
+
+The app additionally supplies caller-owned `outputType`, `inputTypes` keyed by
+configured source name and ordered named `dependencies`. Lun's `OutputContract`,
+`SourceContract` and `WiringContract` are kernel checked, and runtime witnesses
+bind those contracts to the actual graph. Organization effect/domain policy,
+connection permissions, cell capability and warrant ceilings are enforced at
+execution; generated code and session refresh cannot widen them.
 
 ### 1.2 What the user sees
 
@@ -107,13 +119,20 @@ Three steps, all driven by the app, all audit-attributed to a run:
 
 1. **Implement — `lode`.** The app opens a lode session over the project's
    primary repository (a GitHub or GitLab connection of the org, through
-   liaison, §5) with a message assembled from the cells, and mints three
-   warrants: **repo `write`** (publish on the project's branch), **model**
-   (the AI provider the org connected, per-call budget), **repo `read` for
-   `lun`**. `lode` writes the modules, the `lun.json`, publishes **one commit on
+   liaison, §5). Launch carries the organization tool list and initially no model
+   message; the app obtains the actual persisted session ID, binds trusted
+   `conversation:{sessionId,allowedTools}` and
+   `publication:{branch,root:["typednotes",graph-slug]}` run projections, then
+   starts the cell-description message. Repository credentials carry primary
+   **`repositories.read`** and supplementary **`repositories.write`** tokens;
+   removals need independent **`repositories.delete`** scopes. The model receives
+   an **`inference.generate`** warrant and Lun receives repository read authority.
+   `lode` writes the modules, the `lun.json`, publishes **one commit on
    the shared branch** (never a force push), then `lun_build`s the published
    commit and fixes what lun reports per function and graph. A session is done
    when the published commit builds clean and the functions answer as intended.
+   Native checkout reads immutable trees/files, not archives; publication consumes
+   broker-owned expected-head CAS on GitHub/GitLab, not generic HTTP or racy commits.
    The user steers in natural language mid-run; the notebook re-implements any
    cell by a follow-up message.
 2. **Build — `lun`.** The app submits the build (source: repo, branch, commit,
@@ -121,9 +140,14 @@ Three steps, all driven by the app, all audit-attributed to a run:
    build id: a restarted lun re-derives it from the repository alone.
 3. **Run — `lun` session.** The app registers the graph as a live session with
    the initial inputs and a **binding `(org_id, user_id, graph_id)`** — what
-   lun's `PostgreSQL` and `SecretStore` handlers resolve their capabilities
-   from (§3.4, §4.1) — plus, for the graph's `storage` sinks, fresh warrants
-   attached to the update (§4.3). An update feeds only the inputs it names;
+   lun's `PostgreSQL` and `SecretStore` handlers resolve private targets against
+   (§3.4, §4.1) — plus organization policy and fresh operation-specific grants
+   for each function, including actor-bound compute/graph-vault and external
+   connections. The app provisions all three live policy/run documents before
+   releasing warrants. Registration uses `recoverInputs:true`: historic values
+   incompatible with a changed source type remain editable source errors and
+   block dependents. An invalid new feed is refused before any node executes.
+   An update feeds only the inputs it names;
    lun recomputes only what depends on them and answers with the nodes that
    changed. **The app records every input it fed** — a lun session is lost when
    lun's container is recycled (§6), and the app re-registers it lazily with
@@ -177,10 +201,14 @@ liaison is per-call metering and a per-call audit row; the mitigation is that
 the app initiates and audits every check and the rate cap bounds the volume. Any
 source that needs a **credential** (a private API, an authenticated feed) is out
 of scope in v1 and must wait for liaison to take anonymous-or-warranted fetch
-requests (§8). Two further bounds, both to be tested (tier 5): lun's `HTTP`
-handler must refuse non-`http(s)` schemes, and the source scheduler must refuse
-URLs that resolve to private address space (SSRF against the container
-network's neighbours).
+requests (§8) for arbitrary authenticated fetches. Existing supported connected
+service operations can instead use their native `Connector` adapters; there is
+no raw credentialed-HTTP fallback. The anonymous `HTTP` handler now consumes
+static URL/method, organization domain and standard-port evidence, validates all
+DNS answers and pins a public numeric address while preserving Host/TLS identity.
+It follows no redirects and rejects forbidden headers/noncanonical paths.
+The app also checks configured URLs; runtime pinning closes the re-resolution
+gap. These paths are tested; socket/TLS correspondence remains trusted.
 
 ### 3.2 `watch`: when a page changes
 
@@ -203,8 +231,8 @@ the extracted value differs from the last one fed.
 
 ### 3.3 `ui`: a widget per input
 
-The widget follows from the input's JSON type, which lun's build answer
-reports: a number gets a stepper, a string a text field, a boolean a toggle, a
+The widget follows the caller-owned source type (or the adopted implementation's
+type when no source constraint was set): a number gets a stepper, a string a text field, a boolean a toggle, a
 closed set of string literals a select. Every change goes through the same
 session update as any other input and is recorded in `graph_inputs` (§7), so a
 re-registered session comes back with the user's last values; only what depends
@@ -217,14 +245,16 @@ on the changed input runs again.
 - The value lives in the vault at
   `secret/data/graph/{org_id}/{graph_id}/{name}` — the app's policy is
   `create`, `delete` on that prefix (it writes and cannot read back), and `lun`
-  reads it per session as its own vault identity, exactly like the compute
+   reads it per authorized operation as its own vault identity, exactly like the compute
   credential (§4.1).
 - A function reaches it through the vetted `SecretStore` effect: the capability
   separates `describe` from `getValue` as distinct permissions, names are
   segments so a prefix can be scoped, and the value is linen's opaque
   `Secret.Value` — no `ToJson`, no rendering — so **it cannot land in a node
   output, a log line or a `lun.json` by accident.** lun's handler grants
-  `getValue` on exactly the names the session's graph declares, nothing wider.
+   operation-scoped access only within the graph's granted names. The app's
+   local-service minting re-reads the declaration and secret inventory; read,
+   describe, write and metadata listing remain separate permissions.
 - **The honest boundary:** the user's own function can still build an output
   from the secret deliberately — it is their secret, in their graph, run as
   them. What the design removes is every *incidental* leak path: not in the
@@ -260,8 +290,8 @@ pull-only. Webhook senders — GitHub, n8n, IFTTT, anything that can POST JSON
 
 ### 3.6 `channel`: a message is the trigger
 
-The project's messaging interfaces ([`connections.md`](connections.md) §11 —
-Slack, WhatsApp, Signal) are already inbound addresses routed to the project;
+Supported inbound messaging interfaces ([`connections.md`](connections.md) §11 —
+Slack and WhatsApp webhooks) are addresses routed to the project;
 a `channel` source cell binds one to the graph: "when a message arrives on the
 project's WhatsApp number, that's the order."
 
@@ -271,8 +301,9 @@ project's WhatsApp number, that's the order."
 - The delivery machinery is the inbox's, unchanged: the same signed webhooks
   (Slack, WhatsApp), the same dedupe — `channel_messages` is unique per
   `(channel, direction, external_id)`, so a retried webhook records nothing new
-  and feeds nothing new — and Signal's pull model rides the scheduler tick
-  rather than an inbox load. **The audit trail is `channel_messages` itself**,
+   and feeds nothing new. Signal's unsupported legacy history/pull path is
+   explicitly refused; native Signal/WhatsApp connectors remain send-only.
+   **The audit trail is `channel_messages` itself**,
   the table the inbox already keeps.
 - Authentication is the webhook's (the signing secrets the app already checks);
   a `channel` source adds no new inbound surface — the addresses were already
@@ -289,7 +320,7 @@ one of its own.
 |---|---|---|---|
 | `db` | `{table}` | `PostgreSQL` | the per-user schema (§4.1) |
 | `http` | `{url}` | `HTTP` | a POST of the node's JSON result (§4.2) |
-| `storage` | `{connection_id, path}` | `ObjectStore` | the org's storage connection, **through liaison** (§4.3) |
+| `storage` | `{connection_id, path}` | S3/Azure `ObjectStore`; Dropbox `Connector` | native contents upload, **through liaison** (§4.3) |
 | `ui` | `{format}` | — | rendered in the notebook (§4.4) |
 | `channel` | `{channel_id}` | — (app-side) | sent as a message on the project's interface (§4.5) |
 
@@ -317,9 +348,10 @@ property Postgres already has at finer grain.
     free (org slugs are unique across the system);
   - the role is the schema's **owner** and holds no other grant — no rights on
     `public`, no rights on any service table, no `CREATE` anywhere else;
-  - the role's **password never crosses Postgres in the clear**: the app
+   - role provisioning **never puts a plaintext password in SQL**: the app
     computes a SCRAM-SHA-256 verifier and issues `CREATE ROLE … PASSWORD` with
-    the verifier, so the plaintext exists in exactly one place — the vault.
+     the verifier. The vault stores the password; transient app/runtime memory
+     and libpq authentication necessarily handle it, never generated effect values.
 - The credential lives at `secret/data/compute/{org_id}/{user_id}` (shape
   below). Vault policies: `typednotes-app` gets `create`, `delete` on the prefix
   (it provisions, and never reads back); a new **`lun`** service identity gets
@@ -337,21 +369,20 @@ schemas — and there is no table structure of ours to protect there.
 **Enforcement — two layers, one truth.** The user's phrase "enforced by
 effects" is exactly right and is two layers:
 
-1. **Type layer.** A function without `PostgreSQL` in its effect row cannot
-   touch any database at all — `lun` refuses the signature, and linen's
-   capability-restricted effect, `Control.Monad.Effect.PostgreSQL`, carries no
-   connection: **the effect names no host, no role, so a term of the
-   function's type cannot name another user's database.** There is
-   nothing to check because there is nothing to say. Queries are a structured
-   AST, parameters always bound, no `rawSql` escape hatch — injection and
-   "checked SQL disagreeing with sent SQL" are both unrepresentable.
-2. **Runtime layer.** `lun`'s handler binds the effect to the session's user:
-   it reads the credential from the vault as `lun` (path above), connects to
-   `compute-db` **as the role `{org_slug}_{user_id}`**, and sets the schema in
-   the search path. Postgres itself then refuses anything outside that schema.
-   The compiled project never contains a connection target; it is not secret
-   material withheld from lode's model — it is simply not in the code, because
-   the code has nowhere to put it.
+1. **Type layer.** The compiled `PostgreSQL` capability fixes non-secret
+   host/port/database/role intent and permitted statement kinds/tables. Requests
+   cannot substitute a connection. Queries are a structured AST with bound
+   parameters and no `rawSql` escape hatch. `AuthorizedQuery` carries static
+   rights, schema equality and a 63-byte table-identifier bound; `BoundCompute`
+   proves target/role correspondence with the privately resolved credential.
+2. **Runtime layer.** The canonical handler first checks independent live
+   organization, actor-connection, cell and warrant documents, then resolves the
+   credential only at `compute/{org_id}/{user_id}` and consumes the typed
+   query/target witnesses. SQL explicitly qualifies the proved schema; it does
+   not rely on a mutable search path. PostgreSQL's SCRAM role/schema ACLs enforce
+   confinement independently. Actual responses are checked against byte ceilings.
+   The model may see non-secret compute target metadata needed to compile its
+   capability, but never a password or another actor's credential.
 
 The type layer bounds what *this user's own code* can express; the runtime layer
 is what keeps users apart. Neither is a sandbox by itself; both together mean a
@@ -367,7 +398,7 @@ container remains the boundary for everything effects do not cover (as in
  "schema": "{org_slug}_{user_id}", "token": "<role password>"}
 ```
 
-`lun` resolves it per session registration — the same shape the session's
+`lun` resolves it per authorized compute operation — the same shape the session's
 `(org_id, user_id)` binding selects. It never appears in a build request, a
 graph program, a `lun.json`, or the repository.
 
@@ -389,22 +420,27 @@ it is a `storage` sink's problem, solved the same way (§4.3).
 ### 4.3 `storage`: the org's bucket, through the chokepoint
 
 A `storage` sink writes to one of the org's existing storage connections
-(`s3`, `azure`, `dropbox`, `gdrive`, [`connections.md`](connections.md) §3.1).
+(`s3`, `azure`, `dropbox`, [`connections.md`](connections.md) §3.1).
 That is a **credentialed** call, so the chokepoint holds here where §3.1 could
 not: the credential stays in the vault, only `liaison` reads it, and the
 function never sees it.
 
-- The function declares `ObjectStore` in its row; `lun`'s handler relays the
-  write to `POST /v0/egress` in liaison's wire format — the same call the app
-  itself makes — with a warrant the app **attaches to the session update**
-  (§2): `capability(s3|azure|dropbox|gdrive, write)`,
-  `resource(connection_id)`, a small per-call budget. The app drives every
+- S3/Azure functions declare `ObjectStore`; one bound grant pins the capability's
+  bucket/container and exact configured key/prefix. Dropbox uses the native
+  `Connector` effect with `files.create` and UTF-8 contents; it is not an
+  ObjectStore bucket. The runtime sends URL-free `Body.connector` requests to
+  `POST /v0/egress` with fresh named-operation warrants attached by the app
+  (§2): `objects.write` or `files.create`, the named connection and structured
+  selector, with the declared cost/budget. The app drives every
   update anyway, so refreshing the 300 s warrants is free, the same pattern as
   lode's credentials per message.
-- The credential and the path are the only things per session: like
-  `PostgreSQL`, the compiled project names no bucket and holds no key — the
-  effect carries no connection, and the handler resolves `{connection_id, path}`
-  from the session's config.
+- The compiled capability contains resource intent, not a key. Organization,
+  connection, cell and warrant ceilings intersect again at credential use in the
+  broker. Shared credential-owner identity is separate from the execution actor.
+- S3/Azure ObjectStore UTF-8 writes require empty options; binary writes/custom
+  metadata and caller pagination cursors remain explicit refusals. Drive's current
+  `files.create` creates an empty named file, not a contents-upload sink. Unsupported
+  storage shapes never fall back to raw provider HTTP.
 - Liaison's audit log carries the per-call record this time — the chokepoint
   earning its keep where a credential is actually at stake.
 
@@ -431,7 +467,7 @@ notebook, and it re-renders on every recompute — a spreadsheet's output cell.
 confirmation on WhatsApp". The cell binds to one of the project's messaging
 interfaces ([`connections.md`](connections.md) §11); the node's result — the
 message text — is sent by the **app**, through the same path it already sends
-inbox replies: liaison with a `write` warrant, the credential never leaving the
+inbox replies: native liaison `messages.send` with a scoped warrant, the credential never leaving the
 vault, the outbound message recorded in `channel_messages` with its sender.
 
 - **The sending is app-side, not lun-side — deliberately.** The cell's node is
@@ -453,11 +489,12 @@ vault, the outbound message recorded in `channel_messages` with its sender.
 
 | Call | Warrant (minted by the app, [`connections.md`](connections.md) §7 shape) | Budget |
 |---|---|---|
-| lode → repository read/write | `capability(github|gitlab, write)`, `resource(connection_id)` | 0 |
-| lode → model | `capability(provider, read)`, `resource(model_connection_id)` | per-call `cost` (credits held by liaison) |
-| lode/lun → repository read | the repo warrant, or lun's own (default: the source's) | 0 |
-| lun → storage sink write (§4.3) | `capability(s3|azure|dropbox|gdrive, write)`, `resource(connection_id)` | small per-call, attached to each session update |
-| app → channel sink send (§4.5) | `capability(slack|whatsapp|signal, write)`, `resource(connection_id)` | 0 — the existing messaging send path |
+| lode → repository | `repositories.read` plus supplementary `repositories.write`; independent `repositories.delete` scopes for removals; trusted publication branch/subtree | 0 |
+| lode → model | `inference.generate`, named connection/model selector, trusted conversation/session tools | per-call `cost` (credits held by liaison) |
+| lode/lun → repository read | `repositories.read`, named connection and immutable repository/file selector | 0 |
+| lun → compute/graph secrets | `rows.select/insert/update/delete` or `secrets.read/write/describe/list`, actor-bound local connection and resource scopes | local operation cost 0; private runtime handlers |
+| lun → storage sink write (§4.3) | S3/Azure `objects.write` or Dropbox `files.create`, exact key/path selector | declared per-call cost, attached to each update |
+| app → channel sink send (§4.5) | `messages.send`, selected channel or sender/recipient selector | 0 — native messaging path |
 
 Warrants expire within minutes (300 s); the app sends fresh ones with each lode
 message (lode keeps them in memory only). Model spend is held and settled by
@@ -477,7 +514,7 @@ Two new containers in the fleet, declared in `Fleet.lean` like the others
 | Container | Image | Env → wiring |
 |---|---|---|
 | `lode` | `ghcr.io/typednotes/lode:{release}` | `LODE_TOKEN` (secret), `LODE_LIAISON_URL` → `liaison`, `LODE_LUN_URL`/`LODE_LUN_TOKEN` → `lun`; no port published — only the app reaches it |
-| `lun` | `ghcr.io/typednotes/lun:{release}` | `LUN_TOKEN`, `LUN_LIAISON_URL`, `LUN_COMPUTE_HOST` (compute-db's endpoint), `LUN_ID_SALT` (secret — build ids survive restarts), vault login for `lun` (`SECRETS_PASSWORD`) |
+| `lun` | `ghcr.io/typednotes/lun:{release}` | `LUN_TOKEN`, `LUN_LIAISON_URL`, `LUN_ID_SALT` (build ids survive restarts), private vault login (`SECRETS_*`); compute target resolves from the actor credential |
 
 Plus: **`compute-db`** (a `typednotes-`-prefixed Serverless SQL database — one
 more billed instance, once, not per user), a **`compute` connection string for
@@ -504,10 +541,11 @@ database as managed from its first apply.
   fix is a Scaleway cron-triggered container, which `infra` does not yet
   declare; until it does, the floor is one always-on instance.
 
-`lode` runs one trust domain per org eventually (its `bash` tool runs what the
-model asks); v1 runs one `lode` for the fleet and keeps it credential-less — it
-holds only short-lived warrants — which is the same containment story as
-[`services/agent.md`](services/agent.md) §2.
+Named-operation and tool-ceiling proofs do not sandbox allowed shell commands or
+Lakefiles. Separate organization/trust domains require process/container isolation;
+a credential-less fleet-wide writer does not itself establish that boundary.
+Apply separated vault ACLs for credential create/delete, policy projection writes
+and runtime/broker reads. Deployment/isolation changes remain operator-owned.
 
 ## 7. The app's schema (migration `0004_computations.sql`)
 
@@ -575,9 +613,9 @@ admins add a user to an org by email, creating the `memberships` row (TODO.md).
 
 ## 8. Open questions
 
-- **Which effects may a node declare?** v1: `Trace`, `Error`, `HTTP`,
-  `FileSystem`, `PostgreSQL`, `SecretStore`, `ObjectStore` — lun's vetted set
-  plus the new ones. `Time` (a node that needs "now") is conspicuously absent;
+- **Additional effects:** the current canonical set is `Trace`, `Error`, `HTTP`,
+  `FileSystem`, `Connector`, `PostgreSQL`, `SecretStore`, `ObjectStore`.
+  `Time` (a node that needs "now") remains absent;
   adding it means deciding what "now" means for a reactive node that re-runs.
 - **Should an endpoint answer with what changed?** As specified (§3.5) the
   URL's holder reads the changed nodes — usable, but a leak if the URL was
@@ -606,10 +644,10 @@ admins add a user to an org by email, creating the `memberships` row (TODO.md).
 
 | Repo | Work |
 |---|---|
-| `typednotes` (this) | `0004` migration; notebook UI; lode + lun HTTP clients; warrant minting for them; the scheduler (cron due times, watch dedupe, Signal pulls) + rate caps; the `/hooks/graphs/{token}` route; channel sources fed from `channel_messages` and channel sinks sent through the existing path; `ui` sink renderers (no raw HTML); schema/role provisioning on `compute-db`; compute + graph-secret credentials into the vault; org invite flow |
+| `typednotes` (this) | Implemented: notebook/UI/source contracts; clients and live three-document native authority provisioning/revocation (`0008`); actor SCRAM compute/graph-vault grants; writer conversation/publication refinements and org tool narrowing; scheduler/webhooks/native supported messaging; source recovery and adoption. Unsupported Signal history remains refused. |
 | `typednotes-infra` | `lode` + `lun` containers; `compute-db` + its connection strings; `lun` vault identity; `LODE_TOKEN`/`LUN_TOKEN` secrets; app `minScale := 1` when sources ship |
-| `lun` | vet the `PostgreSQL` and `SecretStore` effects + handlers bound per session to the vault-read credentials; relay `ObjectStore` writes through liaison with the attached warrants; refuse non-`http(s)` and private-range URLs in `HTTP`; add the compute and graph-secret credential kinds |
-| `lode` | `fetch` tool; Lean LSP loop; the computation session prompt (the cell taxonomy → `lun.json` with sources/sinks) |
+| `lun` | Implemented: eight canonical bounded handlers, typed output/wiring/source contracts, immutable/narrowing sessions, native immutable fetch, actor/schema/graph confinement, pinned anonymous HTTP and scoped temporary files. |
+| `lode` | Implemented: five native model protocols, bounded actual tool dispatch, retired-tool history recovery, native checkout/atomic publication and computation prompt. Web-fetch tool and Lean LSP remain open. |
 
 ## 10. The app, as implemented
 
@@ -634,8 +672,8 @@ Decisions the design left open, or that the implementation had to make:
   (`String → Eff [HTTP] T`), so the URL the SSRF guard checked is the URL
   fetched. The guard resolves the host and refuses any private, loopback,
   link-local, CGNAT, multicast or documentation address — at save time and
-  before each check; lun resolving again is the DNS-rebinding gap its own
-  `HTTP` guard has to close.
+   before each check. Lun's typed HTTP transport independently validates all DNS
+   answers and pins the chosen numeric address, closing the re-resolution gap.
 - **Caps.** `TYPEDNOTES_SOURCE_CHECKS_PER_HOUR` (default 120 per org; refused
   checks are audited but not counted) and `TYPEDNOTES_ENDPOINT_CALLS_PER_MINUTE`
   (default 60 per endpoint).
@@ -647,7 +685,9 @@ Decisions the design left open, or that the implementation had to make:
   (`session_user_id`); the scheduler, webhooks and channel messages act as
   that user, and `db` sinks write to that user's schema.
 - **Re-registration** feeds the last recorded value of every input the build
-  declares; an update lun answers `404` for re-registers first.
+  declares with `recoverInputs:true`; incompatible history after a type edit
+  becomes an editable source error and blocks dependents. An update Lun answers
+  `404` for re-registers first; invalid new input is refused without state changes.
 - **Channel sources** are fed in the background, so a Slack or WhatsApp
   webhook is still answered within seconds.
 - **Role names.** `{org_slug}_{user_id}` with dashes as underscores is up to
@@ -676,7 +716,7 @@ Decisions the design left open, or that the implementation had to make:
   ledger, compute-db) are never named in the UI or in the messages it
   shows: they are "writing the code", "running", "the credential broker",
   "credits", "the notebook database". The first line of each message lode
-  is sent is what the notebook's log shows of it, so it stays neutral, and
+   is sent is what the notebook's log shows of it, so it stays neutral, and
   lode's `lun_build`/`lun_call` tools show as "build"/"try". What the model
   itself writes in its steps is shown as written.
 - **Members.** Adding an address nobody signed in with yet creates its
@@ -684,7 +724,7 @@ Decisions the design left open, or that the implementation had to make:
   Owners manage everyone, admins manage admins and members; an org keeps at
   least one owner.
 
-Verified locally on 2026-09-29 against Postgres 16 (both databases, SCRAM
+Historical app-side verification on 2026-09-29 used Postgres 16 (both databases, SCRAM
 enforced for the compute roles) with mock vault, liaison, lode and lun:
 members; notebook and cells; the secret written to the vault and nowhere in
 the database; lode's three warrants; build, adoption and session binding;
@@ -699,4 +739,24 @@ the first run, the steps and unpublished hunks that mention a cell, its
 published definition, a member's report rewriting one cell while the old code
 keeps answering, a node error sending its cell back once (not again for the
 same error), a failed build rewritten twice and then failed, a description
-edit marking the code out of date. Not exercised: a real lode, lun or model.
+edit marking the code out of date.
+
+The 2026-09-30 release-preparation verification now includes the actual app →
+compiled Lode → real broker → disposable local Git → compiled Lun pipeline:
+native checkout/generation/tool execution/check, independent deletion denials,
+atomic publication, adoption and caller-owned source constraints/recovery pass.
+App-provisioned SCRAM compute and graph-vault effects, all four live ceilings,
+shared external credential owners and monotonic tool/runtime refresh are executed,
+not just mocked service responses. Supporting suites pass **99 API tests**,
+**24 browser groups**, **655 real broker HTTP cases** and **69 compiled-runtime
+cases**, plus the relevant Lean tests/proofs and executable builds. See
+[`native-connectors.md`](native-connectors.md) for reproduction.
+
+Provider/model replies are controlled local peers. Paid-provider conformance,
+OAuth refresh and real-model implementation quality remain unmeasured; local
+macOS checks do not establish Linux/container execution. Kernel guarantees
+retain explicit build/container, approved library/FFI/syscall, database ACL,
+vault/minting and transport/API trusted boundaries. Local compute/secret HMAC
+authenticity trusts the authenticated app and stored projection; outbound HMAC
+verification executes at the broker. Deployment ACLs/migrations and coordinated
+release pins/publication remain parent/operator-owned.

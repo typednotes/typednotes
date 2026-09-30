@@ -49,6 +49,13 @@ async fn table_exists(pool: &PgPool, table: &str) -> bool {
         .unwrap_or(false)
 }
 
+async fn authority_schema_ready(pool: &PgPool) -> bool {
+    sqlx::query("select count(*) = 4 and bool_or(column_name='connection_id' and is_nullable='YES') as ready \
+        from information_schema.columns where table_schema='public' and table_name='connector_authorities' \
+        and column_name in ('connection_ref','owner_id','projection','connection_id')")
+        .fetch_one(pool).await.map(|row| row.get::<bool,_>("ready")).unwrap_or(false)
+}
+
 pub async fn health() -> Health {
     // Not just configured: the vault must accept the app's login, or every
     // connection fails at its last step (after the OAuth round trip).
@@ -76,11 +83,14 @@ pub async fn health() -> Health {
         return configured(false, false, false, false);
     };
     let database = sqlx::query("select 1").execute(pool).await.is_ok();
-    // `channel_messages` is the newest table of the app's own history.
+    // Native minting must not appear healthy before its revocation history is
+    // applied. Migration 0008 follows the policy columns introduced by 0007.
     let schema = database
         && table_exists(pool, "public.orgs").await
         && table_exists(pool, "public.connections").await
-        && table_exists(pool, "public.channel_messages").await;
+        && table_exists(pool, "public.channel_messages").await
+        && table_exists(pool, "public.connector_authorities").await
+        && authority_schema_ready(pool).await;
     let ledger = database && table_exists(pool, "public.credit_ledger").await;
     // `compute_schemas` is the newest table of `0004_computations`.
     let computations = schema
@@ -268,16 +278,59 @@ async fn welcome_grant(org_id: &str) {
 
 /// The org's settings.
 pub async fn org_settings(org: &Org) -> Result<crate::OrgSettings, ServerFnError> {
-    let row = sqlx::query("select auto_repairs from orgs where id = $1::uuid")
+    let row = sqlx::query("select auto_repairs, effect_policy::text as effect_policy from orgs where id = $1::uuid")
         .bind(&org.id)
         .fetch_one(pool()?)
         .await
         .map_err(db_error)?;
     Ok(crate::OrgSettings {
+        effect_policy: row.get::<Option<String>, _>("effect_policy")
+            .map(|value| serde_json::from_str(&value))
+            .transpose().map_err(|_| super::errors::bad_gateway("the organization permissions are unreadable"))?
+            .unwrap_or_default(),
         auto_repairs: row.get("auto_repairs"),
         default_auto_repairs: config::auto_repairs().min(i64::from(crate::MAX_AUTO_REPAIRS)) as i32,
         can_edit: org.role == "owner" || org.role == "admin",
     })
+}
+
+pub async fn set_effect_policy(org: &Org, policy: &crate::EffectPolicy) -> Result<crate::OrgSettings, ServerFnError> {
+    if !matches!(org.role.as_str(), "owner" | "admin") {
+        return Err(super::errors::forbidden("only owners and admins can change notebook permissions"));
+    }
+    let policy = policy.validate().map_err(super::errors::bad_request)?;
+    let mut tx = super::connector::lock(&org.id).await?;
+    let rows = sqlx::query("select id::text as id, provider, permissions::text as permissions from connections where org_id = $1::uuid")
+        .bind(&org.id).fetch_all(&mut *tx).await.map_err(db_error)?;
+    let local = sqlx::query("select distinct provider, connection_ref from connector_authorities where org_id = $1::uuid and connection_id is null")
+        .bind(&org.id).fetch_all(&mut *tx).await.map_err(db_error)?;
+    for row in local {
+        super::connector::publish_ceiling(&org.id, &row.get::<String, _>("provider"), &row.get::<String, _>("connection_ref"), &crate::ConnectorPermissions::deny_all()).await?;
+    }
+    let writers = sqlx::query("select distinct g.lode_session_id as session from graphs g join projects p on p.id = g.project_id \
+        where p.org_id = $1::uuid and g.lode_session_id is not null")
+        .bind(&org.id).fetch_all(&mut *tx).await.map_err(db_error)?;
+    for row in writers {
+        super::lode::narrow(&row.get::<String, _>("session"), &policy.tools).await
+            .map_err(|_| super::errors::bad_gateway("could not apply the organization writer tool ceiling"))?;
+    }
+    // First close every live org gate. A failed distributed write leaves the
+    // operation unacknowledged and any successfully closed gates deny-all.
+    for row in &rows {
+        super::connector::publish_ceiling(&org.id, &row.get::<String, _>("provider"), &row.get::<String, _>("id"), &crate::ConnectorPermissions::deny_all()).await?;
+    }
+    super::connector::revoke(&mut tx, &org.id, None).await?;
+    sqlx::query("update orgs set effect_policy = $2::jsonb where id = $1::uuid")
+        .bind(&org.id).bind(serde_json::to_string(&policy).map_err(|_| super::errors::bad_request("invalid permissions"))?)
+        .execute(&mut *tx).await.map_err(db_error)?;
+    // A running graph must re-register against the new upper bounds.
+    sqlx::query("update graphs g set lun_session_id = null, lode_session_id = null, updated_at = now() \
+        from projects p where g.project_id = p.id and p.org_id = $1::uuid and g.status <> 'implementing'")
+        .bind(&org.id).execute(&mut *tx).await.map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
+    // No active grants survive the update. Subsequent mints republish the
+    // committed ceiling under the same lock, so no stale policy is restored.
+    org_settings(org).await
 }
 
 /// Change the org's settings: owners and admins.

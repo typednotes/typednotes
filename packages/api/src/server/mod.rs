@@ -3,15 +3,18 @@
 //! or any of the crypto below.
 
 pub mod account;
+pub mod ai;
 pub mod channels;
 pub mod compute;
 pub mod config;
+pub mod connector;
 pub mod connections;
 pub mod db;
 pub mod errors;
 pub mod graphs;
 pub mod liaison;
 pub mod lode;
+pub mod local;
 pub mod lun;
 pub mod members;
 pub mod oauth;

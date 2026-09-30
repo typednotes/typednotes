@@ -112,10 +112,10 @@ fn is_token(s: &str, min: usize, max: usize) -> bool {
 /// An API token or key: printable ASCII, no spaces.
 pub fn validate_api_key(key: &str) -> Result<String, String> {
     let key = key.trim();
-    if is_token(key, 8, 512) {
+    if is_token(key, 8, 4096) {
         Ok(key.to_string())
     } else {
-        Err("the API key must be 8–512 printable characters without spaces".to_string())
+        Err("the API key must be 8–4096 printable characters without spaces".to_string())
     }
 }
 
@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn database_provider_constraint_matches_the_catalog() {
-        let migration = include_str!("../../../migrations/0005_productivity_connections.sql");
+        let migration = include_str!("../../../migrations/0006_ai_providers.sql");
         let clause = migration
             .split("connections_provider_check check (provider in")
             .nth(1)
@@ -394,7 +394,7 @@ mod tests {
             .filter_map(|(i, s)| (i % 2 == 1).then_some(s))
             .collect();
         assert_eq!(ids.len(), Provider::ALL.len());
-        for provider in Provider::ALL {
+        for &provider in Provider::ALL {
             assert_eq!(ids.iter().filter(|id| **id == provider.id()).count(), 1);
         }
     }
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn provider_ids_round_trip() {
-        for p in Provider::ALL {
+        for &p in Provider::ALL {
             assert_eq!(Provider::from_id(p.id()), Some(p));
         }
         assert_eq!(Provider::from_id("unknown-provider"), None);

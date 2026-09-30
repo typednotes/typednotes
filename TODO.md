@@ -34,7 +34,42 @@ share of it, in dependency order. Source kinds: `scheduled`, `watch`, `ui`,
 - [x] Re-registration: when a lun session is gone (container recycled), rebuild it from `graph_inputs` before the next update.
 - [x] `LODE_URL`, `LODE_TOKEN`, `COMPUTE_DB_URL` in config and health (the status line on the home page) — and `LUN_URL`, `LUN_TOKEN`: the app submits builds and drives sessions itself.
 
-The app's share is done. What it sends lun beyond lun 0.2's wire —
-the session's `binding`, `secrets` and storage `warrants` — is lun's to honour
-(`docs/computations.md` §9); until it does, `db`, `secret` and `storage` cells
-are stored, provisioned and warranted, but a lun 0.2 function cannot use them.
+The coordinated 0.6.0 app / 0.3.0 runner and writer / 0.6.0 broker contract
+is verified through the real local pipeline, including bound DB, graph secrets,
+storage, independent permission denials and source recovery. See
+[`docs/native-connectors.md`](docs/native-connectors.md) for the contracts,
+kernel-checked guarantees, fixture coverage and deployment requirements.
+
+# UI
+
+- [x] in the notebook like UI, the user refers to other cell by name to use them as input (you can be inspired by observable).
+- [x] A cell can depend on many other cells or none (source)
+- [x] in the notebook, the cells are sorted in declaration order (they have a declaration number), but can be sorted by name or topological order (then name or id).
+- [x] an alternative presentation of cells would be a graph whith edges materializing dependencies.
+- [x] The natural language description in the cell yields code and a lean 4 type for the cell fn, the user may force the type (input types are forced by arguments but output could be constrained).
+- [x] The user is constrained to output Eff T where Eff guarantee a list of hard constraints and other set by the organization, including.
+  - only read-write your DB schema (this should be relatively transparent to the user)
+  - can only read/write a rsserved folder (for org/user) on disk (temporary in any case)
+  - can only query some domains
+  - can call tool x or y
+  - can use this AI or that messenging app
+- [x] The Effect constraint is enforced at the lun level
+- Be extensive and consistent about Eff level  permission. Each connector potentially comes with potentially rich permission. including S3 storage, drive, calendar, e-mail etc. Make simple things easy to set with sensible defaults
+  - [x] Organization provider ceilings, connection presets and per-cell grants have structured operation/resource editors, quick boundaries and request/response limits. Storage cells can infer an exact object from their configured path.
+  - [x] Real browser lifecycle coverage: create, rename with dependent reference updates, delete/refuse deletion, sort with stable draft values, dependency graph keyboard navigation, type edit, regenerate one/all, feed values, errors, dependency change and session recovery. Real app/API/PostgreSQL; writer/runtime/broker/vault mocked. See [verification and remaining integration](docs/notebook-ui.md).
+  - [x] Verify the actual native adapter/runtime path and Lean authority proofs for all advertised connector operations; 655 real broker HTTP cases cover 54 providers / 165 pairs, with zero catalog gaps, plus 69 compiled-driver runtime cases and the full app/writer/broker/runner pipeline. Remote paid-provider conformance and build/transport trust boundaries remain explicit in the linked contracts.
+  - [x] Validate forced source input types in caller-owned graph build metadata and provide recovery for incompatible recorded inputs after a source type change; Output/Wiring/Source contracts are kernel checked and real adoption/feed/recovery cases pass.
+
+# Graph
+
+- [ ] Can a node depend on multiple node themselves depending on one node
+- [ ] Can a node yield several times ? (it should be able like Reactive / Observable)
+
+# Lode
+
+- [ ] Has Lode enough doc about graphs to code them?
+- [ ] Does Lode have enough tools to develop the code? It should have access to the same Eff restricted interfaces as the code itself (DB, webcall, etc)
+- [ ] How does Lode call these tools? (it could write the code for each)
+- [ ] How does Lode test the code is working as expected?
+- [ ] Does Lode have access to a Lean 4 LSP server?
+- [ ] Can Lode search for the code in the repository? I guess after the repo is cloned locally with File utils (it should have the basic tools to search, read and edit files but maybe with).

@@ -2,10 +2,8 @@ use dioxus::prelude::*;
 
 const NAVBAR_CSS: Asset = asset!("/assets/styling/navbar.css");
 
-/// The logo's small variant (`scripts/logo.py`), sized for the navbar: one
-/// for light pages, one for dark.
-const MARK_LIGHT: Asset = asset!("/assets/logo/mark-light.svg");
-const MARK_DARK: Asset = asset!("/assets/logo/mark-dark.svg");
+/// The full canonical shadowed logo, scaled inside the app's colored pill.
+pub const BRAND_LOGO: Asset = asset!("/assets/logo/logo.svg");
 
 /// The sticky top bar. `children` are laid out in a row: typically the brand
 /// link (give it `class: "navbar-brand"`, with a `Logo` in it) and the
@@ -21,13 +19,13 @@ pub fn Navbar(children: Element) -> Element {
     }
 }
 
-/// The Typednotes mark, in the version for the current colour scheme. Both
-/// are in the page and CSS shows one, so it follows the scheme as the rest of
-/// the theme does, with no script. Decorative: the brand link carries the name.
+/// Decorative: the brand link carries the name. SVG alpha blends its complete
+/// mathematical shadow into the pill on either background.
 #[component]
 pub fn Logo() -> Element {
     rsx! {
-        img { class: "navbar-logo navbar-logo-light", src: MARK_LIGHT, alt: "", width: "28", height: "28" }
-        img { class: "navbar-logo navbar-logo-dark", src: MARK_DARK, alt: "", width: "28", height: "28" }
+        span { class: "navbar-logo-pill",
+            img { class: "navbar-logo", src: BRAND_LOGO, alt: "", width: "32", height: "32" }
+        }
     }
 }

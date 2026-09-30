@@ -661,7 +661,7 @@ mod tests {
         }
         assert!(Idp::Github.signs_in() && Idp::Google.signs_in());
         assert!(!Idp::Gitlab.signs_in() && !Idp::Slack.signs_in() && !Idp::Microsoft.signs_in());
-        for p in Provider::ALL {
+        for &p in Provider::ALL {
             assert_eq!(Idp::for_connection(p).is_some(), p.is_oauth(), "{p:?}");
         }
     }

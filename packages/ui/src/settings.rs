@@ -13,7 +13,9 @@
 use api::{
     current_user, delete_org, get_account, get_org, get_org_settings, get_project, remove_member,
     rename_org, rename_project, set_display_name, set_org_settings, sign_out_elsewhere, Org,
-    OrgSettings, Provider, MAX_AUTO_REPAIRS,
+    OrgSettings, Provider, MAX_AUTO_REPAIRS, EffectPolicy, NOTEBOOK_EFFECTS, WRITER_TOOLS,
+    set_notebook_permissions,
+    ConnectorPermissions,
 };
 use dioxus::prelude::*;
 
@@ -23,7 +25,8 @@ use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardContent, CardDescription, CardHeader, CardTitle};
 use crate::components::input::Input;
 use crate::components::label::Label;
-use crate::connections::{ConnectionsPanel, CONNECTIONS_CSS};
+use crate::components::textarea::Textarea;
+use crate::connections::{ConnectionsPanel, PermissionEditor, CONNECTIONS_CSS};
 use crate::members::MembersPanel;
 use crate::orgs::ORGS_CSS;
 use crate::projects::{DeleteProject, RepoPanel};
@@ -442,7 +445,105 @@ fn OrgNotebooks(slug: ReadSignal<String>) -> Element {
             rsx! { p { class: "orgs-error", "Could not load the settings: {error_message(&e)}" } }
         }
         Some(Ok(s)) => {
-            rsx! { AutoRepairs { slug: slug(), settings: s, on_saved: move |_| settings.restart() } }
+            rsx! {
+                NotebookPermissions { key: "{s.effect_policy:?}", slug: slug(), policy: s.effect_policy.clone(), can_edit: s.can_edit, on_saved: move |_| settings.restart() }
+                AutoRepairs { slug: slug(), settings: s, on_saved: move |_| settings.restart() }
+            }
+        }
+    }
+}
+
+#[component]
+fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_saved: EventHandler<()>) -> Element {
+    let mut effects = use_signal(|| policy.effects.clone());
+    let mut tools = use_signal(|| policy.tools.clone());
+    let mut providers = use_signal(|| policy.providers.clone());
+    let mut domains = use_signal(|| policy.domains.join("\n"));
+    let mut configured_domains = use_signal(|| policy.configured_domains);
+    let mut connector_ceilings = use_signal(|| policy.connector_ceilings.clone());
+    let mut busy = use_signal(|| false);
+    let mut status = use_signal(|| None::<Result<String, String>>);
+    let save = move |event: FormEvent| {
+        event.prevent_default();
+        let slug = slug.clone();
+        let connector_ceilings = connector_ceilings();
+        async move {
+            busy.set(true);
+            let policy = EffectPolicy { effects: effects(), tools: tools(), providers: providers(), configured_domains: configured_domains(), domains: domains().split([',', '\n']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(), connector_ceilings };
+            match set_notebook_permissions(slug, policy).await {
+                Ok(_) => { status.set(Some(Ok("Notebook permissions saved.".into()))); on_saved.call(()); }
+                Err(error) => status.set(Some(Err(error_message(&error)))),
+            }
+            busy.set(false);
+        }
+    };
+    rsx! {
+        Card {
+            CardHeader {
+                CardTitle { "Notebook permissions" }
+                CardDescription { "Organization-owned upper bounds for generated code. Cells cannot grant themselves additional access." }
+            }
+            CardContent {
+                form { class: "conn-subform", onsubmit: save,
+                    h4 { "Effects" }
+                    div { class: "conn-actions",
+                        for name in NOTEBOOK_EFFECTS {
+                            Button { r#type: "button", size: ButtonSize::Sm, disabled: !can_edit || busy(),
+                                variant: if effects().iter().any(|value| value == name) { ButtonVariant::Secondary } else { ButtonVariant::Outline },
+                                aria_pressed: effects().iter().any(|value| value == name).to_string(),
+                                onclick: move |_| effects.with_mut(|values| { if let Some(i) = values.iter().position(|value| value == name) { values.remove(i); } else { values.push(name.to_string()); } }), "{name}" }
+                        }
+                    }
+                    div { class: "orgs-field",
+                        Button { r#type: "button", variant: ButtonVariant::Outline, disabled: !can_edit, aria_pressed: configured_domains().to_string(), onclick: move |_| configured_domains.set(!configured_domains()),
+                            if configured_domains() { "Domains: use each cell's configured URL" } else { "Domains: use an organization allowlist" }
+                        }
+                        Label { html_for: "notebook-domains", "Allowed HTTP domains (one per line)" }
+                        Textarea { id: "notebook-domains", rows: 3, value: domains(), disabled: !can_edit || configured_domains(),
+                            placeholder: "api.example.com\nexample.com", oninput: move |event: FormEvent| domains.set(event.value()) }
+                        p { class: "conn-meta", "Exact public hostnames; empty denies network requests. Subdomains must be listed separately." }
+                    }
+                    p { class: "conn-meta", "Database access is restricted to the running user's schema. Files are restricted to that organization and user's temporary folder. These boundaries cannot be widened here." }
+                    details {
+                        summary { "Code-writing tools" }
+                        div { class: "conn-actions",
+                            for name in WRITER_TOOLS {
+                                Button { r#type: "button", size: ButtonSize::Sm, disabled: !can_edit || busy(),
+                                    variant: if tools().iter().any(|value| value == name) { ButtonVariant::Secondary } else { ButtonVariant::Outline },
+                                    aria_pressed: tools().iter().any(|value| value == name).to_string(),
+                                    onclick: move |_| tools.with_mut(|values| { if let Some(i) = values.iter().position(|value| value == name) { values.remove(i); } else { values.push(name.to_string()); } }), "{name}" }
+                            }
+                        }
+                    }
+                    details {
+                        summary { "Connector providers" }
+                        div { class: "conn-actions",
+                            for &provider in Provider::ALL.iter() {
+                                Button { r#type: "button", size: ButtonSize::Sm, disabled: !can_edit || busy(),
+                                    variant: if providers().iter().any(|value| value == provider.id()) { ButtonVariant::Secondary } else { ButtonVariant::Outline },
+                                    aria_pressed: providers().iter().any(|value| value == provider.id()).to_string(),
+                                    onclick: move |_| providers.with_mut(|values| { if let Some(i) = values.iter().position(|value| value == provider.id()) { values.remove(i); } else { values.push(provider.id().to_string()); } }), "{provider.name()}" }
+                            }
+                        }
+                    }
+                    details { class: "permission-advanced",
+                        summary { "Advanced connector ceilings" }
+                        p { class: "conn-meta", "Optional limits for every connection of a provider. Inherit keeps each connection's ceiling; no JSON is needed. Disabling a provider above denies it entirely." }
+                        for &provider in Provider::ALL.iter() {
+                            details { class: "provider-ceiling", key: "{provider.id()}",
+                                summary { "{provider.name()}" }
+                                PermissionEditor { id: "org-{provider.id()}", provider, value: connector_ceilings().get(provider.id()).cloned(), ceiling: None,
+                                    disabled: !can_edit || busy(),
+                                    on_change: move |value: Option<ConnectorPermissions>| connector_ceilings.with_mut(|ceilings| {
+                                        if let Some(value) = value { ceilings.insert(provider.id().into(), value); } else { ceilings.remove(provider.id()); }
+                                    }) }
+                            }
+                        }
+                    }
+                    if can_edit { Button { r#type: "submit", disabled: busy(), "Save permissions" } }
+                    Outcome { status: status() }
+                }
+            }
         }
     }
 }

@@ -11,6 +11,8 @@ use api::{
     report_cell, restart_graph, rotate_endpoint, set_cell_secret, set_graph_model, update_cell,
     validate_cell, widget_for, Cell, CellConfig, CellPhase, CellType, Channel, Connection,
     FeedResult, Graph, GraphDetail, GraphNode, LodeEntry, Provider, Widget, UI_FORMATS,
+    CellOrder, cell_dependencies, ordered_cells, CellConnector, ConnectorPermissions,
+    PermissionPreset,
 };
 use dioxus::prelude::*;
 use serde_json::Value;
@@ -22,7 +24,7 @@ use crate::components::input::Input;
 use crate::components::label::Label;
 use crate::components::select::{Select, SelectOption};
 use crate::components::textarea::Textarea;
-use crate::connections::CONNECTIONS_CSS;
+use crate::connections::{PermissionEditor, CONNECTIONS_CSS};
 use crate::orgs::ORGS_CSS;
 use crate::render::{pretty, JsonView, Output};
 use crate::slug_form::{NewSlugForm, Scope};
@@ -167,6 +169,7 @@ pub fn NotebookPage(
     // A run was launched (implement, a report, an automatic rewrite): follow
     // it, and reload the page for the cells now being written.
     let started = use_callback(move |g: Graph| {
+        fed.set(None);
         live.set(Some(g));
         follow.restart();
         spawn(async move {
@@ -190,6 +193,7 @@ pub fn NotebookPage(
             .collect(),
         _ => Vec::new(),
     };
+    let available_connections = connections().and_then(Result::ok).unwrap_or_default();
 
     rsx! {
         document::Link { rel: "stylesheet", href: ORGS_CSS }
@@ -224,6 +228,7 @@ pub fn NotebookPage(
                             log: log(),
                             ready: current.session,
                             storage: storage.clone(),
+                            connections: available_connections.clone(),
                             on_changed: move |_| detail.restart(),
                             on_started: started,
                             on_fed: {
@@ -383,7 +388,7 @@ fn Header(
                             Button {
                                 disabled: busy() || detail.cells.is_empty() || detail.project.repo.is_none(),
                                 onclick: move |_| implement(false),
-                                if graph.commit.is_some() { "Implement again" } else { "Implement" }
+                                 if graph.commit.is_some() { "Regenerate all code" } else { "Generate all code" }
                             }
                             Button {
                                 variant: ButtonVariant::Outline,
@@ -420,6 +425,10 @@ fn ModelPicker(
     ai: Vec<Connection>,
     on_changed: EventHandler<()>,
 ) -> Element {
+    let ai: Vec<Connection> = ai
+        .into_iter()
+        .filter(|c| c.provider.can_generate())
+        .collect();
     let mut connection = use_signal(|| {
         graph
             .model_connection_id
@@ -428,6 +437,14 @@ fn ModelPicker(
             .unwrap_or_default()
     });
     let mut model = use_signal(|| graph.model_name.clone().unwrap_or_default());
+    let ai_for_price = ai.clone();
+    let price_provider = use_memo(move || {
+        ai_for_price
+            .iter()
+            .find(|c| c.id == connection())
+            .map(|c| c.provider)
+            .unwrap_or(Provider::Anthropic)
+    });
     let mut status = use_signal(|| None::<Result<String, String>>);
     if ai.is_empty() {
         return rsx! {
@@ -476,8 +493,9 @@ fn ModelPicker(
                 Label { html_for: "nb-model", "Model" }
                 Input { id: "nb-model", placeholder: "claude-sonnet-4-5", value: model(), oninput: move |e: FormEvent| model.set(e.value()) }
             }
-            Button { variant: ButtonVariant::Outline, disabled: model().trim().is_empty(), onclick: save, "Save model" }
+            Button { variant: ButtonVariant::Outline, disabled: model().trim().is_empty() || graph.status == "implementing", onclick: save, "Save model" }
         }
+        crate::ai_cost::ModelCost { provider: price_provider(), model: model() }
         match status() {
             Some(Ok(m)) => rsx! { p { class: "conn-result ok", "{m}" } },
             Some(Err(e)) => rsx! { p { class: "orgs-error", "{e}" } },
@@ -502,6 +520,9 @@ fn LodeLog(entries: Vec<LodeEntry>, running: bool) -> Element {
                         div { key: "{e.index}", class: "nb-log-entry nb-log-{e.kind}",
                             span { class: "nb-log-kind", "{e.kind}" }
                             span { class: "nb-log-text", "{e.text}" }
+                            if let Some(usage) = e.usage.as_ref() {
+                                span { class: "conn-meta", " · tokens: {usage.input} input, {usage.output} output, {usage.cache_read} cached read, {usage.cache_write} cached write" }
+                            }
                         }
                     }
                 }
@@ -522,10 +543,14 @@ fn Cells(
     log: Vec<LodeEntry>,
     ready: bool,
     storage: Vec<Connection>,
+    connections: Vec<Connection>,
     on_changed: EventHandler<()>,
     on_started: EventHandler<Graph>,
     on_fed: EventHandler<FeedResult>,
 ) -> Element {
+    let mut order = use_signal(|| CellOrder::Declaration);
+    let mut diagram = use_signal(|| false);
+    let mut selected = use_signal(|| None::<String>);
     let implementing = graph.status == "implementing";
     // This run's part of lode's log: what each cell's "follow the writing" shows.
     let run: Vec<LodeEntry> = log
@@ -533,6 +558,7 @@ fn Cells(
         .filter(|e| e.index >= graph.log_start)
         .collect();
     let count = detail.cells.len();
+    let ordered = ordered_cells(&detail.cells, &nodes, order());
     rsx! {
         Card {
             CardHeader {
@@ -543,24 +569,44 @@ fn Cells(
                 }
             }
             CardContent {
+                div { class: "nb-toolbar",
+                    div { class: "conn-select",
+                        Select::<CellOrder> {
+                            default_value: order(), aria_label: "Cell order",
+                            on_value_change: move |value: Option<CellOrder>| { if let Some(value) = value { order.set(value); } },
+                            SelectOption::<CellOrder> { index: 0usize, value: CellOrder::Declaration, text_value: "Declaration order", "Declaration order" }
+                            SelectOption::<CellOrder> { index: 1usize, value: CellOrder::Name, text_value: "Name", "Name" }
+                            SelectOption::<CellOrder> { index: 2usize, value: CellOrder::Topological, text_value: "Dependency order", "Dependency order" }
+                        }
+                    }
+                    Button { variant: if !diagram() { ButtonVariant::Secondary } else { ButtonVariant::Ghost }, aria_pressed: (!diagram()).to_string(), onclick: move |_| diagram.set(false), "Notebook" }
+                    Button { variant: if diagram() { ButtonVariant::Secondary } else { ButtonVariant::Ghost }, aria_pressed: diagram().to_string(), onclick: move |_| diagram.set(true), "Dependency graph" }
+                }
                 if detail.cells.is_empty() {
                     p { class: "orgs-empty", "No cell yet — add the first one below." }
                 }
+                if diagram() && !detail.cells.is_empty() {
+                    DependencyGraph { cells: detail.cells.clone(), nodes: nodes.clone(), on_select: move |id: String| selected.set(Some(id)) }
+                }
                 div { class: "nb-cells",
-                    for (i, cell) in detail.cells.iter().enumerate() {
+                    for cell in ordered.iter().filter(|cell| !diagram() || selected().as_deref() == Some(cell.id.as_str())) {
                         CellView {
                             key: "{cell.id}",
                             slug: slug.clone(),
                             project: project.clone(),
                             graph: detail.graph.slug.clone(),
                             cell: cell.clone(),
-                            index: i,
+                            index: detail.cells.iter().position(|c| c.id == cell.id).unwrap_or(0),
+                            declaration: cell.position + 1,
                             count,
+                            cells: detail.cells.clone(),
+                            reorder: order() == CellOrder::Declaration,
                             nodes: nodes.clone(),
                             sources: detail.sources.clone(),
                             sinks: detail.sinks.clone(),
                             channels: detail.channels.clone(),
                             storage: storage.clone(),
+                            connections: connections.clone(),
                             ready,
                             implementing,
                             run: run.clone(),
@@ -575,10 +621,62 @@ fn Cells(
                     project: project.clone(),
                     graph: detail.graph.slug.clone(),
                     existing: None,
+                    cells: detail.cells.clone(),
+                    nodes: nodes.clone(),
                     channels: detail.channels.clone(),
                     storage: storage.clone(),
+                    connections: connections.clone(),
                     on_saved: move |_| on_changed.call(()),
                     on_cancel: None,
+                }
+            }
+        }
+    }
+}
+
+/// One lane per dependency depth. Every node links to its editable notebook cell.
+#[component]
+fn DependencyGraph(cells: Vec<Cell>, nodes: Vec<GraphNode>, on_select: EventHandler<String>) -> Element {
+    let sorted = ordered_cells(&cells, &nodes, CellOrder::Topological);
+    let mut levels = std::collections::BTreeMap::<String, usize>::new();
+    let mut rows = std::collections::BTreeMap::<usize, usize>::new();
+    let mut positions = std::collections::BTreeMap::<String, (usize, usize)>::new();
+    for cell in &sorted {
+        let depth = cell_dependencies(cell, &cells, &nodes).iter().filter_map(|name| levels.get(name)).max().map_or(0, |n| n + 1);
+        let row = rows.entry(depth).or_default();
+        positions.insert(cell.name.clone(), (24 + depth * 236, 24 + *row * 100));
+        *row += 1;
+        levels.insert(cell.name.clone(), depth);
+    }
+    let width = 48 + (levels.values().copied().max().unwrap_or(0) + 1) * 236;
+    let height = 48 + rows.values().copied().max().unwrap_or(1) * 100;
+    rsx! {
+        div { class: "nb-graph-wrap",
+            p { class: "conn-meta", "Arrows run from an input cell to the cells that use it. Select a cell to edit it below." }
+            svg { class: "nb-dependency-graph", view_box: "0 0 {width} {height}", width: "{width}", height: "{height}", role: "group", "aria-label": "Notebook cell dependencies",
+                defs { marker { id: "nb-arrow", view_box: "0 0 10 10", ref_x: "9", ref_y: "5", marker_width: "6", marker_height: "6", orient: "auto-start-reverse", path { d: "M 0 0 L 10 5 L 0 10 z" } } }
+                for cell in &sorted {
+                    for name in cell_dependencies(cell, &cells, &nodes) {
+                        if let (Some((sx, sy)), Some((tx, ty))) = (positions.get(&name), positions.get(&cell.name)) {
+                            path { class: "nb-graph-edge", d: "M {sx + 196} {sy + 34} C {sx + 216} {sy + 34}, {tx - 20} {ty + 34}, {tx} {ty + 34}", marker_end: "url(#nb-arrow)" }
+                        }
+                    }
+                }
+                for cell in &sorted {
+                    if let Some((x, y)) = positions.get(&cell.name) {
+                        g { class: "nb-graph-link", role: "button", tabindex: "0", "aria-label": "Go to cell {cell.name}",
+                            onclick: { let id = cell.id.clone(); move |_| on_select.call(id.clone()) },
+                            onkeydown: { let id = cell.id.clone(); move |event: KeyboardEvent| {
+                                if event.key() == Key::Enter || event.key() == Key::Character(" ".into()) {
+                                    event.prevent_default();
+                                    on_select.call(id.clone());
+                                }
+                            } },
+                            rect { class: "nb-graph-node nb-graph-{cell.cell_type.kind()}", x: "{x}", y: "{y}", width: "196", height: "68", rx: "8" }
+                            text { class: "nb-graph-title", x: "{x + 12}", y: "{y + 27}", "{cell.position + 1}. {cell.name.chars().take(22).collect::<String>()}" }
+                            text { class: "nb-graph-kind", x: "{x + 12}", y: "{y + 49}", "{cell.cell_type.label()}" }
+                        }
+                    }
                 }
             }
         }
@@ -606,12 +704,16 @@ fn CellView(
     graph: String,
     cell: Cell,
     index: usize,
+    declaration: i32,
     count: usize,
+    cells: Vec<Cell>,
+    reorder: bool,
     nodes: Vec<GraphNode>,
     sources: Vec<u64>,
     sinks: Vec<u64>,
     channels: Vec<Channel>,
     storage: Vec<Connection>,
+    connections: Vec<Connection>,
     ready: bool,
     implementing: bool,
     run: Vec<LodeEntry>,
@@ -685,8 +787,11 @@ fn CellView(
                     project,
                     graph,
                     existing: Some(cell.clone()),
+                    cells: cells.clone(),
+                    nodes: nodes.clone(),
                     channels,
                     storage,
+                    connections,
                     on_saved: move |_| {
                         editing.set(false);
                         on_changed.call(());
@@ -698,14 +803,16 @@ fn CellView(
     }
 
     rsx! {
-        div { class: "nb-cell nb-cell-{cell.cell_type.kind()} nb-phase-is-{phase.id()}",
+        div { id: "nb-cell-{cell.id}", class: "nb-cell nb-cell-{cell.cell_type.kind()} nb-phase-is-{phase.id()}",
             div { class: "nb-cell-head",
-                span { class: "nb-cell-index", "{index + 1}" }
+                span { class: "nb-cell-index", title: "Declaration number", "{declaration}" }
                 code { class: "nb-cell-name", "{cell.name}" }
                 span { class: "nb-badge nb-badge-{cell.cell_type.kind()}", "{cell.cell_type.label()}" }
                 div { class: "nb-cell-actions",
-                    Button { size: ButtonSize::Sm, variant: ButtonVariant::Ghost, disabled: index == 0, onclick: move |_| up(-1), "↑" }
-                    Button { size: ButtonSize::Sm, variant: ButtonVariant::Ghost, disabled: index + 1 >= count, onclick: move |_| down(1), "↓" }
+                    if reorder {
+                        Button { size: ButtonSize::Sm, variant: ButtonVariant::Ghost, aria_label: "Move {cell.name} up", disabled: index == 0, onclick: move |_| up(-1), "↑" }
+                        Button { size: ButtonSize::Sm, variant: ButtonVariant::Ghost, aria_label: "Move {cell.name} down", disabled: index + 1 >= count, onclick: move |_| down(1), "↓" }
+                    }
                     Button { size: ButtonSize::Sm, variant: ButtonVariant::Ghost, onclick: move |_| editing.set(true), "Edit" }
                     Button {
                         size: ButtonSize::Sm,
@@ -716,6 +823,21 @@ fn CellView(
                 }
             }
             p { class: "nb-description", "{cell.description}" }
+            div { class: "nb-declarations",
+                span { class: "conn-meta", "Inputs" }
+                if cell_dependencies(&cell, &cells, &nodes).is_empty() {
+                    span { class: "conn-meta", "None (source)" }
+                } else {
+                    for name in cell_dependencies(&cell, &cells, &nodes) {
+                        if let Some(target) = cells.iter().find(|c| c.name == name) {
+                            a { class: "nb-reference", href: "#nb-cell-{target.id}", "@{name}" }
+                        }
+                    }
+                }
+                if let Some(ty) = &cell.config.output_type {
+                    span { class: "conn-meta", "Output constraint" } code { "{ty}" }
+                }
+            }
             if !config_text.is_empty() {
                 p { class: "conn-meta", "{config_text}" }
             }
@@ -739,7 +861,7 @@ fn CellView(
             }
             match cell.cell_type {
                 CellType::UiInput => rsx! {
-                    InputWidget { slug: slug.clone(), project: project.clone(), graph: graph.clone(), cell: cell.clone(), ready, on_fed: move |r: FeedResult| on_fed.call(r) }
+                    InputWidget { key: "{cell.config:?}-{cell.implementation.as_ref().and_then(|i| i.input_type.clone()):?}", slug: slug.clone(), project: project.clone(), graph: graph.clone(), cell: cell.clone(), ready, on_fed: move |r: FeedResult| on_fed.call(r) }
                 },
                 CellType::Secret => rsx! {
                     SecretField { slug: slug.clone(), project: project.clone(), graph: graph.clone(), cell: cell.clone(), on_set: move |_| on_changed.call(()) }
@@ -825,7 +947,7 @@ fn Lifecycle(
             }
         }
     };
-    let (fix, rewrite, submit) = (send.clone(), send.clone(), send);
+    let (fix, rewrite, regenerate, submit) = (send.clone(), send.clone(), send.clone(), send);
     let has_code = matches!(
         phase,
         CellPhase::Running | CellPhase::Failed | CellPhase::Stale
@@ -860,6 +982,11 @@ fn Lifecycle(
                         onclick: move |_| reporting.set(true),
                         "Not doing the right thing?"
                     }
+                }
+                if cell.cell_type.has_function() {
+                    Button { size: ButtonSize::Sm, variant: ButtonVariant::Outline, disabled: busy() || implementing,
+                        onclick: move |_| regenerate("Regenerate this cell's code from its current description, dependencies, output type and permissions.".into()),
+                        "Regenerate code" }
                 }
             }
             if let Some(issue) = cell.issue.clone().filter(|_| phase == CellPhase::Writing) {
@@ -1179,7 +1306,12 @@ fn InputWidget(
         .implementation
         .as_ref()
         .and_then(|i| i.input_type.clone());
-    let widget = widget_for(input_type.as_deref(), &cell.config.choices);
+    // Draft choices must not turn a running numeric input into a string feed.
+    // Keep using the adopted Lean input type until the replacement build lands.
+    let active_choices = if input_type.as_deref().is_some_and(|ty| ty.trim() != "String") {
+        Vec::new()
+    } else { cell.config.choices.clone() };
+    let widget = widget_for(input_type.as_deref().or(cell.config.output_type.as_deref()), &active_choices);
     let initial = match (&widget, &cell.last_input) {
         (_, None) => String::new(),
         (Widget::Text | Widget::Select(_), Some(Value::String(s))) => s.clone(),
@@ -1260,6 +1392,9 @@ fn InputWidget(
 
     rsx! {
         div { class: "nb-widget",
+            if cell.stale {
+                p { class: "conn-meta", "Values feed the current built input type. Regenerate the notebook to adopt a changed source type." }
+            }
             match widget.clone() {
                 Widget::Toggle => {
                     let on = text() == "true";
@@ -1299,9 +1434,10 @@ fn InputWidget(
                         Label { html_for: "{id}", "Value (JSON)" }
                         Textarea { id: "{id}", rows: 4, value: text(), oninput: move |e: FormEvent| text.set(e.value()) }
                     }
-                    Button { disabled, onclick: move |_| send_b(text()), "Set" }
+                    Button { disabled, onclick: move |_| send_b(text()), "Feed input" }
                 },
                 Widget::Number { integer, natural } => rsx! {
+                    Label { html_for: "{id}", "{cell.name} value" }
                     div { class: "conn-picker",
                         Input {
                             id: "{id}",
@@ -1311,13 +1447,14 @@ fn InputWidget(
                             value: text(),
                             oninput: move |e: FormEvent| text.set(e.value()),
                         }
-                        Button { disabled, onclick: move |_| send_b(text()), "Set" }
+                        Button { disabled, onclick: move |_| send_b(text()), "Feed input" }
                     }
                 },
                 Widget::Text => rsx! {
+                    Label { html_for: "{id}", "{cell.name} value" }
                     div { class: "conn-picker",
                         Input { id: "{id}", value: text(), oninput: move |e: FormEvent| text.set(e.value()) }
-                        Button { disabled, onclick: move |_| send_b(text()), "Set" }
+                        Button { disabled, onclick: move |_| send_b(text()), "Feed input" }
                     }
                 },
             }
@@ -1445,8 +1582,11 @@ fn CellEditor(
     project: String,
     graph: String,
     existing: Option<Cell>,
+    cells: Vec<Cell>,
+    nodes: Vec<GraphNode>,
     channels: Vec<Channel>,
     storage: Vec<Connection>,
+    connections: Vec<Connection>,
     on_saved: EventHandler<()>,
     on_cancel: Option<EventHandler<()>>,
 ) -> Element {
@@ -1474,6 +1614,9 @@ fn CellEditor(
             .unwrap_or_else(|| "0 * * * *".to_string())
     });
     let mut input = use_signal(|| field(&initial.input));
+    let mut dependency_names = use_signal(|| start.as_ref().map(|cell| cell_dependencies(cell, &cells, &nodes).join(", ")).unwrap_or_default());
+    let mut output_type = use_signal(|| field(&initial.output_type));
+    let mut connectors = use_signal(|| initial.connectors.clone());
     let mut choices = use_signal(|| initial.choices.join(", "));
     let mut secret = use_signal(|| field(&initial.name));
     let mut channel = use_signal(|| {
@@ -1502,6 +1645,8 @@ fn CellEditor(
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     let mut shown_url = use_signal(|| None::<String>);
+    let policy_slug = slug.clone();
+    let permissions = use_server_future(move || api::get_org_settings(policy_slug.clone()))?;
     let editing = existing.is_some();
     let prefix = existing
         .as_ref()
@@ -1511,6 +1656,9 @@ fn CellEditor(
     let config = move || {
         let opt = |s: String| Some(s.trim().to_string()).filter(|s| !s.is_empty());
         CellConfig {
+            connectors: connectors(),
+            dependencies: Some(if cell_type().is_source() { Vec::new() } else { dependency_names().split([',', ' ', '\n']).filter(|s| !s.is_empty()).map(|s| s.trim_start_matches('@').to_string()).collect() }),
+            output_type: opt(output_type()),
             url: opt(url()),
             schedule: opt(schedule()),
             input: opt(input()),
@@ -1533,6 +1681,7 @@ fn CellEditor(
     let interfaces_href = format!("/orgs/{slug}/projects/{project}/settings/interfaces");
     let connections_href = format!("/orgs/{slug}/settings/connections");
     let submit = move |evt: FormEvent| {
+        let submitted_config = config();
         let (slug, project, graph, existing_id) = (
             slug.clone(),
             project.clone(),
@@ -1541,7 +1690,7 @@ fn CellEditor(
         );
         async move {
             evt.prevent_default();
-            let (t, n, d, c) = (cell_type(), name(), description(), config());
+            let (t, n, d, c) = (cell_type(), name(), description(), submitted_config);
             if let Err(e) = validate_cell(t, &n, &d, &c) {
                 error.set(Some(e));
                 return;
@@ -1562,6 +1711,9 @@ fn CellEditor(
                         name.set(String::new());
                         description.set(String::new());
                         input.set(String::new());
+                        dependency_names.set(String::new());
+                        output_type.set(String::new());
+                        connectors.set(Vec::new());
                     }
                     shown_url.set(endpoint);
                     on_saved.call(());
@@ -1612,6 +1764,35 @@ fn CellEditor(
                     placeholder: placeholder(t),
                     value: description(),
                     oninput: move |e: FormEvent| description.set(e.value()),
+                }
+            }
+            if !t.is_source() {
+                div { class: "orgs-field conn-wide",
+                    Label { html_for: "{prefix}-dependencies", "Input cells (in argument order)" }
+                    Input { id: "{prefix}-dependencies", placeholder: "price, tax", value: dependency_names(), oninput: move |e: FormEvent| dependency_names.set(e.value()) }
+                    p { class: "conn-meta", "Refer to cells by name, or write @cell_name in the description. Leave empty for no dependencies." }
+                    div { class: "nb-reference-picker",
+                        for other in cells.iter().filter(|c| Some(&c.id) != existing.as_ref().map(|e| &e.id) && c.cell_type != CellType::Secret) {
+                            Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Ghost,
+                                onclick: {
+                                    let reference = other.name.clone();
+                                    move |_| {
+                                        let mut names: Vec<String> = dependency_names().split([',', ' ', '\n']).filter(|s| !s.is_empty()).map(|s| s.trim_start_matches('@').to_string()).collect();
+                                        if !names.contains(&reference) { names.push(reference.clone()); dependency_names.set(names.join(", ")); }
+                                    }
+                                }, "@{other.name}" }
+                        }
+                    }
+                }
+            }
+            if t != CellType::Secret {
+                div { class: "orgs-field conn-wide",
+                    Label { html_for: "{prefix}-output-type", "Output type (optional Lean 4 constraint)" }
+                    Input { id: "{prefix}-output-type", placeholder: "Nat, String, List Invoice…", value: output_type(), oninput: move |e: FormEvent| output_type.set(e.value()) }
+                    p { class: "conn-meta",
+                        if t.has_function() { "Argument types come from the input cells. The generated function must return Eff effs T with this output type." }
+                        else { "Constrains the source's input value and widget. The runtime must validate fed values against this Lean type." }
+                    }
                 }
             }
             match t {
@@ -1727,10 +1908,16 @@ fn CellEditor(
                 },
                 _ => rsx! {},
             }
+            if t != CellType::Secret {
+                CellConnections { connections: connections.clone(), value: connectors(), id: prefix.clone(), disabled: busy(),
+                    policy: permissions().and_then(Result::ok).map(|s| s.effect_policy),
+                    storage_scope: if t == CellType::StorageSink { Some((connection(), path())) } else { None },
+                    on_change: move |value: Vec<CellConnector>| connectors.set(value) }
+            }
             div { class: "conn-actions",
                 Button { r#type: "submit", disabled: busy(), if editing { "Save" } else { "Add cell" } }
                 if let Some(cancel) = on_cancel {
-                    Button { variant: ButtonVariant::Ghost, onclick: move |_| cancel.call(()), "Cancel" }
+                    Button { r#type: "button", variant: ButtonVariant::Ghost, onclick: move |_| cancel.call(()), "Cancel" }
                 }
             }
             if let Some(u) = shown_url() {
@@ -1738,6 +1925,59 @@ fn CellEditor(
             }
             if let Some(e) = error() {
                 p { class: "orgs-error", "{e}" }
+            }
+        }
+    }
+}
+
+#[component]
+fn CellConnections(connections: Vec<Connection>, value: Vec<CellConnector>, id: String, disabled: bool, policy: Option<api::EffectPolicy>, storage_scope: Option<(String, String)>, on_change: EventHandler<Vec<CellConnector>>) -> Element {
+    rsx! {
+        details { class: "cell-connections",
+            summary { "Connections for this cell ({value.len()})" }
+            p { class: "conn-meta", "Select the accounts this cell may use. Permissions inherit each connection's ceiling; Advanced can narrow operations and resources. Organization policy and runtime warrants remain upper bounds." }
+            if connections.is_empty() { p { class: "conn-meta", "No connections available. Add one in the organization's connection settings." } }
+            for connection in &connections {
+                {let parent = connection.permissions.clone().unwrap_or_else(|| ConnectorPermissions::preset(connection.provider, PermissionPreset::ReadOnly));
+                let ceiling = policy.as_ref().and_then(|p| p.connector_ceilings.get(connection.provider.id())).map_or(parent.clone(), |org| parent.intersect(org));
+                let allowed = policy.as_ref().is_some_and(|p| p.effects.iter().any(|e| e == "Connector") && p.allows_provider(connection.provider));
+                rsx! {
+                div { class: "cell-connection", key: "{connection.id}",
+                    Button { r#type: "button", size: ButtonSize::Sm, variant: if value.iter().any(|grant| grant.connection == connection.id) { ButtonVariant::Secondary } else { ButtonVariant::Outline },
+                        disabled: disabled || (!allowed && !value.iter().any(|grant| grant.connection == connection.id)), aria_pressed: value.iter().any(|grant| grant.connection == connection.id).to_string(),
+                        onclick: { let mut next = value.clone(); let connection = connection.id.clone(); move |_| {
+                            if next.iter().any(|grant| grant.connection == connection) { next.retain(|grant| grant.connection != connection); }
+                            else { next.push(CellConnector { connection: connection.clone(), permissions: None }); }
+                            on_change.call(next.clone());
+                        } }, "{connection_name(connection)}" }
+                    if let Some(grant) = value.iter().find(|grant| grant.connection == connection.id) {
+                        PermissionEditor { id: "{id}-{connection.id}", provider: connection.provider, value: grant.permissions.clone(), disabled: disabled || !allowed,
+                            ceiling: Some(ceiling.clone()),
+                            on_change: { let mut next = value.clone(); let connection = connection.id.clone(); move |permissions| {
+                                if let Some(grant) = next.iter_mut().find(|grant| grant.connection == connection) { grant.permissions = permissions; }
+                                on_change.call(next.clone());
+                            } } }
+                        if let Some((storage_id, path)) = storage_scope.as_ref().filter(|(storage_id, path)| storage_id == &connection.id && !path.trim().is_empty() && matches!(connection.provider, Provider::S3 | Provider::Azure)) {
+                            Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Outline, disabled,
+                                onclick: { let mut next = value.clone(); let connection = storage_id.clone(); let root: Vec<String> = path.trim().split('/').map(str::to_string).collect(); let ceiling = ceiling.clone(); move |_| {
+                                    if let Some(grant) = next.iter_mut().find(|g| g.connection == connection) {
+                                        let mut requested = ceiling.clone();
+                                        for scope in &mut requested.scopes { scope.root = root.clone(); scope.descendants = false; }
+                                        grant.permissions = Some(ceiling.intersect(&requested));
+                                    }
+                                    on_change.call(next.clone());
+                                } }, "Use configured object: {path}" }
+                        }
+                    }
+                    if !allowed { p { class: "conn-meta", "Disabled by organization notebook permissions." } }
+                }
+                }}
+            }
+            for grant in value.iter().filter(|grant| !connections.iter().any(|connection| connection.id == grant.connection)) {
+                p { class: "orgs-error", "Unavailable connection: {grant.connection}" }
+                Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Ghost, disabled,
+                    onclick: { let mut next = value.clone(); let connection = grant.connection.clone(); move |_| { next.retain(|grant| grant.connection != connection); on_change.call(next.clone()); } },
+                    "Remove unavailable connection" }
             }
         }
     }

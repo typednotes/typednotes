@@ -51,7 +51,7 @@ macro_rules! graph_columns {
          g.project_id::text as project_id, g.last_nodes::text as last_nodes, \
          g.structure::text as structure, g.lode_log_start, g.auto_repairs, \
          to_char(g.created_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI \"UTC\"') as created_at, \
-         to_char(g.updated_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI \"UTC\"') as updated_at"
+          to_char(g.updated_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS.US \"UTC\"') as updated_at"
     };
 }
 
@@ -388,12 +388,19 @@ pub async fn create(
     validate_org(slug, name).map_err(bad_request)?;
     let (project, _) = projects::get(org, project_slug).await?;
     // The org's first AI connection, as a starting point.
+    let ai_providers: Vec<String> = Provider::AI
+        .iter()
+        .copied()
+        .filter(|p| p.can_generate())
+        .map(|p| p.id().to_string())
+        .collect();
     let model = sqlx::query(
         "select id::text as id, provider from connections where org_id = $1::uuid \
-         and provider in ('anthropic', 'mistral', 'openai', 'openai-compatible') \
+         and provider = any($2::text[]) \
          order by created_at limit 1",
     )
     .bind(&org.id)
+    .bind(ai_providers)
     .fetch_optional(pool()?)
     .await
     .map_err(db_error)?;
@@ -426,12 +433,7 @@ pub async fn create(
 
 /// The model a provider's connection defaults to.
 pub fn default_model(provider: Provider) -> Option<&'static str> {
-    match provider {
-        Provider::Anthropic => Some("claude-sonnet-4-5"),
-        Provider::Mistral => Some("mistral-large-latest"),
-        Provider::Openai => Some("gpt-4.1"),
-        _ => None,
-    }
+    provider.ai_info().and_then(|p| p.default_model)
 }
 
 /// Delete a notebook: its creator or an org admin. Its secrets go first, so
@@ -457,11 +459,14 @@ pub async fn delete(
     if let Some(session) = &ctx.row.lun_session_id {
         lun::end(session).await;
     }
+    let mut tx = super::connector::lock(&ctx.org.id).await?;
+    super::connector::revoke_graph(&mut tx, &ctx.org.id, &ctx.row.graph.id).await?;
     sqlx::query("delete from graphs where id = $1::uuid")
         .bind(&ctx.row.graph.id)
-        .execute(pool()?)
+        .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
     Ok(())
 }
 
@@ -475,8 +480,15 @@ pub async fn set_model(
 ) -> Result<Graph, ServerFnError> {
     let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
     let (connection, _) = connections::get(org, user, connection_id.trim()).await?;
-    if !connection.provider.is_ai() {
-        return Err(bad_request("not an AI connection"));
+    if ctx.row.graph.status == "implementing" {
+        return Err(conflict(
+            "finish or stop the current implementation before changing its model",
+        ));
+    }
+    if !connection.provider.can_generate() {
+        return Err(bad_request(
+            "choose a generative AI connection; classifiers do not write code",
+        ));
     }
     let name = model_name.trim();
     if !(1..=100).contains(&name.len()) || !name.chars().all(|c| c.is_ascii_graphic()) {
@@ -484,8 +496,14 @@ pub async fn set_model(
             "model: 1–100 characters without spaces, e.g. claude-sonnet-4-5",
         ));
     }
+    if connection.provider.ai_api(name) == Some(crate::AiApi::Classifier) {
+        return Err(bad_request("choose a generative model; Jev is a classifier"));
+    }
     sqlx::query(
-        "update graphs set model_connection_id = $2::uuid, model_name = $3, updated_at = now() \
+        "update graphs set \
+          lode_session_id = case when model_connection_id is distinct from $2::uuid \
+            or model_name is distinct from $3 then null else lode_session_id end, \
+          model_connection_id = $2::uuid, model_name = $3, updated_at = now() \
          where id = $1::uuid",
     )
     .bind(&ctx.row.graph.id)
@@ -561,6 +579,7 @@ pub async fn detail(
         channels,
         activity: activity(&graph_id).await?,
         can_edit: true,
+        effect_policy: super::db::org_settings(org).await?.effect_policy,
     })
 }
 
@@ -680,10 +699,78 @@ async fn check_cell_refs(
             return Err(bad_request("not a storage connection"));
         }
     }
+    let policy = super::db::org_settings(&ctx.org).await?.effect_policy;
+    for grant in &config.connectors {
+        if let Some(service) = crate::LocalService::from_selection(&grant.connection) {
+            if !policy.effects.iter().any(|effect| effect == service.effect()) {
+                return Err(forbidden("the organization does not permit this local service"));
+            }
+            if let Some(permissions) = &grant.permissions {
+                let schema = compute::role_name(&ctx.org.slug, &ctx.org.id, &ctx.user.id);
+                let permissions = permissions.validate_local(service).map_err(bad_request)?;
+                super::local::parent(service, &schema).narrow(&permissions).map_err(bad_request)?;
+                if let Some(organization) = policy.connector_ceilings.get(service.id()) {
+                    organization.narrow(&permissions).map_err(bad_request)?;
+                }
+            }
+            continue;
+        }
+        let (connection, _) = connections::get(&ctx.org, &ctx.user, &grant.connection).await?;
+        let object_store = matches!(connection.provider, Provider::S3 | Provider::Azure) && policy.effects.iter().any(|effect| effect == "ObjectStore");
+        if (!object_store && !policy.effects.iter().any(|effect| effect == "Connector")) || !policy.allows_provider(connection.provider) {
+            return Err(forbidden("the organization does not permit this connector"));
+        }
+        let ceiling = connection.permissions.clone().unwrap_or_else(|| crate::ConnectorPermissions::preset(connection.provider, crate::PermissionPreset::ReadOnly));
+        if let Some(requested) = &grant.permissions {
+            requested.validate(connection.provider).and_then(|requested| ceiling.narrow(&requested)).map_err(bad_request)?;
+            if let Some(organization) = policy.connector_ceilings.get(connection.provider.id()) {
+                organization.narrow(requested).map_err(|_| bad_request("a cell cannot widen the organization's connector ceiling"))?;
+            }
+        }
+    }
+    if let Some(url) = &config.url {
+        let host = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_ascii_lowercase)).unwrap_or_default();
+        if !policy.effects.iter().any(|e| e == "HTTP") || (!policy.configured_domains && !policy.domains.contains(&host)) {
+            return Err(bad_request(format!("the organization has not allowed HTTP access to {host}; update its notebook permissions")));
+        }
+    }
+    if let Some(channel_id) = &config.channel_id {
+        let channel = channels::list(&ctx.org, &ctx.project.slug).await?.into_iter().find(|c| c.id == *channel_id).ok_or_else(|| bad_request("no such interface"))?;
+        if !policy.allows_provider(channel.provider) { return Err(forbidden("this messaging provider is not allowed by the organization")); }
+    }
     if let Some(url) = &config.url {
         check_public_url(url).await.map_err(bad_request)?;
     }
     Ok(())
+}
+
+/// Validate named dependencies before storing a declaration. Names are scoped to
+/// this notebook; no positional references or references to secret values.
+async fn check_declaration(ctx: &Ctx, name: &str, description: &str, config: &mut CellConfig, existing: Option<&str>, cell_type: CellType) -> Result<Vec<Cell>, ServerFnError> {
+    let mut cells: Vec<Cell> = cells_of(&ctx.row.graph.id).await?.into_iter().map(|row| row.cell).collect();
+    if cells.iter().any(|cell| cell.name == name && Some(cell.id.as_str()) != existing) {
+        return Err(conflict(format!("this notebook already has a cell '{name}'")));
+    }
+    let renamed = cells.iter().find(|cell| Some(cell.id.as_str()) == existing).filter(|cell| cell.name != name)
+        .map(|cell| crate::renamed_dependents(&cells, &cell.name, name)).unwrap_or_default();
+    for dependent in &renamed {
+        crate::validate_description(&dependent.description).map_err(bad_request)?;
+        if let Some(cell) = cells.iter_mut().find(|cell| cell.id == dependent.id) { *cell = dependent.clone(); }
+    }
+    let mut deps = config.dependencies.clone().unwrap_or_default();
+    for reference in crate::cell_references(description) {
+        if !deps.contains(&reference) { deps.push(reference); }
+    }
+    config.dependencies = Some(deps);
+    let candidate = Cell { id: existing.unwrap_or("new").into(), position: cells.len() as i32,
+        name: name.into(), description: description.into(), config: config.clone(), cell_type,
+        implementation: None, secret_set: false, has_endpoint: false, last_input: None,
+        next_due_at: None, last_check: None, writing: false, issue: None, stale: false };
+    if let Some(index) = cells.iter().position(|cell| Some(cell.id.as_str()) == existing) {
+        cells[index] = candidate;
+    } else { cells.push(candidate); }
+    crate::validate_dependencies(&cells).map_err(bad_request)?;
+    Ok(renamed.into_iter().filter(|cell| Some(cell.id.as_str()) != existing).collect())
 }
 
 /// The stored config: the client's fields, plus what the server keeps
@@ -733,8 +820,9 @@ pub async fn add_cell(
     public_url: &str,
 ) -> Result<CellSaved, ServerFnError> {
     let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
-    let (name, description, config) =
+    let (name, description, mut config) =
         validate_cell(cell_type, form.name, form.description, form.config).map_err(bad_request)?;
+    check_declaration(&ctx, &name, &description, &mut config, None, cell_type).await?;
     check_cell_refs(&ctx, cell_type, &config).await?;
     let mut stored = stored_config(&config, None);
     let mut endpoint_url = None;
@@ -797,8 +885,9 @@ pub async fn update_cell(
     let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
     let old = cell_by_id(&ctx.row.graph.id, cell_id).await?;
     let cell_type = old.cell.cell_type;
-    let (name, description, config) =
+    let (name, description, mut config) =
         validate_cell(cell_type, form.name, form.description, form.config).map_err(bad_request)?;
+    let renamed = check_declaration(&ctx, &name, &description, &mut config, Some(&old.cell.id), cell_type).await?;
     check_cell_refs(&ctx, cell_type, &config).await?;
     let mut keep = old.raw_config.clone();
     // A renamed secret is another vault path: the old value goes.
@@ -812,6 +901,8 @@ pub async fn update_cell(
     // What lode implements changed: the code is now older than the prose.
     let edited =
         name != old.cell.name || description != old.cell.description || config != old.cell.config;
+    let mut transaction = super::connector::lock(&ctx.org.id).await?;
+    super::connector::revoke_cell(&mut transaction, &ctx.org.id, &old.cell.id).await?;
     let updated = sqlx::query(
         "update graph_cells set name = $3, description = $4, config = $5::jsonb, \
          next_due_at = to_timestamp($6::bigint), updated_at = now(), \
@@ -825,7 +916,7 @@ pub async fn update_cell(
     .bind(stored.to_string())
     .bind(next_due(cell_type, &config))
     .bind(edited)
-    .execute(pool()?)
+    .execute(&mut *transaction)
     .await;
     match updated {
         Ok(_) => {}
@@ -836,6 +927,13 @@ pub async fn update_cell(
         }
         Err(e) => return Err(db_error(e)),
     }
+    for dependent in renamed {
+        sqlx::query("update graph_cells set description = $3, config = config || $4::jsonb, edited_at = now(), updated_at = now() where graph_id = $1::uuid and id = $2::uuid")
+            .bind(&ctx.row.graph.id).bind(&dependent.id).bind(&dependent.description)
+            .bind(serde_json::to_string(&dependent.config).map_err(|_| bad_request("invalid dependent declaration"))?)
+            .execute(&mut *transaction).await.map_err(db_error)?;
+    }
+    transaction.commit().await.map_err(db_error)?;
     touch(&ctx.row.graph.id).await?;
     Ok(cell_by_id(&ctx.row.graph.id, &old.cell.id).await?.cell)
 }
@@ -849,14 +947,19 @@ pub async fn delete_cell(
 ) -> Result<(), ServerFnError> {
     let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
     let old = cell_by_id(&ctx.row.graph.id, cell_id).await?;
+    let remaining: Vec<Cell> = cells_of(&ctx.row.graph.id).await?.into_iter().map(|row| row.cell).filter(|c| c.id != old.cell.id).collect();
+    crate::validate_dependencies(&remaining).map_err(|_| conflict("remove this cell's named references from its dependents before deleting it"))?;
     if old.cell.cell_type == CellType::Secret && old.cell.secret_set {
         delete_secret_value(&ctx, &old.cell).await?;
     }
+    let mut tx = super::connector::lock(&ctx.org.id).await?;
+    super::connector::revoke_cell(&mut tx, &ctx.org.id, &old.cell.id).await?;
     sqlx::query("delete from graph_cells where id = $1::uuid")
         .bind(&old.cell.id)
-        .execute(pool()?)
+        .execute(&mut *tx)
         .await
         .map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
     touch(&ctx.row.graph.id).await?;
     Ok(())
 }
@@ -906,6 +1009,11 @@ pub fn secret_path(org_id: &str, graph_id: &str, name: &str) -> String {
 /// Delete the vault values of every secret cell of a project's notebooks,
 /// before the project goes (its rows cascade; the vault does not).
 pub async fn delete_project_secrets(org_id: &str, project_id: &str) -> Result<(), ServerFnError> {
+    let mut tx = super::connector::lock(org_id).await?;
+    let graphs = sqlx::query("select id::text as id from graphs where project_id=$1::uuid")
+        .bind(project_id).fetch_all(&mut *tx).await.map_err(db_error)?;
+    for graph in graphs { super::connector::revoke_graph(&mut tx, org_id, &graph.get::<String,_>("id")).await?; }
+    tx.commit().await.map_err(db_error)?;
     let rows = sqlx::query(
         "select g.id::text as graph_id, c.config ->> 'name' as name from graph_cells c \
          join graphs g on g.id = c.graph_id \
@@ -1136,10 +1244,6 @@ pub async fn endpoint_delivery(token: &str, body: &[u8]) -> (u16, Value) {
 
 // ── Warrants for lode and lun (§5) ──────────────────────────────────────
 
-fn root_key() -> Result<Vec<u8>, ServerFnError> {
-    warrant::root_key().map_err(unavailable)
-}
-
 /// The project's repository connection, and its owner.
 async fn repo_connection(ctx: &Ctx) -> Result<(Connection, String, crate::RepoRef), ServerFnError> {
     let repo = ctx.project.repo.clone().ok_or_else(|| {
@@ -1151,14 +1255,16 @@ async fn repo_connection(ctx: &Ctx) -> Result<(Connection, String, crate::RepoRe
         bad_request("the connection the primary repository was read through was removed")
     })?;
     let (connection, owner) = connections::get(&ctx.org, &ctx.user, &id).await?;
+    if repo.full_name.split('/').count() != 2 {
+        return Err(bad_request("nested GitLab namespaces require a native repository-selector adapter"));
+    }
     Ok((connection, owner, repo))
 }
 
 /// lode's three warrants (§2, step 1): repo `write`, the model with its
 /// per-call cost, and repo `read` for lun.
 async fn lode_credentials(ctx: &Ctx) -> Result<(Value, Connection), ServerFnError> {
-    let root = root_key()?;
-    let (repo, repo_owner, _) = repo_connection(ctx).await?;
+    let (repo, repo_owner, source) = repo_connection(ctx).await?;
     let model_id = ctx
         .row
         .graph
@@ -1166,22 +1272,35 @@ async fn lode_credentials(ctx: &Ctx) -> Result<(Value, Connection), ServerFnErro
         .clone()
         .ok_or_else(|| bad_request("choose the AI connection the code is written with"))?;
     let (model, model_owner) = connections::get(&ctx.org, &ctx.user, &model_id).await?;
+    if !super::db::org_settings(&ctx.org).await?.effect_policy.allows_provider(model.provider) {
+        return Err(forbidden("this AI provider is not allowed by the organization"));
+    }
+    let name = ctx.row.graph.model_name.as_deref().or_else(|| default_model(model.provider)).unwrap_or("");
+    if !model.provider.can_generate() || model.provider.ai_api(name) == Some(crate::AiApi::Classifier) {
+        return Err(bad_request("choose a generative model before implementing this notebook"));
+    }
     let cost = config::model_call_cost();
-    let repo_write =
-        warrant::for_connection(&root, &ctx.org.id, repo.provider.id(), "write", &repo.id, 0);
-    let model_grant = warrant::for_connection(
-        &root,
-        &ctx.org.id,
-        model.provider.id(),
-        "read",
-        &model.id,
-        cost,
-    );
-    let lun_read =
-        warrant::for_connection(&root, &ctx.org.id, repo.provider.id(), "read", &repo.id, 0);
+    let repo_root: Vec<String> = source.full_name.split('/').map(str::to_string).collect();
+    let mut write_root = repo_root.clone();
+    write_root.extend(project_path(&ctx.row.graph.slug).split('/').map(str::to_string));
+    let mut write_permissions = super::connector::scoped(&repo, "repositories.write", write_root.clone(), true);
+    // Publication plans may remove files only when independently requested by
+    // the connection/admin ceiling. The read/write preset never adds deletion.
+    let delete_permissions = super::connector::scoped(&repo, "repositories.delete", write_root, true);
+    write_permissions.scopes.extend(delete_permissions.scopes);
+    let repo_read = super::connector::mint(&ctx.org, &repo, &repo_owner, "repositories.read",
+        &super::connector::scoped(&repo, "repositories.read", repo_root.clone(), true), 0).await?.grant;
+    let repo_write = super::connector::mint(&ctx.org, &repo, &repo_owner, "repositories.write",
+        &write_permissions, 0).await?.grant;
+    let model_grant = super::connector::mint(&ctx.org, &model, &model_owner, "inference.generate",
+        &super::connector::scoped(&model, "inference.generate", crate::model_resource(model.provider, name), false), cost).await?.grant;
+    let lun_read = super::connector::mint(&ctx.org, &repo, &repo_owner, "repositories.read",
+        &super::connector::scoped(&repo, "repositories.read", repo_root, true), 0).await?.grant;
+    let mut repo_credentials = warrant::credentials_json(&repo_read, &repo_owner, &repo.id, None);
+    repo_credentials["operations"] = json!([{ "operation": "repositories.write", "warrant": repo_write.warrant.to_json() }]);
     Ok((
         json!({
-            "repo": warrant::credentials_json(&repo_write, &repo_owner, &repo.id, None),
+            "repo": repo_credentials,
             "model": warrant::credentials_json(&model_grant, &model_owner, &model.id, Some(cost)),
             "lun": warrant::credentials_json(&lun_read, &repo_owner, &repo.id, None),
         }),
@@ -1230,6 +1349,25 @@ async fn launch(
         ));
     }
     let (credentials, model) = lode_credentials(ctx).await?;
+    let policy = super::db::org_settings(&ctx.org).await?.effect_policy.validate().map_err(bad_request)?;
+    let cells = cells_of(&ctx.row.graph.id).await?;
+    let mut writer_text = text.to_string();
+    if cells.iter().any(|row| row.cell.cell_type == CellType::DbSink || row.cell.config.connectors.iter().any(|grant| grant.connection == "compute")) {
+        if !policy.effects.iter().any(|effect| effect == "PostgreSQL") { return Err(forbidden("organization PostgreSQL effect denied")); }
+        let schema = compute::ensure(&ctx.org.id, &ctx.org.slug, &ctx.user.id).await.map_err(bad_gateway)?;
+        let target = compute::public_target(&schema).map_err(bad_gateway)?;
+        writer_text.push_str(&format!("\nTrusted non-secret compute target: {target}. Use a statically matching PostgreSQL capability, schema-qualified structured query AST and only the declared tables/operations. The runtime resolves the password; never embed or request it.\n"));
+    }
+    for row in cells.iter().filter(|row| row.cell.cell_type == CellType::StorageSink) {
+        let id = row.cell.config.connection_id.as_deref().ok_or_else(|| bad_request("storage cell has no connection"))?;
+        let (connection, _) = connections::get(&ctx.org, &ctx.user, id).await?;
+        let instruction = if connection.provider == Provider::Dropbox {
+            "Use the scoped Connector effect with files.create and a UTF-8 contents payload; Dropbox is not an ObjectStore bucket."
+        } else { "Use the scoped ObjectStore effect; putString options must be empty (no content-type/metadata overrides)." };
+        writer_text.push_str(&format!("\nTrusted non-secret storage target: {}. {instruction}\n", json!({
+            "cell": row.cell.name, "provider": connection.provider.id(), "connection": connection.id,
+            "bucket": super::connector::bucket(&connection), "resource": row.cell.config.path.as_deref().unwrap_or("").trim_start_matches('/').split('/').collect::<Vec<_>>() })));
+    }
     let running = ctx.row.graph.status == "implementing";
     // Where this run starts in lode's log: its length now (unless a run is
     // going, which this message joins).
@@ -1241,7 +1379,14 @@ async fn launch(
                     log_start = status.get("entries").and_then(Value::as_i64).unwrap_or(0);
                 }
             }
-            lode::message(id, text, credentials.clone())
+            let status = match lode::status(id).await.map_err(bad_gateway)? {
+                lode::Reply::Ok(status) => Some(status), lode::Reply::Gone => None,
+            };
+            if let Some(status) = &status {
+                let tools = lode::narrowing_tools(status, &policy.tools).map_err(bad_gateway)?;
+                super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, id, &credentials, &tools).await?;
+            }
+            lode::message(id, &writer_text, credentials.clone(), &policy.tools)
                 .await
                 .map_err(bad_gateway)?
         }
@@ -1267,16 +1412,23 @@ async fn launch(
                     "name": ctx.row.graph.model_name.clone()
                         .or_else(|| default_model(model.provider).map(str::to_string))
                         .unwrap_or_default(),
-                    "api": if model.provider == Provider::Anthropic { "anthropic" } else { "openai" },
+                    "api": model.provider.ai_api(ctx.row.graph.model_name.as_deref().or_else(|| default_model(model.provider)).unwrap_or("")).map(|api| api.id()).unwrap_or("openai"),
                     "baseUrl": model.base_url,
                     "credentials": credentials["model"],
                 },
                 "lun": { "credentials": credentials["lun"] },
                 "agent": "build",
-                "message": text,
+                "tools": policy.tools,
             });
             log_start = 0;
-            lode::open(&body).await.map_err(bad_gateway)?
+            // Opening the checkout precedes generation: the broker policy must
+            // bind the actual persisted Lode session ID before a model call.
+            let id = lode::open(&body).await.map_err(bad_gateway)?;
+            super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, &id, &credentials, &policy.tools).await?;
+            if !matches!(lode::message(&id, &writer_text, credentials.clone(), &policy.tools).await.map_err(bad_gateway)?, lode::Reply::Ok(())) {
+                return Err(bad_gateway("writer session disappeared before starting"));
+            }
+            id
         }
     };
     let mut tx = pool()?.begin().await.map_err(db_error)?;
@@ -1666,7 +1818,16 @@ pub async fn progress(
 async fn refresh_warrants(ctx: &Ctx, lode_session: &str) {
     match lode_credentials(ctx).await {
         Ok((credentials, _)) => {
-            if let Err(e) = lode::refresh(lode_session, credentials).await {
+            let tools = match super::db::org_settings(&ctx.org).await {
+                Ok(settings) => settings.effect_policy.tools,
+                Err(_) => return,
+            };
+            let status = match lode::status(lode_session).await {
+                Ok(lode::Reply::Ok(status)) => status, _ => return,
+            };
+            let tools = match lode::narrowing_tools(&status, &tools) { Ok(tools) => tools, Err(_) => return };
+            if super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, lode_session, &credentials, &tools).await.is_err() { return; }
+            if let Err(e) = lode::refresh(lode_session, credentials, &tools).await {
                 eprintln!(
                     "could not refresh lode's warrants for {}: {e}",
                     ctx.row.graph.id
@@ -1887,13 +2048,6 @@ pub async fn rebuild(
 
 // ── Build (§2, step 2) ──────────────────────────────────────────────────
 
-fn github_raw() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("accept", "application/vnd.github.raw+json"),
-        ("user-agent", "typednotes"),
-    ]
-}
-
 /// The head commit of the repository's branch, read through its connection.
 async fn branch_head(ctx: &Ctx) -> Result<String, ServerFnError> {
     let (connection, owner, repo) = repo_connection(ctx).await?;
@@ -1901,37 +2055,12 @@ async fn branch_head(ctx: &Ctx) -> Result<String, ServerFnError> {
         .default_branch
         .clone()
         .unwrap_or_else(|| "main".to_string());
-    let (url, pointer) = match connection.provider {
-        Provider::Gitlab => (
-            format!(
-                "{}/projects/{}/repository/branches/{}",
-                connection.base_url,
-                repo.full_name.replace('/', "%2F"),
-                super::rpc::segment(&branch)
-            ),
-            "/commit/id",
-        ),
-        _ => (
-            format!(
-                "{}/repos/{}/branches/{}",
-                connection.base_url,
-                repo.full_name,
-                super::rpc::segment(&branch)
-            ),
-            "/commit/sha",
-        ),
-    };
+    let pointer = if connection.provider == Provider::Gitlab { "/commit/id" } else { "/commit/sha" };
     let body = connections::call_ok(
         &ctx.org,
         &connection,
         &owner,
-        ProviderCall {
-            action: "read",
-            method: "GET",
-            url,
-            headers: vec![("accept", "application/json"), ("user-agent", "typednotes")],
-            body: None,
-        },
+        ProviderCall::new("repositories.read", repo.full_name.split('/').map(str::to_string).collect(), json!({"view": "branch", "ref": branch})),
     )
     .await?;
     let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
@@ -1946,35 +2075,12 @@ async fn branch_head(ctx: &Ctx) -> Result<String, ServerFnError> {
 async fn read_repo_file(ctx: &Ctx, path: &str, commit: &str) -> Result<Vec<u8>, ServerFnError> {
     let (connection, owner, repo) = repo_connection(ctx).await?;
     let file = format!("{}/{path}", project_path(&ctx.row.graph.slug));
-    let (url, headers) = match connection.provider {
-        Provider::Gitlab => (
-            format!(
-                "{}/projects/{}/repository/files/{}/raw?ref={commit}",
-                connection.base_url,
-                repo.full_name.replace('/', "%2F"),
-                file.replace('/', "%2F")
-            ),
-            vec![("accept", "application/json")],
-        ),
-        _ => (
-            format!(
-                "{}/repos/{}/contents/{file}?ref={commit}",
-                connection.base_url, repo.full_name
-            ),
-            github_raw(),
-        ),
-    };
-    connections::call_ok(
+    let resource = repo.full_name.split('/').chain(file.split('/')).map(str::to_string).collect();
+    let body = connections::call_ok(
         &ctx.org,
         &connection,
         &owner,
-        ProviderCall {
-            action: "read",
-            method: "GET",
-            url,
-            headers,
-            body: None,
-        },
+        ProviderCall::new("repositories.read", resource, json!({"ref": commit})),
     )
     .await
     .map_err(|e| {
@@ -1983,7 +2089,21 @@ async fn read_repo_file(ctx: &Ctx, path: &str, commit: &str) -> Result<Vec<u8>, 
             &commit[..commit.len().min(12)],
             err_text(&e)
         ))
-    })
+    })?;
+    decode_repository_file(&body)
+}
+
+/// Native repository reads return immutable blob/file metadata with base64
+/// content. No download_url is ever followed with or without credentials.
+fn decode_repository_file(body: &[u8]) -> Result<Vec<u8>, ServerFnError> {
+    use base64::Engine;
+    let value: Value = serde_json::from_slice(body).map_err(|_| bad_gateway("unreadable native repository file"))?;
+    if value.get("encoding").and_then(Value::as_str) != Some("base64") {
+        return Err(bad_gateway("native repository file is not base64 encoded"));
+    }
+    let content = value.get("content").and_then(Value::as_str).ok_or_else(|| bad_gateway("native repository file has no content"))?;
+    let content: String = content.chars().filter(|ch| *ch != '\n' && *ch != '\r').collect();
+    base64::engine::general_purpose::STANDARD.decode(content).map_err(|_| bad_gateway("invalid base64 repository file"))
 }
 
 /// The notebook's `lun.json` at `commit`.
@@ -2039,15 +2159,36 @@ pub async fn cell_code(
 async fn build_request(ctx: &Ctx, commit: &str) -> Result<(Value, LunJson), ServerFnError> {
     let lun_json = read_lun_json(ctx, commit).await?;
     let (connection, owner, repo) = repo_connection(ctx).await?;
-    let root = root_key()?;
-    let read = warrant::for_connection(
-        &root,
-        &ctx.org.id,
-        connection.provider.id(),
-        "read",
-        &connection.id,
-        0,
-    );
+    let read = super::connector::mint(&ctx.org, &connection, &owner, "repositories.read",
+        &super::connector::scoped(&connection, "repositories.read", repo.full_name.split('/').map(str::to_string).collect(), true), 0).await?.grant;
+    let cells: Vec<Cell> = cells_of(&ctx.row.graph.id).await?.into_iter().map(|row| row.cell).collect();
+    let mut functions = serde_json::to_value(&lun_json.functions).map_err(|_| bad_request("invalid function declarations"))?;
+    if let Some(functions) = functions.as_array_mut() {
+        for function in functions {
+            if let Some(cell) = cells.iter().find(|cell| function.get("name").and_then(Value::as_str) == Some(&cell.name)) {
+                if let Some(ty) = &cell.config.output_type { function["outputType"] = json!(ty); }
+            }
+        }
+    }
+    let mut graphs = serde_json::to_value(&lun_json.graphs).map_err(|_| bad_request("invalid graph declarations"))?;
+    if let Some(graphs) = graphs.as_array_mut() {
+        for graph in graphs.iter_mut().filter(|g| g.get("name").and_then(Value::as_str) == Some(GRAPH_NAME)) {
+            let mut dependencies = Map::new();
+            for cell in cells.iter().filter(|cell| cell.cell_type.in_graph()) {
+                if let Some(deps) = &cell.config.dependencies {
+                    let args: Vec<_> = deps.iter().map(|name| cells.iter().find(|c| c.name == *name).filter(|c| c.cell_type.has_input()).and_then(|c| c.config.input.clone()).unwrap_or_else(|| name.clone())).collect();
+                    dependencies.insert(cell.name.clone(), json!(args));
+                }
+            }
+            graph["dependencies"] = json!(dependencies);
+            let input_types: Map<String, Value> = cells.iter()
+                .filter(|cell| cell.cell_type.has_input())
+                .filter_map(|cell| cell.config.output_type.as_ref().map(|ty| (
+                    cell.config.input.clone().unwrap_or_else(|| cell.name.clone()), json!(ty))))
+                .collect();
+            graph["inputTypes"] = json!(input_types);
+        }
+    }
     let request = json!({
         "source": {
             "url": repo.web_url,
@@ -2057,8 +2198,8 @@ async fn build_request(ctx: &Ctx, commit: &str) -> Result<(Value, LunJson), Serv
             "credentials": warrant::credentials_json(&read, &owner, &connection.id, None),
         },
         "open": lun_json.open,
-        "functions": lun_json.functions,
-        "graphs": lun_json.graphs,
+        "functions": functions,
+        "graphs": graphs,
     });
     Ok((request, lun_json))
 }
@@ -2155,16 +2296,19 @@ async fn storage_warrants(ctx: &Ctx, cells: &[CellRow]) -> Result<Vec<Value>, St
         let (connection, owner) = connections::get(&ctx.org, &ctx.user, id)
             .await
             .map_err(|e| format!("storage sink {}: {}", c.cell.name, err_text(&e)))?;
-        let root = warrant::root_key()?;
         let cost = config::storage_write_cost();
-        let grant = warrant::for_connection(
-            &root,
-            &ctx.org.id,
-            connection.provider.id(),
-            "write",
-            &connection.id,
-            cost,
-        );
+        let operation = match connection.provider {
+            Provider::S3 | Provider::Azure => "objects.write",
+            Provider::Dropbox => "files.create",
+            _ => return Err("this storage sink has no native contents-upload adapter".into()),
+        };
+        let path = c.cell.config.path.as_deref().ok_or("storage sink has no path")?;
+        let mut requested = super::connector::scoped(&connection, operation, path.trim_start_matches('/').split('/').map(str::to_string).collect(), false);
+        if let Some(permissions) = c.cell.config.connectors.iter().find(|grant| grant.connection == connection.id).and_then(|grant| grant.permissions.as_ref()) {
+            requested = requested.intersect(permissions);
+        }
+        let grant = super::connector::mint_for_cell(&ctx.org, &connection, &owner, operation, &requested, cost, Some(&c.cell.id)).await
+            .map_err(|e| err_text(&e))?.grant;
         out.push(json!({
             "cell": c.cell.name,
             "provider": connection.provider.id(),
@@ -2174,6 +2318,104 @@ async fn storage_warrants(ctx: &Ctx, cells: &[CellRow]) -> Result<Vec<Value>, St
         }));
     }
     Ok(out)
+}
+
+/// Fresh operation-specific warrants and all independently owned ceilings.
+/// This metadata is assembled from authenticated rows, never from `lun.json`.
+async fn connector_grants(ctx: &Ctx, cells: &[CellRow]) -> Result<Value, String> {
+    let text = |e: ServerFnError| err_text(&e);
+    let policy = super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy;
+    let mut functions = Map::new();
+    for cell in cells.iter().filter(|row| row.cell.cell_type.has_function()) {
+        let mut grants = Vec::new();
+        let mut selected_connections = cell.cell.config.connectors.clone();
+        if cell.cell.cell_type == CellType::StorageSink {
+            if let Some(id) = &cell.cell.config.connection_id {
+                if !selected_connections.iter().any(|grant| grant.connection == *id) {
+                    selected_connections.push(crate::CellConnector { connection: id.clone(), permissions: None });
+                }
+            }
+        }
+        for selected in &selected_connections {
+            if crate::LocalService::from_selection(&selected.connection).is_some() { continue; }
+            let (connection, owner) = connections::get(&ctx.org, &ctx.user, &selected.connection).await.map_err(text)?;
+            let object_store = matches!(connection.provider, Provider::S3 | Provider::Azure)
+                && policy.effects.iter().any(|effect| effect == "ObjectStore");
+            if (!object_store && !policy.effects.iter().any(|effect| effect == "Connector")) || !policy.allows_provider(connection.provider) {
+                return Err(format!("organization permission denied: {}", connection.provider.name()));
+            }
+            let mut parent = connection.permissions.clone().unwrap_or_else(|| crate::ConnectorPermissions::preset(connection.provider, crate::PermissionPreset::ReadOnly));
+            let mut organization = policy.connector_ceilings.get(connection.provider.id()).cloned().unwrap_or_else(|| parent.clone());
+            let mut requested = selected.permissions.clone().unwrap_or_else(|| parent.clone());
+            if cell.cell.cell_type == CellType::StorageSink && cell.cell.config.connection_id.as_ref() == Some(&selected.connection) {
+                let operation = match connection.provider {
+                    Provider::S3 | Provider::Azure => "objects.write",
+                    Provider::Dropbox => "files.create",
+                    _ => return Err("this storage sink has no native contents-upload adapter".into()),
+                };
+                let path = cell.cell.config.path.as_deref().ok_or("storage sink has no path")?;
+                requested = requested.intersect(&super::connector::scoped(&connection, operation,
+                    path.trim_start_matches('/').split('/').map(str::to_string).collect(), false));
+            }
+            requested.validate(connection.provider)?;
+            parent.narrow(&requested)?;
+            let mut effective = requested.intersect(&organization);
+            let operations: std::collections::BTreeSet<_> = effective.scopes.iter().map(|scope| scope.operation.clone()).collect();
+            let mut warrants = Vec::new();
+            for operation in operations {
+                let cost = if operation == "inference.generate" || operation == "classification.evaluate" { config::model_call_cost() } else { 0 };
+                let minted = super::connector::mint_for_cell(&ctx.org, &connection, &owner, &operation, &effective, cost, Some(&cell.cell.id)).await.map_err(text)?;
+                parent = parent.intersect(&minted.connection);
+                organization = organization.intersect(&minted.organization);
+                effective = effective.intersect(&minted.cell);
+                let grant = minted.grant;
+                warrants.push(json!({"operation": operation, "warrant": grant.warrant.to_json(), "cost": cost}));
+            }
+            grants.push(json!({
+                "provider": connection.provider.id(), "connection": connection.id,
+                "account": format!("{owner}/{}", connection.id),
+                "bucket": super::connector::bucket(&connection),
+                "organization": organization.capability_json(connection.provider, &connection.id),
+                "connectionPermissions": parent.capability_json(connection.provider, &connection.id),
+                "cell": effective.capability_json(connection.provider, &connection.id),
+                "warrants": warrants,
+            }));
+        }
+        for service in [crate::LocalService::Postgres, crate::LocalService::Vault] {
+            let explicit = cell.cell.config.connectors.iter().any(|grant| grant.connection == service.selection());
+            let secrets: Vec<String> = cells.iter().filter(|row| row.cell.cell_type == CellType::Secret && row.cell.secret_set)
+                .filter_map(|row| row.cell.config.name.clone()).collect();
+            let needed = explicit || (service == crate::LocalService::Postgres && cell.cell.cell_type == CellType::DbSink)
+                || (service == crate::LocalService::Vault && !secrets.is_empty());
+            if !needed || !policy.effects.iter().any(|effect| effect == service.effect()) { continue; }
+            let schema = if service == crate::LocalService::Postgres {
+                if cell.cell.cell_type == CellType::DbSink {
+                    compute::ensure_sink_table(&ctx.org.id, &ctx.org.slug, &ctx.user.id,
+                        cell.cell.config.table.as_deref().ok_or("database sink has no table")?).await?
+                } else { compute::ensure(&ctx.org.id, &ctx.org.slug, &ctx.user.id).await? }
+            } else { String::new() };
+            let requested = super::local::declared(service, &cell.cell.config, cell.cell.cell_type, &schema, &secrets)?;
+            grants.push(super::local::mint(&ctx.org, &ctx.user, &cell.cell, service, &requested).await.map_err(text)?);
+        }
+        functions.insert(cell.cell.name.clone(), json!(grants));
+    }
+    Ok(json!(functions))
+}
+
+/// The scheduler uses the same authenticated execution envelope as graph
+/// registration; function input alone is never a policy or user binding.
+pub async fn source_execution(ctx: &Ctx, function: &str) -> Result<Value, String> {
+    let text = |e: ServerFnError| err_text(&e);
+    let cells = cells_of(&ctx.row.graph.id).await.map_err(text)?;
+    let cell = cells.iter().find(|row| row.cell.implementation.as_ref().and_then(|i| i.function.as_deref()) == Some(function))
+        .ok_or("source function is not declared in this notebook")?;
+    check_cell_refs(ctx, cell.cell.cell_type, &cell.cell.config).await.map_err(text)?;
+    Ok(json!({
+        "binding": {"org_id": ctx.org.id, "user_id": ctx.user.id, "graph_id": ctx.row.graph.id},
+        "policy": super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.for_cells(&cells.iter().map(|row| row.cell.clone()).collect::<Vec<_>>()),
+        "connectors": connector_grants(ctx, &cells).await?,
+        "liaisonUrl": config::env("LIAISON_URL"),
+    }))
 }
 
 /// Register the graph as a lun session, with the last value recorded for
@@ -2197,6 +2439,9 @@ async fn register(ctx: &mut Ctx) -> Result<lun::SessionAnswer, String> {
         .collect();
     let cells = cells_of(&ctx.row.graph.id).await.map_err(text)?;
     if cells.iter().any(|c| c.cell.cell_type == CellType::DbSink) {
+        if !super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.effects.iter().any(|effect| effect == "PostgreSQL") {
+            return Err("organization PostgreSQL effect denied".into());
+        }
         compute::ensure(&ctx.org.id, &ctx.org.slug, &ctx.user.id).await?;
     }
     for c in cells
@@ -2216,9 +2461,13 @@ async fn register(ctx: &mut Ctx) -> Result<lun::SessionAnswer, String> {
         .collect();
     let body = json!({
         "inputs": inputs,
+        "recoverInputs": true,
         "binding": { "org_id": ctx.org.id, "user_id": ctx.user.id, "graph_id": ctx.row.graph.id },
         "secrets": secrets,
+        "policy": super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.for_cells(&cells.iter().map(|c| c.cell.clone()).collect::<Vec<_>>()),
         "warrants": storage_warrants(ctx, &cells).await?,
+        "connectors": connector_grants(ctx, &cells).await?,
+        "liaisonUrl": config::env("LIAISON_URL"),
     });
     let answer = lun::start(&build, GRAPH_NAME, &body).await?;
     let pool = pool().map_err(text)?;
@@ -2291,7 +2540,10 @@ pub async fn feed(
             let mut inputs = Map::new();
             inputs.insert(input.to_string(), value);
             let body =
-                json!({ "inputs": inputs, "warrants": storage_warrants(&ctx, &cells).await? });
+                json!({ "inputs": inputs, "warrants": storage_warrants(&ctx, &cells).await?,
+                    "binding": { "org_id": ctx.org.id, "user_id": ctx.user.id, "graph_id": ctx.row.graph.id },
+                    "policy": super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.for_cells(&cells.iter().map(|c| c.cell.clone()).collect::<Vec<_>>()),
+                    "connectors": connector_grants(&ctx, &cells).await?, "liaisonUrl": config::env("LIAISON_URL") });
             lun::update(&session, &body).await?
         }
         None => None,
@@ -2371,13 +2623,15 @@ async fn send_channel_sinks(ctx: &Ctx, cells: &[CellRow], changed: &[GraphNode])
             continue;
         };
         let recipient = c.cell.config.recipient.clone().unwrap_or_default();
-        if let Err(e) = channels::send(
+        if let Err(e) = channels::send_scoped(
             &ctx.org,
             &ctx.user,
             &ctx.project.slug,
             channel_id,
             &recipient,
             &text,
+            &c.cell.config.connectors,
+            Some(&c.cell.id),
         )
         .await
         {
