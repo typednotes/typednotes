@@ -1,10 +1,36 @@
 # Push order and CI gates
 
-This batch commits changes in seven repositories. Deployment tags are prepared
-only for the new service capabilities: **Lode v0.4.0** and **Typednotes v0.7.0**.
-The other five repositories get branch commits without new deployment tags.
+## Current organization workflow split
+
+For future app commits, **CI** runs on pushes to `main` and PRs targeting `main`;
+it does not run on tag pushes. **Publish Docker image** runs on `v*.*.*` tag
+pushes only, publishing the release version, major/minor selector and `latest`.
+There is no app image build or `edge` update on main pushes. Manual CI dispatch
+remains available. This same main/PR/tag split applies to the active sub-projects'
+CI and versioned publishers. Main-driven Pages sites and manual-only cloud
+Apply/Destroy/live-test workflows retain their existing deployment semantics.
+
+App gate: push main → wait for successful **CI** on the exact intended tag SHA →
+push the version tag → wait for **Publish Docker image** → deploy. Publication
+automatically verifies that the latest push-to-main CI run for the actual
+tag checkout SHA completed successfully, and verifies reachability from `main`. A pending or failed run refuses
+publication; wait before tagging, or rerun the publisher after CI succeeds.
+The fleet's `latest` selector remains supported. See
+[`workflow-policy.md`](workflow-policy.md) for coverage, tests and link policy.
+
+The corrected release pair is **Lode v0.4.1 / Typednotes v0.7.1**. The historical
+batch below used v0.4.0/v0.7.0; those already-published tags stay unchanged.
+The next prepared pair is **Lode v0.4.2 / Typednotes v0.7.2**. Push main first
+and wait for its exact-commit CI before publishing either local tag; wait for
+Lode's tag image before publishing the app tag.
+
+The earlier service batch committed changes in seven repositories and prepared
+deployment tags for the new capabilities: **Lode v0.4.0** and **Typednotes v0.7.0**.
+The other five repositories received branch commits without new deployment tags.
 Lun v0.3.0, Liaison v0.6.0 and Linen v1.10.0 remain the published runtime/SDK
 dependencies; fixing their workflow/test code does not require replacing them.
+The current workflow/documentation batch prepares app/Lode patch tags to publish
+the new gated image workflows; the other repositories need main commits only.
 
 ## 1. Independent native clients and documentation
 
@@ -32,12 +58,11 @@ this batch. Wait for both before advancing to Lode:
 
 - Lun: **Lean Action CI** — `build` and `e2e`, including all typed/effect refusal
   checks, diamond emissions and temporary-file regressions. Its E2E job has a
-  45-minute budget. Also wait for **Publish Docker image** from the main push.
-- Liaison: **Lean Action CI** — `build` and `native-contracts`, plus **Publish
-  Docker image** from the main push.
+  45-minute budget.
+- Liaison: **Lean Action CI** — `build` and `native-contracts`.
 
-These main pushes rebuild `edge`; they do not replace the existing release
-version tags or `latest` through a new version-tag event. Historical failed
+These main pushes test changes but no longer rebuild `edge`. Existing release
+version tags and `latest` are changed only by publication events. Historical failed
 runs on v0.3.0/v0.6.0 do not become green just because main was repaired: check
 the runs for the newly pushed main commits.
 
@@ -47,22 +72,22 @@ Push **lode main**, and wait for:
 
 - **Lean Action CI**: `build` (proof/unit/LSP/repository fixtures) and `lun`
   (integration with the pinned real runner).
-- **Publish Docker image** for the main commit.
 
-After both workflows pass, push **only `v0.4.0`**. Wait again for the tag's
-**Lean Action CI** and **Publish Docker image** to pass before pushing the app.
-The tag publishes `ghcr.io/typednotes/lode:0.4.0` and updates `latest`.
+After the branch workflow passes, publish a new version tag at that exact commit
+and wait for **Publish Docker image** before pushing the dependent app. The
+publisher attests main CI instead of repeating it on the tag. Lode v0.4.1 is the
+corrected existing release; do not move an already-published tag to new code.
 
 ## 4. App branch, then deployment tag
 
 Push **typednotes main**, and wait for:
 
 - **CI**: `check` (API/permission tests, server/wasm checks, logo contracts).
-- **Publish Docker image** for the main commit.
 
-Then push **only `v0.7.0`**. Wait for its **CI** and **Publish Docker image**
-before applying a deployment. The tag publishes
-`ghcr.io/typednotes/typednotes:0.7.0` and updates `latest`.
+Then push the intended release tag after confirming that its commit SHA matches
+that successful main CI run. Wait for **Publish Docker image** on the tag before
+applying a deployment. CI is not repeated on the tag. Use a new version tag for
+future commits; the corrected existing release is `v0.7.1`.
 
 ## Commands for the user
 
@@ -76,11 +101,11 @@ After the relevant branch gate, use these explicit tag pushes in their respectiv
 repositories, in Lode → app order:
 
 ```sh
-# Lode repository, after its main CI and image jobs pass:
-git push origin v0.4.0
+# Lode repository, after its main CI passes:
+git push origin v0.4.2
 
-# App repository, after Lode's tag gates and the app's main gates pass:
-git push origin v0.7.0
+# App repository, after Lode's image release and the app's main CI pass:
+git push origin v0.7.2
 ```
 
 Use the Actions page or `gh run list --repo typednotes/REPO` to identify the
@@ -95,11 +120,11 @@ resolves selectors to immutable image digests during plan/apply. Publishing a
 tag updates the registry; it is not itself a cloud apply. Run the reviewed
 deployment only after both new service images are available, deploying the
 updated app and Lode together. If a Lode service is managed outside this fleet,
-update that service explicitly to v0.4.0; the current fleet does not declare it.
+update that service explicitly to v0.4.1 or the newly verified release; the current fleet does not declare it.
 
 No schema migration was added after 0008. The fleet's existing v0.6.0 SQL-history
 ref remains valid until a new migration is introduced. Replace legacy writer
 sessions without a launch execution ceiling. Explicitly narrowed tool lists do
 not automatically regain the new `lsp` permission.
 
-No Infra/fleet change or cloud apply is included in this commit batch.
+This workflow/documentation batch does not apply a deployment or change the fleet.

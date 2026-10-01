@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -14,6 +16,9 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+      - name: Offline release gate regressions
+        shell: bash
+        run: bash ci/test-require-main-ci.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -27,7 +32,9 @@ jobs:
       - name: Install branding test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends python3-fonttools fonts-firacode fontconfig librsvg2-bin
+          sudo apt-get install -y --no-install-recommends python3-fonttools python3-yaml fonts-firacode fontconfig librsvg2-bin
+      - name: Workflow release policy
+        run: /usr/bin/python3 ci/test-workflow-policy.py
       - name: Branding contracts
         # Use the distro interpreter that owns the apt-installed fontTools.
         run: /usr/bin/python3 scripts/test_logo.py
