@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# App release gate; sibling publishers may still use the immediate-check version.
+# Shared Typednotes release gate; keep publishing-repository copies identical.
 # Usage: bash ci/require-main-ci.sh <CI workflow filename> <version tag>
 # Trust boundary: GitHub's Actions API and the fetched Git refs. A PR result,
 # manual CI, or another commit's success cannot authorize publication.
@@ -9,7 +9,7 @@ fail() { printf '::error::%s\n' "$*" >&2; exit 1; }
 [[ $# == 2 ]] || fail 'Expected a CI workflow filename and a version tag'
 workflow=$1
 tag=$2
-wait_seconds=${CI_WAIT_SECONDS:-3600}
+wait_seconds=${CI_WAIT_SECONDS:-7200}
 poll_seconds=${CI_POLL_SECONDS:-15}
 [[ "$wait_seconds" =~ ^(0|[1-9][0-9]{0,4})$ && "$wait_seconds" -le 7200 ]] || fail 'CI_WAIT_SECONDS must be 0..7200'
 [[ "$poll_seconds" =~ ^[1-9][0-9]?$ && "$poll_seconds" -le 60 ]] || fail 'CI_POLL_SECONDS must be 1..60'

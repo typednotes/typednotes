@@ -11,9 +11,9 @@ consumes the actual tag checkout SHA, confirms the tag points to it, confirms
 reachability from `origin/main`, and queries the correct CI workflow for its
 latest exact-SHA **push-to-main** run. Only `completed/success` qualifies.
 Missing, pending, failed, cancelled, PR or manual results cannot substitute.
-The app publisher now polls missing/queued/running evidence instead of failing
-immediately. `CI_WAIT_SECONDS` defaults to 3600 (maximum 7200), and
-`CI_POLL_SECONDS` defaults to 15 (range 1–60). The verify job has a 70-minute
+All eight versioned publishing repositories poll missing/queued/running evidence
+instead of failing immediately. `CI_WAIT_SECONDS` defaults to 7200 (range 0–7200),
+and `CI_POLL_SECONDS` defaults to 15 (range 1–60). Every verify job has a 130-minute
 timeout. Every poll queries the latest run again; a newer failed attempt cannot
 be hidden by an older success. Completed non-success and invalid/API evidence
 fail immediately; a wait timeout produces no publish outputs.
@@ -58,9 +58,18 @@ optionally on PRs with the `extended-ci` label, and on manual runs with the
 attests the full suite; an optional/manual-only result cannot release an image.
 Release version, changelog, notes and artifact checks remain. Publishing an old tag uses the old
 workflow stored in its commit; this policy applies to future committed tags.
-If main and tag are pushed together, the app publisher waits for main CI; if it
-fails or exceeds the timeout, fix/rerun CI and retry the publisher. Sibling
-publishers retain their existing immediate-check behavior until coordinated.
+The user may push a new release commit and its new version tag together with
+`git push origin main vX.Y.Z` in any of these eight repositories. If CI fails or
+exceeds the timeout, fix/rerun CI and retry publication. Version and release-note
+checks remain prerequisites for a valid release. Existing tags retain their old
+workflow and are never moved to pick up this behavior. The tag must identify the
+intended main release commit, not an untested intermediate ancestor skipped by
+a multi-commit branch push.
+
+Source-tag-only libraries with no publisher can already push both refs together;
+there is no publication job to wait. Main-driven sites and manual cloud applies
+keep their own triggers. Dependent repositories still need referenced dependency
+tags to exist remotely before their CI resolves them.
 
 ## Readme references
 
@@ -77,8 +86,8 @@ when auditing a specific deployed version, not a living main page.
 
 ## Reproduction and trusted boundary
 
-The app's `ci/require-main-ci.sh` and `ci/test-require-main-ci.sh` include bounded
-waiting. Other publishers retain their shared immediate-check copies. Main CI runs the Bash behavior suite once
+All eight publishers contain byte-identical `ci/require-main-ci.sh` and
+`ci/test-require-main-ci.sh` bounded-wait copies. Main CI runs the Bash behavior suite once
 before publication can be attested. The app also checks local trigger/publisher
 wiring and can audit sibling copy drift from a development workspace:
 
@@ -97,7 +106,7 @@ The policy checker requires PyYAML; Ubuntu app CI installs `python3-yaml` and
 uses its distro interpreter. Behavior tests create and clean disposable Git refs
 and mock only the read-only Actions API; they never publish tags or artifacts.
 
-Validation: **240 offline positive/negative gate cases**, **28 workflow files**
+The earlier immediate-check batch verified **240 offline positive/negative gate cases**, **28 workflow files**
 checked with actionlint, all **14 repository trigger/wiring/drift checks**, and
 **238 distinct main-link destinations** checked locally. README fragments and
 selected GitHub main/release targets were checked. No application runtime,
@@ -105,8 +114,11 @@ connector authority, dependency pin or logo asset changed in this policy work.
 The app-local gate/policy checks and all five unchanged branding tests also
 passed in a fresh Ubuntu 24.04 container using the documented apt dependencies.
 
-The current app behavior suite adds missing-to-success and pending-to-success
-transitions, timeout configuration and refusal of invalid polling parameters.
+The current coordinated suite passes **400 cases** (50 for each gate copy) and
+audits every publisher's wait budget, permissions and dependency wiring. It adds
+all recognized missing/pending-to-success transitions, pending-to-failure/cancel,
+identity/schema tampering during a wait, API outages, real bounded timeout and
+invalid wait/poll bounds. All main CI jobs and publication prerequisites remain.
 The gate trusts GitHub's authenticated Actions API, workflow identity, fetched Git
 refs and runner environment. It is an operational promotion check, not a Lean
 proof about external CI/registry infrastructure. The application's existing

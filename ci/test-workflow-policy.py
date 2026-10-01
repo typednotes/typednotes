@@ -144,6 +144,7 @@ def check_publisher(repo, name, filename, publish_job, staged=False):
     assert workflow["permissions"] == {"contents": "read"}
     jobs = workflow["jobs"]
     verify = jobs["verify"]
+    assert verify["timeout-minutes"] == "130", f"{name}: wait budget must cover the shared gate"
     assert verify["permissions"] == {"contents": "read", "actions": "read"}
     checkout = verify["steps"][0]
     assert checkout["with"]["fetch-depth"] == "0"
@@ -189,14 +190,12 @@ def main():
     args = parser.parse_args()
     app = Path(__file__).resolve().parents[1]
     repos = {name: args.siblings / name for name in CI} if args.siblings else {"typednotes": app}
-    # The app waits for CI now; older sibling publishers still share an
-    # immediate-check gate. Compare those copies to each other, not to the app.
-    reference = repos.get("linen", app)
-    canonical = contents(reference, "ci/require-main-ci.sh", args.staged)
-    canonical_test = contents(reference, "ci/test-require-main-ci.sh", args.staged)
+    canonical = contents(app, "ci/require-main-ci.sh", args.staged)
+    canonical_test = contents(app, "ci/test-require-main-ci.sh", args.staged)
+    assert b"wait_seconds=${CI_WAIT_SECONDS:-7200}" in canonical
     for name, repo in repos.items():
         check_ci(repo, name, args.staged)
-        if name in PUBLISHERS and name != "typednotes":
+        if name in PUBLISHERS:
             assert contents(repo, "ci/require-main-ci.sh", args.staged) == canonical, f"{name}: shared gate drift"
             assert contents(repo, "ci/test-require-main-ci.sh", args.staged) == canonical_test, f"{name}: shared gate test drift"
         if name in DOCKER:

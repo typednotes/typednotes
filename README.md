@@ -155,7 +155,7 @@ Tag the same commit `vX.Y.Z`; the branch and tag may be pushed together:
 Image publication runs only for version tags; main pushes no longer build `edge`.
 The publisher automatically checks that the tag matches its checkout, is reachable
 from `main`, and has a successful latest push-to-main CI run for that exact SHA.
-The publisher waits up to one hour for missing/queued/running exact-commit main
+The publisher waits up to two hours for missing/queued/running exact-commit main
 CI, then publishes only after success. Failed, cancelled, PR-only or manual-only
 results cannot authorize publication. API errors or malformed evidence fail closed.
 Ordinary PR/manual CI runs the API/server/release-policy checks; browser compilation

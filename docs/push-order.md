@@ -1,6 +1,22 @@
 # Push order and CI gates
 
-## Current app release: v0.8.0
+## Current broker release: v0.6.2
+
+The GitHub User-Agent fix and shared CI waiting are prepared in Liaison v0.6.2.
+From the broker repository the user can push both refs together:
+
+```sh
+git push origin main v0.6.2
+```
+
+Wait for main CI and the image publisher, then Apply `typednotes-infra` to adopt
+the new broker digest. v0.6.1 stays immutable and keeps its original workflow.
+The other seven publishing repositories have matching bounded-wait policy
+commits; future valid release tags at those commits can be pushed with main.
+No dependency version bump or new release tag is needed merely to commit CI-only
+changes. See [workflow-policy.md](workflow-policy.md).
+
+## Previous app release: v0.8.0
 
 The settings/model-menu/CI-waiting work is an app-only release. No additional
 sibling service tag or SQL migration is needed; retain the existing coordinated
