@@ -71,6 +71,13 @@ then complete any required verification and reconnect. This inspection changed
 no Cloud grants or settings; API enablement and consent approval are separate
 operator-owned steps.
 
+Follow-up on 2026-10-01 at 23:01 UTC: Google Calendar API was enabled in the
+`typednotes` project and its console status verified as Active. The new Gmail
+connection's read-only broker probe succeeded against production. The failed
+Calendar connection had been removed, so Calendar must be connected again and
+tested before claiming that account's end-to-end access is verified. Enabling
+the API does not add OAuth scopes or widen notebook grants.
+
 ## Connect and test
 
 1. Open your organization → **Settings → Notebooks**. An owner/admin enables
