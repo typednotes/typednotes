@@ -66,7 +66,7 @@ coordinated deployment requirements are in
 The Graph/Lode questions, scoped runtime trials and Lean LSP are answered in
 [`docs/graph-and-lode.md`](https://github.com/typednotes/typednotes/blob/main/docs/graph-and-lode.md); CI fixes and executed checks
 are recorded in [`docs/ci-verification.md`](https://github.com/typednotes/typednotes/blob/main/docs/ci-verification.md).
-The prepared deployment pair is Typednotes **v0.7.2** and Lode **v0.4.2**; the staged
+The prepared deployment pair is Typednotes **v0.7.3** and Lode **v0.4.2**; the staged
 push order and exact CI gates are in [`docs/push-order.md`](https://github.com/typednotes/typednotes/blob/main/docs/push-order.md).
 The shared CI/release and documentation-link conventions are in
 [`docs/workflow-policy.md`](https://github.com/typednotes/typednotes/blob/main/docs/workflow-policy.md).

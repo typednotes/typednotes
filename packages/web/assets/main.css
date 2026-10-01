@@ -1,1 +1,9 @@
 /* Page styles live in the shared `ui::APP_THEME`; this is for app-specific additions. */
+
+.navbar-beta {
+  margin-left: 0.25em;
+  font-size: 0.65em;
+  font-weight: 500;
+  line-height: 0;
+  opacity: 0.7;
+}

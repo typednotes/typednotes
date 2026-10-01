@@ -20,7 +20,7 @@ The fleet's `latest` selector remains supported. See
 
 The corrected release pair is **Lode v0.4.1 / Typednotes v0.7.1**. The historical
 batch below used v0.4.0/v0.7.0; those already-published tags stay unchanged.
-The next prepared pair is **Lode v0.4.2 / Typednotes v0.7.2**. Push main first
+The next prepared pair is **Lode v0.4.2 / Typednotes v0.7.3**. Push main first
 and wait for its exact-commit CI before publishing either local tag; wait for
 Lode's tag image before publishing the app tag.
 
@@ -105,7 +105,7 @@ repositories, in Lode → app order:
 git push origin v0.4.2
 
 # App repository, after Lode's image release and the app's main CI pass:
-git push origin v0.7.2
+git push origin v0.7.3
 ```
 
 Use the Actions page or `gh run list --repo typednotes/REPO` to identify the

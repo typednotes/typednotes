@@ -56,7 +56,7 @@ fn main() {
 fn App() -> Element {
     rsx! {
         // Global app resources
-        document::Title { "Typednotes" }
+        document::Title { "Typednotes β" }
         document::Meta { name: "viewport", content: "width=device-width, initial-scale=1" }
         document::Stylesheet { href: ui::COMPONENTS_THEME }
         document::Stylesheet { href: ui::APP_THEME }
@@ -77,7 +77,10 @@ fn WebNavbar() -> Element {
                 class: "navbar-brand",
                 to: Route::Home {},
                 ui::Logo {}
-                "Typednotes"
+                span {
+                    "Typednotes"
+                    sup { class: "navbar-beta", title: "Beta", aria_label: "Beta", "β" }
+                }
             }
             UserMenu {}
         }
