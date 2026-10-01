@@ -24,5 +24,10 @@ jobs:
         run: |
           cargo check -p web --features server
           cargo check -p web --features web --target wasm32-unknown-unknown
+      - name: Install branding test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-fonttools fonts-firacode fontconfig librsvg2-bin
       - name: Branding contracts
-        run: python3 scripts/test_logo.py
+        # Use the distro interpreter that owns the apt-installed fontTools.
+        run: /usr/bin/python3 scripts/test_logo.py

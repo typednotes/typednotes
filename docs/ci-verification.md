@@ -2,6 +2,16 @@
 
 ## Reported failures
 
+- [App v0.7.0 CI run 36864864494](https://github.com/typednotes/typednotes/actions/runs/36864864494)
+  passed API tests and both web builds, then failed branding exports because
+  fontTools was absent. The workflow now installs `python3-fonttools`, Fira Code,
+  fontconfig and the librsvg renderer before running the unchanged branding suite
+  with `/usr/bin/python3`, the interpreter owning those packages. See
+  [`branding.md`](branding.md) for reproduction. An old tag's workflow remains
+  unchanged; publication of the fixed commit is required for a new hosted run.
+  Verified in a fresh Ubuntu 24.04 arm64 container using only those apt packages:
+  Python 3.12.3, fontTools 4.46.0, Fira Code 6.2, and rsvg-convert 2.58.0;
+  all five unchanged SVG/PNG branding tests passed. Actionlint also passed.
 - [Lun job 110114182132](https://github.com/typednotes/lun/actions/runs/36780449518/job/110114182132)
   failed because `test/e2e.sh` supplied a nonexistent sibling `../liaison` as the
   generated driver's SDK. A clean runner had only Lun and Linen checked out.

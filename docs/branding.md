@@ -27,6 +27,21 @@ the very same asset; no simplified plain-T icon or theme-specific logo is used.
 Requirements: Python 3, `fonttools`, Fira Code (or `LOGO_FONT`/`--font` pointing to a
 TTF) and `rsvg-convert` for PNG output. The generator is `scripts/logo.py`.
 
+On Ubuntu 24.04, install the complete test toolchain and use the system Python
+that owns the distro package:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends python3-fonttools fonts-firacode fontconfig librsvg2-bin
+/usr/bin/python3 scripts/test_logo.py
+```
+
+CI uses this setup explicitly. `python3-fonttools` supplies the glyph-outline
+library; `fonts-firacode` supplies the font, `fontconfig` supplies `fc-match`,
+and `librsvg2-bin` supplies the `rsvg-convert` PNG renderer. Using a separately
+installed Python interpreter may hide the system Python packages. The tests
+export to temporary directories; they do not regenerate checked-in artwork.
+
 ```sh
 # Canonical logo/mark SVGs and the main 1024 px PNG
 python3 scripts/logo.py
