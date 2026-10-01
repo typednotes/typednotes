@@ -2439,7 +2439,7 @@ pub async fn source_execution(ctx: &Ctx, function: &str) -> Result<Value, String
         "binding": {"org_id": ctx.org.id, "user_id": ctx.user.id, "graph_id": ctx.row.graph.id},
         "policy": super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.for_cells(&cells.iter().map(|row| row.cell.clone()).collect::<Vec<_>>()),
         "connectors": connector_grants(ctx, &cells).await?,
-        "liaisonUrl": config::env("LIAISON_URL"),
+        "liaisonUrl": config::runtime_liaison_url(),
     }))
 }
 
@@ -2492,7 +2492,7 @@ async fn register(ctx: &mut Ctx) -> Result<lun::SessionAnswer, String> {
         "policy": super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.for_cells(&cells.iter().map(|c| c.cell.clone()).collect::<Vec<_>>()),
         "warrants": storage_warrants(ctx, &cells).await?,
         "connectors": connector_grants(ctx, &cells).await?,
-        "liaisonUrl": config::env("LIAISON_URL"),
+        "liaisonUrl": config::runtime_liaison_url(),
     });
     let answer = lun::start(&build, GRAPH_NAME, &body).await?;
     let pool = pool().map_err(text)?;
@@ -2568,7 +2568,7 @@ pub async fn feed(
                 json!({ "inputs": inputs, "warrants": storage_warrants(&ctx, &cells).await?,
                     "binding": { "org_id": ctx.org.id, "user_id": ctx.user.id, "graph_id": ctx.row.graph.id },
                     "policy": super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.for_cells(&cells.iter().map(|c| c.cell.clone()).collect::<Vec<_>>()),
-                    "connectors": connector_grants(&ctx, &cells).await?, "liaisonUrl": config::env("LIAISON_URL") });
+                    "connectors": connector_grants(&ctx, &cells).await?, "liaisonUrl": config::runtime_liaison_url() });
             lun::update(&session, &body).await?
         }
         None => None,

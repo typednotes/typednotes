@@ -32,3 +32,6 @@ rustc-ice-*.txt
 # On-demand artwork variants
 out/
 __pycache__/
+.env.local
+.env.local.*
+!.env.local.example

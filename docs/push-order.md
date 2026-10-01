@@ -1,5 +1,22 @@
 # Push order and CI gates
 
+## Current app release: v0.8.0
+
+The settings/model-menu/CI-waiting work is an app-only release. No additional
+sibling service tag or SQL migration is needed; retain the existing coordinated
+services (including Lode v0.4.2). See [release-0.8.0.md](release-0.8.0.md).
+
+From the app repository, the branch and intended tag can now be pushed together:
+
+```sh
+git push origin main v0.8.0
+```
+
+The publisher waits up to one hour for exact-commit main CI. Wait for **CI**'s
+`check` and `extended` jobs and **Publish Docker image** before deploying the
+new image. A failed test run still blocks publication. Avoid `--tags`, which
+would also publish unrelated local tags.
+
 ## Current organization workflow split
 
 For future app commits, **CI** runs on pushes to `main` and PRs targeting `main`;
@@ -10,17 +27,19 @@ remains available. This same main/PR/tag split applies to the active sub-project
 CI and versioned publishers. Main-driven Pages sites and manual-only cloud
 Apply/Destroy/live-test workflows retain their existing deployment semantics.
 
-App gate: push main → wait for successful **CI** on the exact intended tag SHA →
-push the version tag → wait for **Publish Docker image** → deploy. Publication
+App gate: push main and the intended version tag → wait for successful **CI** on
+that exact SHA and **Publish Docker image** → deploy. Publication
 automatically verifies that the latest push-to-main CI run for the actual
-tag checkout SHA completed successfully, and verifies reachability from `main`. A pending or failed run refuses
-publication; wait before tagging, or rerun the publisher after CI succeeds.
+tag checkout SHA completed successfully, and verifies reachability from `main`.
+Missing/pending main CI is polled; failed/invalid evidence refuses publication.
 The fleet's `latest` selector remains supported. See
 [`workflow-policy.md`](workflow-policy.md) for coverage, tests and link policy.
 
-The corrected release pair is **Lode v0.4.1 / Typednotes v0.7.1**. The historical
+## Earlier coordinated service batches
+
+The corrected release pair was **Lode v0.4.1 / Typednotes v0.7.1**. The historical
 batch below used v0.4.0/v0.7.0; those already-published tags stay unchanged.
-The next prepared pair is **Lode v0.4.2 / Typednotes v0.7.3**. Push main first
+The subsequent prepared pair was **Lode v0.4.2 / Typednotes v0.7.3**. Push main first
 and wait for its exact-commit CI before publishing either local tag; wait for
 Lode's tag image before publishing the app tag.
 
@@ -78,18 +97,18 @@ and wait for **Publish Docker image** before pushing the dependent app. The
 publisher attests main CI instead of repeating it on the tag. Lode v0.4.1 is the
 corrected existing release; do not move an already-published tag to new code.
 
-## 4. App branch, then deployment tag
+## 4. Earlier app branch, then deployment tag
 
 Push **typednotes main**, and wait for:
 
-- **CI**: `check` (API/permission tests, server/wasm checks, logo contracts).
+- **CI**: the then-current `check` job (API/permission tests, server/wasm checks, logo contracts).
 
 Then push the intended release tag after confirming that its commit SHA matches
 that successful main CI run. Wait for **Publish Docker image** on the tag before
 applying a deployment. CI is not repeated on the tag. Use a new version tag for
 future commits; the corrected existing release is `v0.7.1`.
 
-## Commands for the user
+## Earlier batch commands
 
 In each repository, push the branch first:
 

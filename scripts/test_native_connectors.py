@@ -154,7 +154,7 @@ class Fixture(BaseHTTPRequestHandler):
         assert self.headers.get("Authorization") == "Bearer local-provider-fixture"
         state["calls"].append((self.command, self.path, json.loads(raw) if raw else None))
         if self.path.endswith("/models"):
-            return self.reply(200, [{"id": "jev-latest"}])
+            return self.reply(200, state.get("models", [{"id": "jev-latest"}]))
         if self.path.endswith("/systemone"):
             payload = json.loads(raw)
             assert payload["model"] == "jev-latest"
@@ -316,6 +316,31 @@ def main():
                 result = api("/api/connections/test", {"id": connection_id})
                 assert result["ok"], result
                 passed("actual app probe uses models.list through real broker/HMAC/Postgres")
+                assert api("/api/ai/models", {"connection_id": connection_id}) == ["jev-latest"]
+                baseten = api("/api/connections/ai", {"provider": "Baseten", "base_url": "https://fixture.example.invalid/base", "api_key": "local-provider-fixture"})
+                upstream.state["models"] = {"data": [{"id": "z-model"}, {"id": "a-model"}, {"id": "a-model"}]}
+                assert api("/api/ai/models", {"connection_id": baseten["id"]}) == ["a-model", "z-model"]
+                assert api("/api/connections/test", {"id": baseten["id"]})["ok"]
+                upstream.state.pop("models")
+                github_id = str(uuid.uuid4())
+                sql(f"insert into connections(id,org_id,user_id,provider,label,base_url,status) values('{github_id}','{org}','{user}','github','GitHub fixture','https://api.github.com','active')")
+                vault.state["documents"][f"/v1/secret/data/thirdparty/github/{user}/{github_id}"] = {"kind": "bearer", "base_url": vault.state["upstream"] + "/base", "token": "local-provider-fixture"}
+                assert api("/api/repos", {"connection": github_id})[0]["full_name"] == "fixture/repo"
+                original_policy = api("/api/org/settings", {})["effect_policy"]
+                blocked_policy = {**original_policy, "effects": ["SecretStore"]}
+                api("/api/org/settings/permissions", {"policy": blocked_policy})
+                before_calls, before_reads = len(upstream.state["calls"]), len(vault.state["reads"])
+                for id in [connection_id, baseten["id"]]:
+                    error = api("/api/ai/models", {"connection_id": id}, ok=False)
+                    assert "Effects" in json.dumps(error), error
+                assert "Effects" in json.dumps(api("/api/repos", {"connection": github_id}, ok=False))
+                assert len(upstream.state["calls"]) == before_calls and len(vault.state["reads"]) == before_reads
+                api("/api/org/settings/permissions", {"policy": original_policy})
+                assert api("/api/ai/models", {"connection_id": connection_id}) == ["jev-latest"]
+                assert api("/api/repos", {"connection": github_id})[0]["full_name"] == "fixture/repo"
+                api("/api/connections/delete", {"id": github_id})
+                api("/api/connections/delete", {"id": baseten["id"]})
+                passed("provider model menus and Baseten tests use real broker; SecretStore-only policy denies before credentials, explicit admin correction restores calls")
                 permissions = {"scopes": [{"operation": "models.list", "root": [], "descendants": False},
                                           {"operation": "classification.evaluate", "root": ["jev-latest"], "descendants": False}],
                                "maxRequestBytes": 4096, "maxResponseBytes": 4096}

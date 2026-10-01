@@ -13,7 +13,7 @@ fn rate(value: Option<f64>) -> String {
 /// not translated into a pretend dollar bill.
 #[component]
 pub(crate) fn ModelCost(provider: ReadSignal<Provider>, model: ReadSignal<String>) -> Element {
-    let pricing = use_server_future(move || {
+    let pricing = use_resource(move || {
         let (p, m) = (provider(), model());
         async move {
             if m.trim().is_empty() {
@@ -29,10 +29,11 @@ pub(crate) fn ModelCost(provider: ReadSignal<Provider>, model: ReadSignal<String
                     note: "Enter a model ID to see token pricing.".into(),
                 })
             } else {
+                futures_timer::Delay::new(std::time::Duration::from_millis(400)).await;
                 ai_token_pricing(p, m).await
             }
         }
-    })?;
+    });
     let mut input_tokens = use_signal(|| 1000_u64);
     let mut output_tokens = use_signal(|| 1000_u64);
     rsx! {

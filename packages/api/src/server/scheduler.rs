@@ -28,6 +28,7 @@ const TICK: Duration = Duration::from_secs(30);
 
 /// Start the tick, once per process. A no-op without lun: nothing could run.
 pub fn start() {
+    if !config::background_enabled() { return; }
     static STARTED: OnceLock<()> = OnceLock::new();
     if STARTED.set(()).is_err() {
         return;

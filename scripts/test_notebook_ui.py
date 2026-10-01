@@ -118,7 +118,9 @@ class Mock(BaseHTTPRequestHandler):
             assert call["kind"] == "connector" and "url" not in call
             payload = json.loads(call["payload"])
             resource = call["resource"]
-            if resource and resource[-1] == "lun.json":
+            if call["operation"] == "models.list":
+                answer = json.dumps({"data": [{"id": "fixture-model"}, {"id": "other-model"}]}).encode()
+            elif resource and resource[-1] == "lun.json":
                 contents = json.dumps(manifest()).encode()
                 answer = json.dumps({"encoding": "base64", "content": base64.b64encode(contents).decode()}).encode()
             elif resource and resource[-1] == "Sheet.lean":
@@ -130,13 +132,21 @@ class Mock(BaseHTTPRequestHandler):
                 answer = b'{}'
             return self.reply(200, {"status": 200, "body": answer.hex()})
         if self.service == "writer":
+            def public_execution(execution):
+                fields = ["provider", "connection", "account", "bucket", "organization", "connectionPermissions", "cell", "warrantPermissions"]
+                return {"execution": {"policy": execution["policy"], "binding": execution["binding"],
+                    "connectors": {name: [{key: grant[key] for key in fields if key in grant} for grant in grants]
+                                   for name, grants in execution["connectors"].items()}},
+                    "functions": execution["functions"], "graphs": execution["graphs"]}
             if path == "/v0/sessions" and method == "POST":
                 STATE["writer_tools"] = body["tools"]
+                STATE["writer_execution"] = public_execution(body["execution"])
                 return self.reply(201, {"id": "L1", "state": "running"})
             if path.endswith("/messages"):
                 if method == "POST":
                     assert set(body.get("tools", [])) <= set(STATE["writer_tools"])
                     STATE["writer_tools"] = body.get("tools", STATE["writer_tools"])
+                    if "execution" in body: STATE["writer_execution"] = public_execution(body["execution"])
                     return self.reply(202, {"queued": 0})
                 return self.reply(200, {"entries": [{"index": 0, "type": "assistant", "text": "Writing total from amount and tax"}], "next": 1, "running": STATE["running"]})
             if path.endswith("/diff"):
@@ -145,6 +155,7 @@ class Mock(BaseHTTPRequestHandler):
                 return self.reply(200, {})
             return self.reply(200, {"id": "L1", "state": "running" if STATE["running"] else "idle", "entries": 1,
                                     "tools": STATE.get("writer_tools", []),
+                                    "execution": STATE.get("writer_execution"),
                                     "workspace": {"remoteHead": "c0ffee" * 6 + "abcd"}})
         if self.service == "runtime":
             if path.startswith("/v0/builds") and not path.endswith("/sessions"):
@@ -201,7 +212,7 @@ def verify(page, context, app, output):
 
     def go(url):
         page.goto(url, wait_until="networkidle")
-        expect(page.locator(".nb-editor, .settings-body").first).to_be_visible()
+        expect(page.locator(".nb-editor, .settings-body, .orgs").first).to_be_visible()
 
     def cell(name):
         return page.locator(".nb-cell").filter(has=page.locator(".nb-cell-name", has_text=name))
@@ -227,6 +238,16 @@ def verify(page, context, app, output):
 
     go(notebook)
     output.joinpath("initial-dom.html").write_text(page.content())
+    notebook_width = page.locator(".nb").bounding_box()["width"]
+    choose("Provider model", "other-model")
+    page.get_by_role("button", name="Save model", exact=True).click()
+    wait_sql("select model_name from graphs", "other-model")
+    go(notebook)
+    expect(page.locator('[aria-label="Provider model"]').get_by_role("button")).to_contain_text("other-model")
+    choose("Provider model", "fixture-model")
+    page.get_by_role("button", name="Save model", exact=True).click()
+    wait_sql("select model_name from graphs", "fixture-model")
+    passed("live provider model menu saves exact IDs and restores selection after hydration")
     add("tax", "Source · input in the notebook")
     add("amount", "Source · input in the notebook")
     add("total", dependencies="amount, tax")
@@ -304,7 +325,7 @@ def verify(page, context, app, output):
     permission.get_by_role("button", name="Read only", exact=True).click()
     permission.locator(".permission-advanced > summary").click()
     permission.get_by_label("objects.read resource", exact=True).fill("reports/2026")
-    permission.get_by_role("button", name="Include descendants").last.click()
+    permission.get_by_role("checkbox", name="Include descendants").last.uncheck()
     permission.get_by_label("Maximum response bytes").fill("4096")
     assert SQL("select config->'connectors' is null from graph_cells where name='total'") == "t"
     edit.get_by_role("button", name="Save", exact=True).click()
@@ -317,7 +338,7 @@ def verify(page, context, app, output):
     edit.locator(".cell-connections > summary").click()
     permission = edit.locator(".cell-connection").filter(has_text="Reports fixture")
     permission.locator(".permission-advanced > summary").click()
-    expect(permission.get_by_role("button", name="Write objects", exact=True)).to_be_disabled()
+    expect(permission.get_by_role("checkbox", name="Write objects", exact=True)).to_be_disabled()
     permission.get_by_label("Maximum response bytes").fill("16777217")
     edit.get_by_role("button", name="Save", exact=True).click()
     expect(edit.locator(".orgs-error").last).to_contain_text("cannot widen")
@@ -479,7 +500,7 @@ def verify(page, context, app, output):
     assert not any(g["operation"] in ("events.delete", "events.invite") for g in grants)
     passed("organization provider ceiling uses non-destructive preset and saves structured calendar scope")
     before = SQL("select effect_policy::text from orgs")
-    page.get_by_role("button", name="Domains: use each cell's configured URL", exact=True).click()
+    page.get_by_role("radio", name="Use an organization allowlist", exact=True).check()
     page.get_by_label("Allowed HTTP domains (one per line)").fill("127.0.0.1")
     assert SQL("select effect_policy::text from orgs") == before
     page.get_by_role("button", name="Save permissions", exact=True).click()
@@ -487,6 +508,34 @@ def verify(page, context, app, output):
     page.get_by_label("Allowed HTTP domains (one per line)").fill("api.example.com")
     page.get_by_role("button", name="Save permissions", exact=True).click()
     wait_sql("select effect_policy->>'configuredDomains' from orgs", "false")
+    page.get_by_role("button", name="Edit as TOML", exact=True).click()
+    text = page.get_by_label("Notebook permission policy (TOML)")
+    original = text.input_value()
+    before = SQL("select effect_policy::text from orgs")
+    text.fill(original + "\nunknown = true\n")
+    page.get_by_role("button", name="Use visual editor", exact=True).click()
+    expect(page.locator(".orgs-error").last).to_contain_text("permission TOML")
+    assert SQL("select effect_policy::text from orgs") == before
+    text.fill(original)
+    text.fill(original.replace("api.example.com", "api2.example.com"))
+    page.get_by_role("button", name="Save permissions", exact=True).click()
+    wait_sql("select effect_policy->'domains'->>0 from orgs", "api2.example.com")
+    page.get_by_role("button", name="Use visual editor", exact=True).click()
+    expect(page.get_by_label("Allowed HTTP domains (one per line)")).to_have_value("api2.example.com")
+    page.get_by_label("Allowed HTTP domains (one per line)").fill("api.example.com")
+    expect(page.get_by_role("checkbox", name="Connector", exact=True)).to_be_checked()
+    page.get_by_role("checkbox", name="Connector", exact=True).uncheck()
+    page.get_by_role("button", name="Save permissions", exact=True).click()
+    wait_sql("select effect_policy->'effects' @> '[\"Connector\"]'::jsonb from orgs", "f")
+    page.evaluate("window.__navigationSentinel = 'same-document'")
+    page.get_by_role("link", name="Connections", exact=True).click()
+    expect(page.get_by_text("Connector access is disabled", exact=False).first).to_be_visible()
+    assert page.evaluate("window.__navigationSentinel") == "same-document"
+    page.get_by_role("link", name="Notebooks", exact=True).click()
+    page.get_by_role("checkbox", name="Connector", exact=True).check()
+    page.get_by_role("button", name="Save permissions", exact=True).click()
+    wait_sql("select effect_policy->'effects' @> '[\"Connector\"]'::jsonb from orgs", "t")
+    passed("TOML round-trip and invalid-field refusal, explicit connector opt-in, denial diagnostics and same-document settings navigation")
     policy = json.loads(SQL("select effect_policy from orgs"))
     policy["connectorCeilings"]["s3"] = {"scopes": [{"operation": "objects.read", "root": ["reports"], "descendants": True}], "maxRequestBytes": 1048576, "maxResponseBytes": 2048}
     # The organization UI uses the same editor already exercised above; set
@@ -520,6 +569,23 @@ def verify(page, context, app, output):
     page.locator(".provider-ceiling").filter(has=page.locator("summary", has_text="Google Calendar")).locator("summary").first.click()
     page.evaluate("window.scrollTo(0, 0)")
     page.screenshot(path=str(output / "permissions-desktop.png"), full_page=True)
+    assert abs(page.locator(".settings").bounding_box()["width"] - notebook_width) < 1
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.screenshot(path=str(output / "permissions-mobile.png"), full_page=True)
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "permissions overflow on mobile"
+    page.set_viewport_size({"width": 1280, "height": 900})
+    go(app + "/")
+    assert abs(page.locator(".orgs").bounding_box()["width"] - notebook_width) < 1
+    checks = []
+    page.on("request", lambda request: checks.append(request.url) if "/api/orgs/check" in request.url else None)
+    page.get_by_label("Name", exact=True).press_sequentially("Debounced organization", delay=15)
+    expect(page.locator(".slug-check")).to_be_visible()
+    assert len(checks) == 1, checks
+    page.locator("#new-slug").fill("")
+    page.locator("#new-slug").press_sequentially("debounced-organization-next", delay=15)
+    expect(page.locator(".slug-check")).to_contain_text("debounced-organization-next")
+    assert len(checks) == 2, checks
+    passed("slug availability waits for typing idle; no per-character queries or stale verdicts")
     assert not errors, errors
     passed("no browser JavaScript errors")
     output.joinpath("results.json").write_text(json.dumps({"passed": results, "page_errors": errors}, indent=2))

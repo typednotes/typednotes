@@ -33,9 +33,7 @@ pub async fn policy(tx: &mut Transaction<'_, Postgres>, org: &str) -> Result<Eff
 }
 
 pub fn ceiling(policy: &EffectPolicy, connection: &Connection, parent: &ConnectorPermissions) -> ConnectorPermissions {
-    let allowed = policy.effects.iter().any(|effect| effect == "Connector") ||
-        (matches!(connection.provider, crate::Provider::S3 | crate::Provider::Azure) && policy.effects.iter().any(|effect| effect == "ObjectStore"));
-    if !allowed || !policy.allows_provider(connection.provider) {
+    if !policy.allows_connector(connection.provider) {
         return ConnectorPermissions::deny_all();
     }
     policy.connector_ceilings.get(connection.provider.id()).cloned().unwrap_or_else(|| parent.clone())
@@ -227,10 +225,12 @@ pub async fn mint_for_cell(org: &Org, connection: &Connection, owner: &str, oper
         declared = parent.narrow(&declared.validate(connection.provider).map_err(errors::forbidden)?).map_err(errors::forbidden)?;
         declared.narrow(requested).map_err(errors::forbidden)?;
     }
-    let organization = ceiling(&policy(&mut tx, &org.id).await?, connection, &parent);
+    let policy = policy(&mut tx, &org.id).await?;
+    let organization = ceiling(&policy, connection, &parent);
     let cell = parent.narrow(requested).map_err(errors::forbidden)?.intersect(&organization);
     if !cell.scopes.iter().any(|s| s.operation == operation) {
-        return Err(errors::forbidden("connector operation is not permitted by the live ceilings"));
+        return Err(errors::forbidden(policy.connector_blocker(connection.provider, &parent, operation, &[])
+            .unwrap_or_else(|| format!("{operation} is not permitted by the live operation/resource ceilings"))));
     }
     let grant = warrant::for_connection(&root, &org.id, connection.provider.id(), operation, &connection.id, cost);
     let account = format!("{owner}/{}", connection.id);

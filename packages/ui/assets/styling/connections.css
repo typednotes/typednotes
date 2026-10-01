@@ -94,6 +94,7 @@
 }
 
 .conn-wide { width: 100%; }
+.conn-section > .orgs-field, .conn-subform > .orgs-field { flex: none; width: 100%; }
 
 .inbox {
   display: flex;
@@ -129,8 +130,18 @@
 .conn-meta { color: var(--app-muted); opacity: 1; }
 
 .permission-editor { display: flex; flex-direction: column; gap: .65rem; width: 100%; min-width: 0; }
+.permission-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .4rem .75rem; width: 100%; }
+.permission-check { display: flex; align-items: center; gap: .5rem; min-width: 0; padding: .3rem 0; }
+.permission-check input { width: 1.1rem; height: 1.1rem; padding: 0; margin: 0; flex: 0 0 auto; accent-color: var(--app-accent); }
+.permission-check label { cursor: pointer; overflow-wrap: anywhere; }
+.permission-check:has(input:disabled) { opacity: .6; }
+.permission-domain-mode { border: 0; padding: 0; margin: 0 0 .75rem; }
+.permission-domain-mode legend { font-weight: 600; margin-bottom: .35rem; }
+.permission-toml { width: 100%; font-family: var(--app-mono); }
+.model-picker .conn-select { width: 100%; min-width: 0; }
 .permission-editor p { margin: 0; max-width: 76ch; }
 .permission-boundary { width: min(100%, 38rem); min-width: 0; }
+.permission-editor > .orgs-field { flex: none; }
 .permission-advanced, .connection-permissions, .cell-connections { width: 100%; min-width: 0; }
 .permission-advanced summary, .connection-permissions summary, .cell-connections summary, .provider-ceiling summary { cursor: pointer; padding: .5rem 0; }
 .permission-advanced[open] > :not(summary) { margin-top: .65rem; }

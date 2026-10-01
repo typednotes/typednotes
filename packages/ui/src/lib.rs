@@ -30,6 +30,8 @@ mod connections;
 mod members;
 mod render;
 mod slug_form;
+mod permission_check;
+mod ai_models;
 
 use dioxus::prelude::*;
 

@@ -11,6 +11,12 @@ consumes the actual tag checkout SHA, confirms the tag points to it, confirms
 reachability from `origin/main`, and queries the correct CI workflow for its
 latest exact-SHA **push-to-main** run. Only `completed/success` qualifies.
 Missing, pending, failed, cancelled, PR or manual results cannot substitute.
+The app publisher now polls missing/queued/running evidence instead of failing
+immediately. `CI_WAIT_SECONDS` defaults to 3600 (maximum 7200), and
+`CI_POLL_SECONDS` defaults to 15 (range 1–60). The verify job has a 70-minute
+timeout. Every poll queries the latest run again; a newer failed attempt cannot
+be hidden by an older success. Completed non-success and invalid/API evidence
+fail immediately; a wait timeout produces no publish outputs.
 API errors and malformed evidence fail closed. Secrets' manual crate retry and
 Linen/Infra's release retries require an existing version tag and the same gate.
 
@@ -44,11 +50,17 @@ triggers are retained. Typednotes-infra Plan keeps its existing read-only/live-m
 conditions and credentials. Archived projects, vendored forks and repositories
 without applicable workflows were not given invented release pipelines.
 
-All CI jobs, test matrices and required platforms are preserved. Release version,
-changelog, notes and artifact checks remain. Publishing an old tag uses the old
+Required main-release checks, test matrices and platforms remain. The app's API,
+server and release-policy checks run on every PR/manual invocation. Browser
+compilation and branding run in a parallel **extended** job: always on main,
+optionally on PRs with the `extended-ci` label, and on manual runs with the
+**extended** checkbox. Label changes trigger a new PR run. Main success still
+attests the full suite; an optional/manual-only result cannot release an image.
+Release version, changelog, notes and artifact checks remain. Publishing an old tag uses the old
 workflow stored in its commit; this policy applies to future committed tags.
-If main and tag are pushed together, publication may refuse while CI is pending:
-wait for main CI and rerun the publisher rather than weakening the gate.
+If main and tag are pushed together, the app publisher waits for main CI; if it
+fails or exceeds the timeout, fix/rerun CI and retry the publisher. Sibling
+publishers retain their existing immediate-check behavior until coordinated.
 
 ## Readme references
 
@@ -65,8 +77,8 @@ when auditing a specific deployed version, not a living main page.
 
 ## Reproduction and trusted boundary
 
-Every publishing repository contains identical `ci/require-main-ci.sh` and
-`ci/test-require-main-ci.sh` copies. Its main CI runs the Bash behavior suite once
+The app's `ci/require-main-ci.sh` and `ci/test-require-main-ci.sh` include bounded
+waiting. Other publishers retain their shared immediate-check copies. Main CI runs the Bash behavior suite once
 before publication can be attested. The app also checks local trigger/publisher
 wiring and can audit sibling copy drift from a development workspace:
 
@@ -93,6 +105,8 @@ connector authority, dependency pin or logo asset changed in this policy work.
 The app-local gate/policy checks and all five unchanged branding tests also
 passed in a fresh Ubuntu 24.04 container using the documented apt dependencies.
 
+The current app behavior suite adds missing-to-success and pending-to-success
+transitions, timeout configuration and refusal of invalid polling parameters.
 The gate trusts GitHub's authenticated Actions API, workflow identity, fetched Git
 refs and runner environment. It is an operational promotion check, not a Lean
 proof about external CI/registry infrastructure. The application's existing

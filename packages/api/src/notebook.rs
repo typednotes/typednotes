@@ -185,6 +185,39 @@ impl Default for EffectPolicy {
 }
 
 impl EffectPolicy {
+    /// Text editing uses the same strict schema and validation as visual editing.
+    pub fn from_toml(text: &str) -> Result<Self, String> {
+        if text.len() > 262_144 { return Err("permission TOML: at most 256 KiB".into()); }
+        let policy: Self = toml::from_str(text).map_err(|e| format!("permission TOML: {e}"))?;
+        policy.validate()
+    }
+
+    pub fn to_toml(&self) -> Result<String, String> {
+        toml::to_string_pretty(self).map_err(|e| format!("permission TOML: {e}"))
+    }
+
+    pub fn allows_connector(&self, provider: Provider) -> bool {
+        self.allows_provider(provider) && (self.effects.iter().any(|effect| effect == "Connector") ||
+            (matches!(provider, Provider::S3 | Provider::Azure) && self.effects.iter().any(|effect| effect == "ObjectStore")))
+    }
+
+    /// User-facing explanation of a denied call, without suggesting a bypass.
+    pub fn connector_blocker(&self, provider: Provider, parent: &crate::ConnectorPermissions, operation: &str, resource: &[String]) -> Option<String> {
+        if !self.allows_provider(provider) {
+            return Some(format!("{} is disabled in Organization settings → Notebooks → Connector providers.", provider.name()));
+        }
+        if !self.allows_connector(provider) {
+            return Some("Connector access is disabled in Organization settings → Notebooks → Effects. An owner or admin must enable Connector and save permissions.".into());
+        }
+        if !parent.permits(operation, resource) {
+            return Some(format!("Connection permissions do not allow {operation} for this resource. Its creator or an admin can edit the connection's operations and resource boundary."));
+        }
+        if self.connector_ceilings.get(provider.id()).is_some_and(|p| !p.permits(operation, resource)) {
+            return Some(format!("The organization ceiling for {} does not allow {operation} for this resource. An admin can edit it in Organization settings → Notebooks → Advanced connector ceilings.", provider.name()));
+        }
+        None
+    }
+
     pub fn validate(&self) -> Result<Self, String> {
         let normalize = |values: &[String], allowed: &[&str], what: &str| -> Result<Vec<String>, String> {
             let mut result = BTreeSet::new();
@@ -288,6 +321,43 @@ mod tests {
         assert!(EffectPolicy::default().tools.iter().any(|tool| tool == "lsp"));
         assert!(EffectPolicy { tools: vec!["lsp".into()], ..Default::default() }.validate().is_ok());
         assert!(EffectPolicy { tools: vec!["lsp_rpc".into()], ..Default::default() }.validate().is_err());
+    }
+
+    #[test]
+    fn toml_roundtrips_resource_ceilings_and_fails_closed() {
+        let mut policy = EffectPolicy::default();
+        policy.connector_ceilings.insert("gmail".into(), crate::ConnectorPermissions::scoped("messages.read", vec!["me".into(), "INBOX".into()], true));
+        policy.connector_ceilings.insert("postgres".into(), crate::ConnectorPermissions::local_preset(crate::LocalService::Postgres, crate::PermissionPreset::ReadOnly, vec!["schema".into()]));
+        let validated = policy.validate().unwrap();
+        assert_eq!(EffectPolicy::from_toml(&validated.to_toml().unwrap()).unwrap(), validated);
+        for bad in ["effects = [\"RawIO\"]", "unexpected = true", "effects = []\neffects = []"] {
+            assert!(EffectPolicy::from_toml(bad).is_err());
+        }
+        assert!(EffectPolicy::from_toml(&policy.to_toml().unwrap().replace("messages.read", "messages.unrestricted")).is_err());
+        let mut denied = EffectPolicy::default();
+        denied.effects.clear();
+        denied.providers.clear();
+        assert_eq!(EffectPolicy::from_toml(&denied.to_toml().unwrap()).unwrap().effects.len(), 0);
+    }
+
+    #[test]
+    fn connector_diagnostics_preserve_each_independent_ceiling() {
+        for provider in [Provider::Github, Provider::Baseten, Provider::S3] {
+            let operation = crate::connector_operations(provider)[0].id;
+            let parent = crate::ConnectorPermissions::preset(provider, crate::PermissionPreset::ReadOnly);
+            let mut policy = EffectPolicy::default();
+            assert!(policy.connector_blocker(provider, &parent, operation, &[]).is_none());
+            policy.effects = vec!["SecretStore".into()];
+            assert!(policy.connector_blocker(provider, &parent, operation, &[]).unwrap().contains("Effects"));
+            policy = EffectPolicy::default();
+            policy.providers.clear();
+            assert!(policy.connector_blocker(provider, &parent, operation, &[]).unwrap().contains("providers"));
+            policy = EffectPolicy::default();
+            policy.connector_ceilings.insert(provider.id().into(), crate::ConnectorPermissions::deny_all());
+            assert!(policy.connector_blocker(provider, &parent, operation, &[]).unwrap().contains("organization ceiling"));
+            policy.connector_ceilings.clear();
+            assert!(policy.connector_blocker(provider, &crate::ConnectorPermissions::deny_all(), operation, &[]).unwrap().contains("Connection permissions"));
+        }
     }
 
     #[test]

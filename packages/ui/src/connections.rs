@@ -16,6 +16,7 @@ use crate::components::select::{Select, SelectOption};
 use crate::components::textarea::Textarea;
 use crate::error_message;
 use crate::navigate_to;
+use crate::permission_check::PermissionCheck;
 
 pub(crate) const CONNECTIONS_CSS: Asset = asset!("/assets/styling/connections.css");
 
@@ -26,7 +27,8 @@ pub(crate) const CONNECTIONS_CSS: Asset = asset!("/assets/styling/connections.cs
 /// connection's public description only.
 #[component]
 pub(crate) fn ConnectionsPanel(slug: ReadSignal<String>) -> Element {
-    let mut list = use_server_future(move || list_connections(slug()))?;
+    let mut list = use_resource(move || list_connections(slug()));
+    let settings = use_resource(move || api::get_org_settings(slug()));
 
     rsx! {
         document::Link { rel: "stylesheet", href: CONNECTIONS_CSS }
@@ -52,6 +54,7 @@ pub(crate) fn ConnectionsPanel(slug: ReadSignal<String>) -> Element {
                                     key: "{connection.id}",
                                     slug: slug(),
                                     connection: connection.clone(),
+                                    policy: settings().and_then(|s| s.ok()).map(|s| s.effect_policy),
                                     on_changed: move |_| list.restart(),
                                 }
                             }
@@ -65,11 +68,20 @@ pub(crate) fn ConnectionsPanel(slug: ReadSignal<String>) -> Element {
 }
 
 #[component]
-fn ConnectionRow(slug: String, connection: Connection, on_changed: EventHandler<()>) -> Element {
+fn ConnectionRow(slug: String, connection: Connection, policy: Option<api::EffectPolicy>, on_changed: EventHandler<()>) -> Element {
     let mut busy = use_signal(|| false);
     let mut result = use_signal(|| None::<TestResult>);
     let mut confirming = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
+    let mut show_models = use_signal(|| false);
+    let price_model = use_signal(String::new);
+    let parent = connection.permissions.clone().unwrap_or_else(|| ConnectorPermissions::preset(connection.provider, PermissionPreset::ReadOnly));
+    let operation = if connection.provider.is_ai() { "models.list" } else if connection.provider.is_code() { "repositories.list" } else { "" };
+    let blocked = policy.as_ref().and_then(|policy| {
+        if !policy.allows_connector(connection.provider) || !operation.is_empty() {
+            policy.connector_blocker(connection.provider, &parent, operation, &[])
+        } else { None }
+    });
 
     let (id, s) = (connection.id.clone(), slug.clone());
     let test = move |_| {
@@ -133,11 +145,16 @@ fn ConnectionRow(slug: String, connection: Connection, on_changed: EventHandler<
             if let Some(e) = error() {
                 div { class: "conn-result err", "{e}" }
             }
+            if let Some(message) = blocked.as_ref() {
+                p { class: "conn-result err", "{message} ",
+                    Link { to: "/orgs/{slug}/settings/notebooks", "Review notebook permissions" }
+                }
+            }
             div { class: "conn-actions",
                 Button {
                     size: ButtonSize::Sm,
                     variant: ButtonVariant::Outline,
-                    disabled: busy(),
+                    disabled: busy() || blocked.is_some(),
                     onclick: test,
                     "Test"
                 }
@@ -152,6 +169,16 @@ fn ConnectionRow(slug: String, connection: Connection, on_changed: EventHandler<
                 }
             }
             ConnectionPermissions { key: "{connection.permissions:?}", slug: slug.clone(), connection: connection.clone(), on_changed }
+            if connection.provider.is_ai() {
+                Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Outline,
+                    onclick: move |_| show_models.set(!show_models()),
+                    if show_models() { "Hide models" } else { "Models and pricing" }
+                }
+                if show_models() {
+                    crate::ai_models::ModelPicker { key: "{connection.id}", slug: slug.clone(), connection_id: connection.id.clone(), value: price_model }
+                    crate::ai_cost::ModelCost { provider: connection.provider, model: price_model() }
+                }
+            }
             if connection.provider == Provider::TypeSafe {
                 ClassifierForm { slug: slug.clone(), connection_id: connection.id.clone() }
             }
@@ -234,22 +261,22 @@ pub(crate) fn PermissionEditor(
             details { class: "permission-advanced",
                 summary { "Advanced operations and resources" }
                 p { class: "conn-meta", "Requested policy grants; the broker checks operation support, scopes and credentials when a call runs." }
-                div { class: "conn-actions",
+                div { class: "permission-options",
                     for operation in connector_operations(provider) {
-                        Button { r#type: "button", size: ButtonSize::Sm, disabled: disabled || (ceiling.as_ref().is_some_and(|c| !c.scopes.iter().any(|s| s.operation == operation.id)) && !displayed.scopes.iter().any(|s| s.operation == operation.id)),
-                            aria_pressed: displayed.scopes.iter().any(|s| s.operation == operation.id).to_string(),
-                            variant: if displayed.scopes.iter().any(|s| s.operation == operation.id) { ButtonVariant::Secondary } else { ButtonVariant::Outline },
-                            onclick: {
+                        PermissionCheck { id: "{id}-{operation.id}", label: operation.label,
+                            disabled: disabled || (ceiling.as_ref().is_some_and(|c| !c.scopes.iter().any(|s| s.operation == operation.id)) && !displayed.scopes.iter().any(|s| s.operation == operation.id)),
+                            checked: displayed.scopes.iter().any(|s| s.operation == operation.id),
+                            on_change: {
                                 let mut next = displayed.clone();
                                 let ceiling = ceiling.clone();
-                                move |_| {
+                                move |_: bool| {
                                     if next.scopes.iter().any(|s| s.operation == operation.id) { next.scopes.retain(|s| s.operation != operation.id); }
                                     else if let Some(limit) = &ceiling {
                                         next.scopes.extend(limit.scopes.iter().filter(|s| s.operation == operation.id).cloned());
                                     } else { next.scopes.push(ConnectorScope { operation: operation.id.into(), root: Vec::new(), descendants: true }); }
                                     on_change.call(Some(next.clone()));
                                 }
-                            }, "{operation.label}" }
+                            } }
                     }
                 }
                 p { class: "conn-meta", "{connector_scope_label(provider)}. Separate resource levels with /; an empty root means the credential's base resource. Scopes match whole components, not text prefixes." }
@@ -263,10 +290,8 @@ pub(crate) fn PermissionEditor(
                                     on_change.call(Some(next.clone()));
                                 } } }
                         }
-                        Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Outline, disabled,
-                            aria_pressed: grant.descendants.to_string(),
-                            onclick: { let mut next = displayed.clone(); move |_| { next.scopes[index].descendants = !next.scopes[index].descendants; on_change.call(Some(next.clone())); } },
-                            if grant.descendants { "Include descendants" } else { "Exact resource only" } }
+                        PermissionCheck { id: "{id}-descendants-{index}", label: "Include descendants", disabled, checked: grant.descendants,
+                            on_change: { let mut next = displayed.clone(); move |checked: bool| { next.scopes[index].descendants = checked; on_change.call(Some(next.clone())); } } }
                         Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Ghost, disabled,
                             aria_label: "Add another resource for {grant.operation}",
                             onclick: { let mut next = displayed.clone(); move |_| { next.scopes.push(next.scopes[index].clone()); on_change.call(Some(next.clone())); } }, "Add resource" }
@@ -333,12 +358,14 @@ fn ClassifierForm(slug: String, connection_id: String) -> Element {
     let mut answer = use_signal(|| None::<String>);
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
+    let model = use_signal(|| "jev-latest".to_string());
+    let (model_slug, model_connection) = (slug.clone(), connection_id.clone());
     let evaluate = move |_| {
         let (slug, id) = (slug.clone(), connection_id.clone());
         async move {
             busy.set(true);
             error.set(None);
-            let request = serde_json::json!({"model":"jev-latest","state":state(),
+            let request = serde_json::json!({"model":model(),"state":state(),
                 "questions":{"answer":{"type":"noul","instructions":question()}}});
             match api::classify_with_ai(slug, id, request).await {
                 Ok(value) => answer.set(Some(
@@ -352,6 +379,7 @@ fn ClassifierForm(slug: String, connection_id: String) -> Element {
     rsx! {
         div { class: "conn-subform",
             h4 { "Typed classification" }
+            crate::ai_models::ModelPicker { key: "{model_connection}", slug: model_slug.clone(), connection_id: model_connection.clone(), value: model, disabled: busy() }
             div { class: "orgs-field",
                 Label { html_for: "classifier-state", "Text / state to evaluate" }
                 Textarea { id: "classifier-state", value: state(), oninput: move |e: FormEvent| state.set(e.value()) }
@@ -428,7 +456,7 @@ fn ProviderSelect(
 /// The ways to add a connection, grouped by what it is for.
 #[component]
 fn AddConnection(slug: String, on_added: EventHandler<()>) -> Element {
-    let status = use_server_future(health)?;
+    let status = use_resource(health);
     let h = status().and_then(|r| r.ok());
     let vault = h.as_ref().is_some_and(|h| h.vault);
     let mut storage = use_signal(|| Provider::S3);
@@ -915,9 +943,8 @@ fn AiForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
     let mut provider = use_signal(|| Provider::Anthropic);
     let mut base_url = use_signal(String::new);
     let mut key = use_signal(String::new);
-    let mut price_model = use_signal(|| "claude-sonnet-4-5".to_string());
     let env_slug = slug.clone();
-    let environment = use_server_future(move || ai_environment(env_slug.clone()))?;
+    let environment = use_resource(move || ai_environment(env_slug.clone()));
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     let key_name = provider().ai_info().map(|p| p.env).unwrap_or("API_KEY");
@@ -966,7 +993,6 @@ fn AiForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
                 value: provider(),
                 on_change: move |p| {
                     provider.set(p); key.set(String::new()); base_url.set(String::new());
-                    price_model.set(p.ai_info().and_then(|i| i.default_model).unwrap_or("").to_string());
                 },
                 label: "AI provider",
             }
@@ -1001,11 +1027,7 @@ fn AiForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
             if provider() == Provider::TypeSafe {
                 p { class: "conn-meta", "Typed classifier models use /systemone. This connection evaluates questions; it is not a code-writing model." }
             }
-            div { class: "orgs-field",
-                Label { html_for: "ai-price-model", "Model for token pricing" }
-                Input { id: "ai-price-model", value: price_model(), placeholder: "Exact provider model ID", oninput: move |e: FormEvent| price_model.set(e.value()) }
-            }
-            crate::ai_cost::ModelCost { provider: provider(), model: price_model() }
+            p { class: "conn-meta", "After connecting, open Models and pricing to select from this provider's live catalog. Notebooks use the same model menu." }
             Button { r#type: "submit", disabled: disabled || busy(), "Connect {provider().name()}" }
             if let Some(message) = error() {
                 p { class: "orgs-error", "{message}" }

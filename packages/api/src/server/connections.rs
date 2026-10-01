@@ -164,7 +164,7 @@ pub async fn store(
     }
     let mut tx = connector::lock(&org.id).await?;
     let policy = connector::policy(&mut tx, &org.id).await?;
-    let organization = if policy.effects.iter().any(|e| e == "Connector") && policy.allows_provider(new.provider) {
+    let organization = if policy.allows_connector(new.provider) {
         policy.connector_ceilings.get(new.provider.id()).cloned().unwrap_or_else(|| permissions.clone())
     } else { crate::ConnectorPermissions::deny_all() };
     connector::publish_ceiling(&org.id, new.provider.id(), &id, &organization).await?;

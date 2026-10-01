@@ -38,7 +38,7 @@ pub fn OrgPage(slug: ReadSignal<String>, connected: String, error: String) -> El
     rsx! {
         document::Link { rel: "stylesheet", href: ORGS_CSS }
         div { class: "orgs",
-            p { class: "back-link", a { href: "/", "← Your organisations" } }
+            p { class: "back-link", Link { to: "/", "← Your organisations" } }
             match detail() {
                 None => rsx! { p { "Loading…" } },
                 Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load this organisation: {error_message(&e)}" } },
@@ -58,23 +58,23 @@ pub fn OrgPage(slug: ReadSignal<String>, connected: String, error: String) -> El
                             }
                             CardContent {
                                 div { class: "workspace-links",
-                                    a { href: "{settings}", "Settings" }
-                                    a { href: "{settings}/members", "Members" }
-                                    a { href: "{settings}/connections", "Connections" }
+                                    Link { to: "{settings}", "Settings" }
+                                    Link { to: "{settings}/members", "Members" }
+                                    Link { to: "{settings}/connections", "Connections" }
                                 }
                                 if !has_ai || !has_code {
                                     div { class: "setup-hints",
                                         if !has_code {
                                             p {
                                                 "Connect GitHub or GitLab so projects can have a repository: "
-                                                a { href: "{settings}/connections", "connections" }
+                                                Link { to: "{settings}/connections", "connections" }
                                                 "."
                                             }
                                         }
                                         if !has_ai {
                                             p {
                                                 "Connect an AI provider so notebooks can be implemented: "
-                                                a { href: "{settings}/connections", "connections" }
+                                                Link { to: "{settings}/connections", "connections" }
                                                 "."
                                             }
                                         }

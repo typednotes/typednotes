@@ -181,6 +181,15 @@ including `sv` and `sig`.
 
 ### 3.4 Calendar, webmail and workspace setup
 
+Step-by-step Google console, consent, callback, app permission and troubleshooting
+instructions are in [Connect Google Calendar and Gmail](google-connections.md).
+
+Calls also require the organization **Connector** effect, the selected provider,
+and compatible organization/connection operation-resource grants. A valid OAuth
+token alone cannot satisfy these application ceilings. The UI explains a denied
+ceiling and links to Settings → Notebooks; explicit owner/admin edits restore
+intended access through the ordinary revocation/provisioning path.
+
 Apply `0005_productivity_connections.sql` before deploying the new app, and deploy the
 broker with `microsoft_oauth` support before connecting Microsoft accounts.
 
@@ -207,8 +216,9 @@ broker with `microsoft_oauth` support before connecting Microsoft accounts.
   access; providers offering only IMAP/SMTP need a separate broker adapter.
 - **Notion:** create an internal integration, choose its capabilities and share the pages
   and databases it needs via Notion's Connections menu. Paste its token and a connection
-  name. Personal access tokens also work. The probe identifies the token's user/bot;
-  accessible content and write permissions are determined by Notion's token capabilities.
+  name. Personal access tokens also work. Configure a scoped `pages.read` grant
+  for a shared page before testing; the probe reads that page. Accessible content
+  and write permissions are also limited by Notion's token capabilities.
 
 These additions manage accounts, store credentials and test provider access through liaison.
 They do not introduce automatic mailbox/calendar synchronization or new notebook cell types.
@@ -379,6 +389,15 @@ seconds. `id`, `orgId` and `runId` are UUIDs (ledger's `credit_holds.run_id` is 
 | app | `TYPEDNOTES_MODEL_CALL_COST` | credits held per lode model call, default `10` |
 | app | `TYPEDNOTES_AUTO_REPAIRS` | rewrites lode is sent by the app itself (failed build, node error) before a member asks again, default `2`; an org can set its own on its settings page |
 | app | `TYPEDNOTES_STORAGE_WRITE_COST` | budget of a `storage` sink's write warrant, default `1` |
+
+For a local app using remote workers, `LIAISON_RUNTIME_URL` overrides only the
+broker address sent to Lun; `LIAISON_URL` remains the app's own transport address.
+`COMPUTE_DB_RUNTIME_URL` overrides the worker-visible host/port for newly
+provisioned compute credentials, keeping the same database and org/user-derived
+role/schema; it must omit credentials/query/fragment. `TYPEDNOTES_BACKGROUND=0`,
+`false` or `off` disables that app process's scheduler (normal default: enabled).
+The local launcher defaults it to `0`. See [local development](local-development.md)
+for matched backend databases, OAuth callbacks and tunnel examples.
 
 ## 9. Verified end to end
 

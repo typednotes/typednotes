@@ -31,6 +31,7 @@ use crate::members::MembersPanel;
 use crate::orgs::ORGS_CSS;
 use crate::projects::{DeleteProject, RepoPanel};
 use crate::{error_message, navigate_to};
+use crate::permission_check::PermissionCheck;
 
 const SETTINGS_CSS: Asset = asset!("/assets/styling/settings.css");
 
@@ -78,7 +79,7 @@ fn SettingsLayout(
         document::Link { rel: "stylesheet", href: CONNECTIONS_CSS }
         document::Link { rel: "stylesheet", href: SETTINGS_CSS }
         div { class: "settings",
-            p { class: "back-link", a { href: "{back_href}", "← {back_label}" } }
+            p { class: "back-link", Link { to: "{back_href}", "← {back_label}" } }
             header { class: "settings-head",
                 h2 { class: "settings-title", "{title}" }
                 if let Some(s) = subtitle {
@@ -89,10 +90,10 @@ fn SettingsLayout(
                 if !sections.is_empty() {
                     nav { class: "settings-nav", aria_label: "Settings sections",
                         for (id, label) in sections.iter() {
-                            a {
+                            Link {
                                 key: "{id}",
                                 class: if *id == active { "settings-link active" } else { "settings-link" },
-                                href: "{base}/{id}",
+                                to: "{base}/{id}",
                                 aria_current: if *id == active { "page" } else { "false" },
                                 "{label}"
                             }
@@ -280,7 +281,7 @@ pub fn AccountPage() -> Element {
                 }
                 CardContent {
                     if a.orgs.is_empty() {
-                        p { class: "orgs-empty", "None yet: create one from ", a { href: "/", "your organisations" }, "." }
+                        p { class: "orgs-empty", "None yet: create one from ", Link { to: "/", "your organisations" }, "." }
                     }
                     div { class: "conn-list",
                         for org in a.orgs.iter() {
@@ -301,9 +302,9 @@ fn AccountOrgRow(org: Org, me: String, on_left: EventHandler<()>) -> Element {
     rsx! {
         div { class: "conn-row",
             div { class: "conn-main",
-                a { class: "conn-provider", href: "/orgs/{org.slug}", "{org.name}" }
+                Link { class: "conn-provider", to: "/orgs/{org.slug}", "{org.name}" }
                 span { class: "conn-status conn-status-active", "{org.role}" }
-                a { class: "conn-meta", href: "/orgs/{org.slug}/settings", "settings" }
+                Link { class: "conn-meta", to: "/orgs/{org.slug}/settings", "settings" }
             }
             div { class: "conn-actions",
                 Button {
@@ -373,8 +374,8 @@ pub fn OrgSettingsPage(
             Flash { connected, error }
             match active {
                 "members" => rsx! { MembersPanel { slug: org.slug.clone(), role: org.role.clone() } },
-                "connections" => rsx! { ConnectionsPanel { slug: org.slug.clone() } },
-                "notebooks" => rsx! { OrgNotebooks { slug: org.slug.clone() } },
+                "connections" => rsx! { ConnectionsPanel { key: "{org.id}", slug: org.slug.clone() } },
+                "notebooks" => rsx! { OrgNotebooks { key: "{org.id}", slug: org.slug.clone() } },
                 "danger" => rsx! { OrgDanger { org: org.clone(), me: me().and_then(|u| u.ok()).flatten().map(|u| u.id).unwrap_or_default() } },
                 _ => rsx! {
                     OrgGeneral { org: org.clone(), credits: d.credits, admin, on_saved: move |_| detail.restart() }
@@ -438,7 +439,7 @@ fn OrgGeneral(org: Org, credits: Option<i64>, admin: bool, on_saved: EventHandle
 /// The notebooks' settings of an org: the cap on automatic rewrites.
 #[component]
 fn OrgNotebooks(slug: ReadSignal<String>) -> Element {
-    let mut settings = use_server_future(move || get_org_settings(slug()))?;
+    let mut settings = use_resource(move || get_org_settings(slug()));
     match settings() {
         None => rsx! { p { "Loading…" } },
         Some(Err(e)) => {
@@ -446,7 +447,7 @@ fn OrgNotebooks(slug: ReadSignal<String>) -> Element {
         }
         Some(Ok(s)) => {
             rsx! {
-                NotebookPermissions { key: "{s.effect_policy:?}", slug: slug(), policy: s.effect_policy.clone(), can_edit: s.can_edit, on_saved: move |_| settings.restart() }
+                NotebookPermissions { slug: slug(), policy: s.effect_policy.clone(), can_edit: s.can_edit, on_saved: move |_| settings.restart() }
                 AutoRepairs { slug: slug(), settings: s, on_saved: move |_| settings.restart() }
             }
         }
@@ -461,15 +462,36 @@ fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_sa
     let mut domains = use_signal(|| policy.domains.join("\n"));
     let mut configured_domains = use_signal(|| policy.configured_domains);
     let mut connector_ceilings = use_signal(|| policy.connector_ceilings.clone());
+    let mut toml_mode = use_signal(|| false);
+    let mut toml_text = use_signal(String::new);
     let mut busy = use_signal(|| false);
     let mut status = use_signal(|| None::<Result<String, String>>);
+    let draft = move || EffectPolicy { effects: effects(), tools: tools(), providers: providers(), configured_domains: configured_domains(), domains: domains().split([',', '\n']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(), connector_ceilings: connector_ceilings() };
+    let switch_editor = move |_| {
+        status.set(None);
+        if toml_mode() {
+            match EffectPolicy::from_toml(&toml_text()) {
+                Ok(policy) => {
+                    effects.set(policy.effects); tools.set(policy.tools); providers.set(policy.providers);
+                    configured_domains.set(policy.configured_domains); domains.set(policy.domains.join("\n"));
+                    connector_ceilings.set(policy.connector_ceilings); toml_mode.set(false);
+                }
+                Err(message) => status.set(Some(Err(message))),
+            }
+        } else {
+            match draft().to_toml() {
+                Ok(text) => { toml_text.set(text); toml_mode.set(true); }
+                Err(message) => status.set(Some(Err(message))),
+            }
+        }
+    };
     let save = move |event: FormEvent| {
         event.prevent_default();
         let slug = slug.clone();
-        let connector_ceilings = connector_ceilings();
+        let parsed = if toml_mode() { EffectPolicy::from_toml(&toml_text()) } else { draft().validate() };
         async move {
+            let policy = match parsed { Ok(policy) => policy, Err(message) => { status.set(Some(Err(message))); return; } };
             busy.set(true);
-            let policy = EffectPolicy { effects: effects(), tools: tools(), providers: providers(), configured_domains: configured_domains(), domains: domains().split([',', '\n']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(), connector_ceilings };
             match set_notebook_permissions(slug, policy).await {
                 Ok(_) => { status.set(Some(Ok("Notebook permissions saved.".into()))); on_saved.call(()); }
                 Err(error) => status.set(Some(Err(error_message(&error)))),
@@ -485,18 +507,39 @@ fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_sa
             }
             CardContent {
                 form { class: "conn-subform", onsubmit: save,
+                    Button { r#type: "button", variant: ButtonVariant::Outline, disabled: busy(), onclick: switch_editor,
+                        if toml_mode() { "Use visual editor" } else { "Edit as TOML" }
+                    }
+                    if toml_mode() {
+                        div { class: "orgs-field conn-wide",
+                            Label { html_for: "notebook-policy-toml", "Notebook permission policy (TOML)" }
+                            Textarea { id: "notebook-policy-toml", class: "permission-toml", rows: 18,
+                                disabled: !can_edit || busy(), value: toml_text(), oninput: move |event: FormEvent| toml_text.set(event.value()) }
+                            p { class: "conn-meta", "Uses the same operation/resource schema as the visual editor. Unknown fields or operations are rejected. Changes apply only after Save permissions." }
+                        }
+                    } else {
                     h4 { "Effects" }
-                    div { class: "conn-actions",
+                    div { class: "permission-options",
                         for name in NOTEBOOK_EFFECTS {
-                            Button { r#type: "button", size: ButtonSize::Sm, disabled: !can_edit || busy(),
-                                variant: if effects().iter().any(|value| value == name) { ButtonVariant::Secondary } else { ButtonVariant::Outline },
-                                aria_pressed: effects().iter().any(|value| value == name).to_string(),
-                                onclick: move |_| effects.with_mut(|values| { if let Some(i) = values.iter().position(|value| value == name) { values.remove(i); } else { values.push(name.to_string()); } }), "{name}" }
+                            PermissionCheck { id: "effect-{name}", label: *name, disabled: !can_edit || busy(),
+                                checked: effects().iter().any(|value| value == name),
+                                on_change: move |_: bool| effects.with_mut(|values| { if let Some(i) = values.iter().position(|value| value == name) { values.remove(i); } else { values.push(name.to_string()); } }) }
                         }
                     }
+                    if !effects().iter().any(|effect| effect == "Connector") {
+                        p { class: "conn-result err", "Connector is unchecked: AI, repository, calendar, email and messaging calls are denied, including connection tests. Enable it and save to allow the selected providers within their connection grants." }
+                    }
+                    p { class: "conn-meta", "Trace: logs · Error: failures · HTTP: public web requests · FileSystem: temporary files · PostgreSQL: notebook database · SecretStore: vault secrets · ObjectStore: S3/Azure · Connector: connected providers." }
                     div { class: "orgs-field",
-                        Button { r#type: "button", variant: ButtonVariant::Outline, disabled: !can_edit, aria_pressed: configured_domains().to_string(), onclick: move |_| configured_domains.set(!configured_domains()),
-                            if configured_domains() { "Domains: use each cell's configured URL" } else { "Domains: use an organization allowlist" }
+                        fieldset { class: "permission-domain-mode",
+                            legend { "HTTP domain policy" }
+                            for (configured, label) in [(true, "Use each cell's configured URL"), (false, "Use an organization allowlist")] {
+                                div { class: "permission-check",
+                                    Input { id: "domain-mode-{configured}", name: "domain-mode", r#type: "radio", checked: configured_domains() == configured,
+                                        disabled: !can_edit || busy(), oninput: move |_: FormEvent| configured_domains.set(configured) }
+                                    Label { html_for: "domain-mode-{configured}", "{label}" }
+                                }
+                            }
                         }
                         Label { html_for: "notebook-domains", "Allowed HTTP domains (one per line)" }
                         Textarea { id: "notebook-domains", rows: 3, value: domains(), disabled: !can_edit || configured_domains(),
@@ -504,25 +547,27 @@ fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_sa
                         p { class: "conn-meta", "Exact public hostnames; empty denies network requests. Subdomains must be listed separately." }
                     }
                     p { class: "conn-meta", "Database access is restricted to the running user's schema. Files are restricted to that organization and user's temporary folder. These boundaries cannot be widened here." }
+                    if tools().is_empty() {
+                        p { class: "conn-result err", "No code-writing tools are enabled. Select the tools you intend to allow below and save before generating notebook code." }
+                    }
                     details {
                         summary { "Code-writing tools" }
-                        div { class: "conn-actions",
+                        div { class: "permission-options",
                             for name in WRITER_TOOLS {
-                                Button { r#type: "button", size: ButtonSize::Sm, disabled: !can_edit || busy(),
-                                    variant: if tools().iter().any(|value| value == name) { ButtonVariant::Secondary } else { ButtonVariant::Outline },
-                                    aria_pressed: tools().iter().any(|value| value == name).to_string(),
-                                    onclick: move |_| tools.with_mut(|values| { if let Some(i) = values.iter().position(|value| value == name) { values.remove(i); } else { values.push(name.to_string()); } }), "{name}" }
+                                PermissionCheck { id: "tool-{name}", label: *name, disabled: !can_edit || busy(),
+                                    checked: tools().iter().any(|value| value == name),
+                                    on_change: move |_: bool| tools.with_mut(|values| { if let Some(i) = values.iter().position(|value| value == name) { values.remove(i); } else { values.push(name.to_string()); } }) }
                             }
                         }
+                        p { class: "conn-meta", "Generating code normally needs read, ls, grep, write, edit, check, lsp, publish and lun_build. lun_call enables scoped runtime trials; bash is an independent grant." }
                     }
                     details {
                         summary { "Connector providers" }
-                        div { class: "conn-actions",
+                        div { class: "permission-options",
                             for &provider in Provider::ALL.iter() {
-                                Button { r#type: "button", size: ButtonSize::Sm, disabled: !can_edit || busy(),
-                                    variant: if providers().iter().any(|value| value == provider.id()) { ButtonVariant::Secondary } else { ButtonVariant::Outline },
-                                    aria_pressed: providers().iter().any(|value| value == provider.id()).to_string(),
-                                    onclick: move |_| providers.with_mut(|values| { if let Some(i) = values.iter().position(|value| value == provider.id()) { values.remove(i); } else { values.push(provider.id().to_string()); } }), "{provider.name()}" }
+                                PermissionCheck { id: "provider-{provider.id()}", label: provider.name(), disabled: !can_edit || busy(),
+                                    checked: providers().iter().any(|value| value == provider.id()),
+                                    on_change: move |_: bool| providers.with_mut(|values| { if let Some(i) = values.iter().position(|value| value == provider.id()) { values.remove(i); } else { values.push(provider.id().to_string()); } }) }
                             }
                         }
                     }
@@ -539,6 +584,7 @@ fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_sa
                                     }) }
                             }
                         }
+                    }
                     }
                     if can_edit { Button { r#type: "submit", disabled: busy(), "Save permissions" } }
                     Outcome { status: status() }
@@ -820,7 +866,7 @@ fn ProjectGeneral(org: String, project: api::Project, on_saved: EventHandler<()>
                     dd {
                         match &project.repo {
                             Some(r) => rsx! { a { href: "{r.web_url}", target: "_blank", rel: "noopener", "{r.full_name}" } },
-                            None => rsx! { "none — " a { href: "{repository}", "choose one" } },
+                            None => rsx! { "none — " Link { to: "{repository}", "choose one" } },
                         }
                     }
                 }

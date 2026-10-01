@@ -116,8 +116,23 @@ fn pool() -> Result<&'static PgPool, String> {
 /// connects with. Never the URL's own credentials.
 fn target() -> Result<(String, String), String> {
     let raw = config::compute_db_url().ok_or("COMPUTE_DB_URL is not set")?;
-    let url = url::Url::parse(&raw).map_err(|_| "COMPUTE_DB_URL is not a URL".to_string())?;
-    let host = url.host_str().ok_or("COMPUTE_DB_URL has no host")?;
+    target_from_urls(&raw, config::env("COMPUTE_DB_RUNTIME_URL").as_deref())
+}
+
+fn target_from_urls(raw: &str, runtime: Option<&str>) -> Result<(String, String), String> {
+    let local = url::Url::parse(raw).map_err(|_| "COMPUTE_DB_URL is not a URL")?;
+    let url = match runtime {
+        Some(raw) => {
+            let remote = url::Url::parse(raw).map_err(|_| "COMPUTE_DB_RUNTIME_URL is not a URL")?;
+            if !matches!(remote.scheme(), "postgres" | "postgresql") || !remote.username().is_empty() || remote.password().is_some()
+                || remote.query().is_some() || remote.fragment().is_some() || remote.path() != local.path() {
+                return Err("COMPUTE_DB_RUNTIME_URL must name the same database, without credentials, query or fragment".into());
+            }
+            remote
+        }
+        None => local,
+    };
+    let host = url.host_str().ok_or("compute database has no host")?;
     let port = url.port().unwrap_or(5432);
     let database = url.path().trim_start_matches('/');
     let database = if database.is_empty() {
@@ -270,6 +285,14 @@ pub async fn drop_schema(name: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn remote_compute_address_changes_transport_only() {
+        let local = "postgres://admin:private@127.0.0.1:15433/compute";
+        assert_eq!(target_from_urls(local, Some("postgres://compute-db:5432/compute")).unwrap(), ("compute-db:5432".into(), "compute".into()));
+        for remote in ["postgres://compute-db:5432/other", "postgres://admin:private@compute-db/compute", "https://compute-db/compute", "postgres://compute-db/compute?schema=other"] {
+            assert!(target_from_urls(local, Some(remote)).is_err());
+        }
+    }
 
     #[test]
     fn names() {

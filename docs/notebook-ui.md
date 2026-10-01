@@ -48,6 +48,50 @@ cell URLs. An explicit allowlist can instead be used; an empty explicit list
 denies HTTP. Provider ceilings are optional under Advanced. They use the same
 operation/resource editor as individual connections and cells.
 
+Effects, providers, writer tools, connector operations and descendant grants are
+labeled native checkboxes. Domain selection uses a radio group. Edits stay local
+until Save: typing in a permission field does not start a server query. A disabled
+**Connector** effect is called out explicitly because it also denies account
+tests, repository listing and model inventories, not just generated graph code.
+Connection rows and repository errors link back to the policy editor with the
+reason. An owner/admin can enable the intended grants and save; the UI never
+restores removed permissions on its own.
+
+**Edit as TOML** switches the current draft to a text area. **Use visual editor**
+parses it back into the same effect/provider/operation/resource controls. Invalid
+TOML stays in the editor with its error, preserving both the draft and saved
+policy. Save validates the strict shared policy schema locally and again at the
+authenticated server boundary, using the existing revocation/publication path.
+It accepts the same camelCase field names as the wire contract. For example:
+
+```toml
+effects = ["Trace", "Error", "Connector"]
+domains = []
+configuredDomains = true
+tools = ["read", "ls", "grep", "write", "edit", "check", "lsp", "publish", "lun_build"]
+providers = ["gmail", "google-calendar"]
+
+[connectorCeilings.google-calendar]
+maxRequestBytes = 1048576
+maxResponseBytes = 16777216
+
+[[connectorCeilings.google-calendar.scopes]]
+operation = "calendars.list"
+root = []
+descendants = false
+
+[[connectorCeilings.google-calendar.scopes]]
+operation = "events.read"
+root = ["primary"]
+descendants = true
+```
+
+This is an intentionally calendar/mail-only example, not a replacement default
+for an organization that uses other effects/providers. Empty lists deny access;
+unknown operations, fields, invalid roots and out-of-range byte limits are refused.
+The text editor also round-trips local PostgreSQL/Vault ceilings even when no
+external-provider editor represents them. Policy input is limited to 256 KiB.
+
 **Settings → Connections → Connection permissions** defines an account's
 ceiling. Existing unset connections use read-only defaults. Bucket, container
 and CalDAV collection credentials already carry their configured base resource.
@@ -83,6 +127,13 @@ before claiming an operation is supported end to end.
 
 ## Repeatable browser verification
 
+Workspace, notebook and settings pages share the same page-width and spacing
+tokens. Internal links use Dioxus navigation so settings changes do not reload
+the document. Optional health, connection and pricing loads render their own
+loading states. Account/OAuth redirects still use the full authentication path.
+Slug availability and model pricing wait 400 ms after changes; abandoned timers
+are cancelled, and a slug verdict only applies to the slug that was checked.
+
 ```sh
 uv run --with playwright scripts/test_notebook_ui.py --help
 uv run --with playwright scripts/test_notebook_ui.py \
@@ -114,7 +165,12 @@ policy persistence to PostgreSQL and the mock vault, exact configured-object
 inference, organization calendar ceilings, invalid-domain refusal, and cell
 API enforcement of organization HTTP/connector ceilings.
 
-These 24 groups are real browser/app/API/database tests, **with local writer,
+The updated checks also cover live provider model selection/reload, TOML save and
+round-trip with invalid-field refusal, explicit Connector opt-in and its denial
+diagnostics, same-document settings navigation, matching page widths, and idle
+slug validation with one request per typing burst.
+
+These 27 groups are real browser/app/API/database tests, **with local writer,
 runtime, credential broker and vault mocks**. Generated Lean code and native
 upstream calls are not executed by this browser script.
 

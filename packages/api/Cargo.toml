@@ -8,6 +8,7 @@ dioxus = { workspace = true, features = ["fullstack"] }
 serde = { version = "1", features = ["derive"] }
 # Shared: graph nodes carry JSON values to the client.
 serde_json = "1"
+toml = "0.8"
 
 # Server only: the client (wasm) build never links a database driver, an HTTP
 # client, or any crypto — sessions, OAuth, the vault and warrants are all

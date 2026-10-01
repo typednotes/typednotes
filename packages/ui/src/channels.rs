@@ -93,7 +93,7 @@ pub(crate) fn InboxPanel(slug: ReadSignal<String>, project: ReadSignal<String>) 
                 if list.is_empty() {
                     p { class: "orgs-empty",
                         "No interface yet: "
-                        a { href: "/orgs/{slug}/projects/{project}/settings/interfaces", "add one in the project's settings" }
+                        Link { to: "/orgs/{slug}/projects/{project}/settings/interfaces", "add one in the project's settings" }
                         "."
                     }
                 } else {

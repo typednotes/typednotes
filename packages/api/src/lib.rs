@@ -335,6 +335,13 @@ pub async fn ai_token_pricing(
     Ok(server::ai::pricing(provider, model.trim()).await)
 }
 
+/// Live provider model inventory through the scoped models.list broker operation.
+#[post("/api/ai/models")]
+pub async fn list_ai_models(slug: String, connection_id: String) -> Result<Vec<String>, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    server::ai::models(&org, &user, &connection_id).await
+}
+
 /// TypeSafe's typed classifier API, through the org's connection and broker.
 #[post("/api/ai/classify")]
 pub async fn classify_with_ai(

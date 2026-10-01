@@ -73,3 +73,30 @@ kernel-checked guarantees, fixture coverage and deployment requirements.
 - [x] How does Lode test the code is working as expected? — real `check`, `lsp`, `lun_build` and authorized `lun_call`, with compiled positive/negative integration fixtures. [Testing](docs/graph-and-lode.md#how-does-lode-test-generated-code).
 - [x] Does Lode have access to a Lean 4 LSP server? — implemented bounded `lsp` diagnostics/hover/definition/completion/goals; 63 real dispatcher calls pass. [LSP](docs/graph-and-lode.md#does-lode-have-lean-lsp-access).
 - [x] Can Lode search for the code in the repository? I guess after the repo is cloned locally with File utils (it should have the basic tools to search, read and edit files but maybe with). — checked `ls`, `grep`, `read`, `write`, `edit` and LSP navigation, within the current agent/session permissions. [Repository tools](docs/graph-and-lode.md#can-lode-search-read-and-edit-repository-code).
+
+# CI problems
+
+- [x] pushing a tag if tests are not finished results in an error. Can't we wait for the CI to finish to deploy if a tag was pushed ? — bounded exact-commit main-CI polling, with failed/invalid evidence refused; 35 offline gate cases. [Policy](docs/workflow-policy.md).
+- [x] Can some of the very long runs be made optional to make the CI run shorter? — browser/branding checks are opt-in for PR/manual runs; main still runs the complete release suite in parallel jobs.
+
+# UI problems
+
+- [x] On https://app.typednotes.com/orgs/grislain/projects/project-1/settings/repository I cannot set a repo because: "Could not list repositories: connector operation is not permitted by the live ceilings" — the live org has only SecretStore enabled; implemented precise ceiling diagnostics and a policy-editor link. Real broker listing/denial/admin-correction cases pass.
+- [x] Some links such as https://app.typednotes.com/orgs/grislain/settings/connections take some time to react — internal links use client routing; optional health/settings loads no longer suspend navigation. Browser verifies the document stays mounted.
+- [x] In https://app.typednotes.com/orgs/grislain/settings/connections I cannot test my baseten connection. I get: "connector operation is not permitted by the live ceilings" — same disabled Connector effect; explicit recovery controls and real app/broker Baseten probe coverage.
+- [x] None of the connection works — shared policy blocker is explained before testing, with explicit owner/admin editing; connection provisioning now also honors the existing ObjectStore ceiling consistently. Permissions are never automatically widened.
+- [x] Can you explain in the docs how to setup the connection to the calendar and gmail? — [Google setup and troubleshooting](docs/google-connections.md).
+- [x] For each AI provider the model should be selected from a list (the list is loaded from the provider). — native broker models.list feeds connection pricing, notebook and classifier menus; saved selection/reload and provider parsing verified.
+- [x] Notbook permissions are not so easy to set https://app.typednotes.com/orgs/grislain/settings/notebooks. Please use checkboxes or radio buttons or menu where needed. Please enable a TOML input in a text area. — checkbox grants, radio domain policy and strict TOML/visual round-trip, persisted only on Save. [Guide](docs/notebook-ui.md).
+- [x] each new character in an inpput or text area should not trigger a query to the server. wait for submission or idle time. — edits stay local; slug/pricing lookups wait 400 ms and cancel stale timers. Browser verifies one query per typing burst.
+- [x] The UI should be consistent, use the same panel width and proportions everywhere. — shared page-width/spacing tokens and corrected column-form sizing; browser checks equal notebook/settings/org widths and 390px layouts.
+
+These changes are local until deployed. To restore the intended live Grislain
+connection access, its owner/admin must enable Connector in Settings → Notebooks
+and save. Its writer tools are also currently empty and must be selected for
+code generation. The implementation preserves both ceilings rather than silently
+restoring defaults.
+
+# Dev experience problem
+
+- [x] Is there a way to test the app locally and iterate on it by linking it to other prod services? — private environment launcher, worker-visible transport addresses and optional background scheduling. [Local/remote development](docs/local-development.md).

@@ -55,6 +55,12 @@ Dockerfile            `dx bundle` → the `web` server binary + `public/`
 
 ## Develop
 
+For a hot-reloaded local app backed by deployed services, use the private
+`.env.local` launcher and transport settings described in
+[`docs/local-development.md`](https://github.com/typednotes/typednotes/blob/main/docs/local-development.md).
+Google Calendar/Gmail setup has a step-by-step guide in
+[`docs/google-connections.md`](https://github.com/typednotes/typednotes/blob/main/docs/google-connections.md).
+
 The expanded AI provider catalog, environment-key setup and token-pricing UI are
 documented in [`docs/ai-providers.md`](https://github.com/typednotes/typednotes/blob/main/docs/ai-providers.md). The shared shadowed
 `⊢` logo and configurable SVG/PNG generator are described in
@@ -66,7 +72,9 @@ coordinated deployment requirements are in
 The Graph/Lode questions, scoped runtime trials and Lean LSP are answered in
 [`docs/graph-and-lode.md`](https://github.com/typednotes/typednotes/blob/main/docs/graph-and-lode.md); CI fixes and executed checks
 are recorded in [`docs/ci-verification.md`](https://github.com/typednotes/typednotes/blob/main/docs/ci-verification.md).
-The prepared deployment pair is Typednotes **v0.7.3** and Lode **v0.4.2**; the staged
+The current app release is Typednotes **v0.8.0**, compatible with the existing Lode
+**v0.4.2** deployment. Release notes are in
+[`docs/release-0.8.0.md`](https://github.com/typednotes/typednotes/blob/main/docs/release-0.8.0.md);
 push order and exact CI gates are in [`docs/push-order.md`](https://github.com/typednotes/typednotes/blob/main/docs/push-order.md).
 The shared CI/release and documentation-link conventions are in
 [`docs/workflow-policy.md`](https://github.com/typednotes/typednotes/blob/main/docs/workflow-policy.md).
@@ -139,15 +147,21 @@ Release pins and tags prepared locally are not a deployed environment.
 
 ## Deploy
 
-Push the commit to `main` and wait for **CI** to pass on that exact commit.
+Push the commit to `main`; a version tag can be pushed while **CI** is running.
 CI also runs for PRs targeting `main`, but does not rerun on version tags.
-Then tag that tested commit `vX.Y.Z` and push the tag:
+Tag the same commit `vX.Y.Z`; the branch and tag may be pushed together:
 [`.github/workflows/docker-publish.yml`](https://github.com/typednotes/typednotes/blob/main/.github/workflows/docker-publish.yml) publishes
 `ghcr.io/typednotes/typednotes:X.Y.Z`, the major/minor selector, and `latest`.
 Image publication runs only for version tags; main pushes no longer build `edge`.
 The publisher automatically checks that the tag matches its checkout, is reachable
 from `main`, and has a successful latest push-to-main CI run for that exact SHA.
-Pending, failed, PR-only or manual-only results cannot authorize publication.
+The publisher waits up to one hour for missing/queued/running exact-commit main
+CI, then publishes only after success. Failed, cancelled, PR-only or manual-only
+results cannot authorize publication. API errors or malformed evidence fail closed.
+Ordinary PR/manual CI runs the API/server/release-policy checks; browser compilation
+and branding are opt-in via the `extended-ci` PR label or the manual **extended**
+checkbox. Main always runs the full suite in parallel jobs, so release attestation
+still includes both halves.
 Only the verification job can read CI metadata; registry write access belongs
 to the subsequent publisher, which builds the verified commit without rerunning
 the test suite. Stable semver tags update `latest`; prereleases do not.

@@ -11,6 +11,8 @@
  */
 
 :root {
+  --app-page-width: 64rem;
+  --app-panel-gap: 1.5rem;
   --app-bg: var(--dark, #0b0d12) var(--light, #f6f7f9);
   --app-surface: var(--dark, #12151c) var(--light, #ffffff);
   --app-surface-2: var(--dark, #1a1e28) var(--light, #f1f3f7);
@@ -110,7 +112,7 @@ a code {
 
 .page {
   width: 100%;
-  max-width: 64rem;
+  max-width: var(--app-page-width);
   margin: 0 auto;
   padding: 2rem 1.5rem 4rem;
 }

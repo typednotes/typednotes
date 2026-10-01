@@ -83,7 +83,7 @@ pub fn UserMenu() -> Element {
         document::Link { rel: "stylesheet", href: AUTH_CSS }
         div { class: "user-menu",
             // Your account's settings.
-            a { class: "user-menu-account", href: "/settings", title: "Your account ({user.email})",
+            Link { class: "user-menu-account", to: "/settings", title: "Your account ({user.email})",
                 span { class: "user-menu-avatar", aria_hidden: "true", "{initial}" }
                 span { class: "user-menu-name", "{who}" }
             }

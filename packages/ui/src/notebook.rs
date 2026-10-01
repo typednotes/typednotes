@@ -88,7 +88,7 @@ pub(crate) fn GraphsPanel(slug: ReadSignal<String>, project: ReadSignal<String>)
                             tbody {
                                 for g in list {
                                     tr { key: "{g.id}",
-                                        td { a { href: "/orgs/{slug}/projects/{project}/graphs/{g.slug}", code { "{g.slug}" } } }
+                                        td { Link { to: "/orgs/{slug}/projects/{project}/graphs/{g.slug}", code { "{g.slug}" } } }
                                         td { "{g.name}" }
                                         td { span { class: status_class(&g.status), "{g.status}" } }
                                         td { "{g.updated_at}" }
@@ -200,7 +200,7 @@ pub fn NotebookPage(
         document::Link { rel: "stylesheet", href: CONNECTIONS_CSS }
         document::Link { rel: "stylesheet", href: NOTEBOOK_CSS }
         div { class: "orgs nb",
-            p { class: "back-link", a { href: "/orgs/{slug}/projects/{project}", "← Project" } }
+            p { class: "back-link", Link { to: "/orgs/{slug}/projects/{project}", "← Project" } }
             match detail() {
                 None => rsx! { p { "Loading…" } },
                 Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load this notebook: {error_message(&e)}" } },
@@ -357,7 +357,7 @@ fn Header(
                 if detail.project.repo.is_none() {
                     p { class: "orgs-error",
                         "Set the project's primary repository first: the notebook's code is written there. "
-                        a { href: "/orgs/{slug}/projects/{project}/settings/repository", "Choose one in the project's settings" }
+                        Link { to: "/orgs/{slug}/projects/{project}/settings/repository", "Choose one in the project's settings" }
                     }
                 }
                 ModelPicker {
@@ -450,10 +450,11 @@ fn ModelPicker(
         return rsx! {
             p { class: "conn-meta orgs-error",
                 "Connect an AI provider in the organisation first: the code is written with its models. "
-                a { href: "/orgs/{slug}/settings/connections", "Connect one in the organisation's settings" }
+                Link { to: "/orgs/{slug}/settings/connections", "Connect one in the organisation's settings" }
             }
         };
     }
+    let model_slug = slug.clone();
     let save = move |_| {
         let (slug, project, g) = (slug.clone(), project.clone(), graph.slug.clone());
         async move {
@@ -476,6 +477,7 @@ fn ModelPicker(
                     on_value_change: move |v: Option<String>| {
                         if let Some(id) = v {
                             connection.set(id);
+                            model.set(String::new());
                         }
                     },
                     for (i, c) in ai.iter().enumerate() {
@@ -490,8 +492,7 @@ fn ModelPicker(
                 }
             }
             div { class: "orgs-field",
-                Label { html_for: "nb-model", "Model" }
-                Input { id: "nb-model", placeholder: "claude-sonnet-4-5", value: model(), oninput: move |e: FormEvent| model.set(e.value()) }
+                crate::ai_models::ModelPicker { key: "{connection}", slug: model_slug.clone(), connection_id: connection(), value: model, disabled: graph.status == "implementing" }
             }
             Button { variant: ButtonVariant::Outline, disabled: model().trim().is_empty() || graph.status == "implementing", onclick: save, "Save model" }
         }
@@ -1824,7 +1825,7 @@ fn CellEditor(
                 },
                 CellType::ChannelSource | CellType::ChannelSink => rsx! {
                     if channels.is_empty() {
-                        p { class: "orgs-error", "This project has no messaging interface yet: ", a { href: "{interfaces_href}", "add one in its settings" }, "." }
+                        p { class: "orgs-error", "This project has no messaging interface yet: ", Link { to: "{interfaces_href}", "add one in its settings" }, "." }
                     } else {
                         div { class: "orgs-field conn-select conn-select-wide",
                             Label { html_for: "{prefix}-channel", "Interface" }
@@ -1864,7 +1865,7 @@ fn CellEditor(
                 },
                 CellType::StorageSink => rsx! {
                     if storage.is_empty() {
-                        p { class: "orgs-error", "No storage account yet: ", a { href: "{connections_href}", "connect one in the organisation's settings" }, "." }
+                        p { class: "orgs-error", "No storage account yet: ", Link { to: "{connections_href}", "connect one in the organisation's settings" }, "." }
                     } else {
                         div { class: "conn-grid",
                             div { class: "orgs-field conn-select",

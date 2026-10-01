@@ -66,7 +66,7 @@ fn ProjectTable(org: String, projects: Vec<Project>) -> Element {
             tbody {
                 for project in projects {
                     tr { key: "{project.id}",
-                        td { a { href: "/orgs/{org}/projects/{project.slug}", code { "{project.slug}" } } }
+                        td { Link { to: "/orgs/{org}/projects/{project.slug}", code { "{project.slug}" } } }
                         td { "{project.name}" }
                         td {
                             match &project.repo {
@@ -108,7 +108,7 @@ pub fn ProjectPage(
         document::Link { rel: "stylesheet", href: ORGS_CSS }
         document::Link { rel: "stylesheet", href: CONNECTIONS_CSS }
         div { class: "orgs",
-            p { class: "back-link", a { href: "/orgs/{slug}", "← Organisation" } }
+            p { class: "back-link", Link { to: "/orgs/{slug}", "← Organisation" } }
             match detail() {
                 None => rsx! { p { "Loading…" } },
                 Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load this project: {error_message(&e)}" } },
@@ -128,15 +128,15 @@ pub fn ProjectPage(
                             }
                             CardContent {
                                 div { class: "workspace-links",
-                                    a { href: "{settings}", "Settings" }
-                                    a { href: "{settings}/repository", "Repository" }
-                                    a { href: "{settings}/interfaces", "Interfaces" }
+                                    Link { to: "{settings}", "Settings" }
+                                    Link { to: "{settings}/repository", "Repository" }
+                                    Link { to: "{settings}/interfaces", "Interfaces" }
                                 }
                                 if d.project.repo.is_none() {
                                     div { class: "setup-hints",
                                         p {
                                             "Notebooks need a primary repository, where their code is written: "
-                                            a { href: "{settings}/repository", "choose one" }
+                                            Link { to: "{settings}/repository", "choose one" }
                                             "."
                                         }
                                     }
@@ -203,8 +203,8 @@ fn describe_connection(c: &Connection) -> String {
 #[component]
 pub(crate) fn RepoPanel(slug: String, project: Project, on_changed: EventHandler<()>) -> Element {
     let org = slug.clone();
-    let connections = use_server_future(move || list_connections(org.clone()))?;
-    let status = use_server_future(health)?;
+    let connections = use_resource(move || list_connections(org.clone()));
+    let status = use_resource(health);
     let h = status().and_then(|r| r.ok());
     let mut picking = use_signal(|| project.repo.is_none());
     let mut error = use_signal(|| None::<String>);
@@ -309,6 +309,7 @@ fn RepoPicker(
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     let org = slug.clone();
+    let permissions_href = format!("/orgs/{slug}/settings/notebooks");
     let repos = use_resource(move || {
         let org = org.clone();
         async move {
@@ -365,7 +366,7 @@ fn RepoPicker(
                 }
                 match repos() {
                     None => rsx! { p { class: "conn-meta", "Loading repositories…" } },
-                    Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not list repositories: {e}" } },
+                    Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not list repositories: {e} ", Link { to: permissions_href.clone(), "Review notebook permissions" } } },
                     Some(Ok(list)) if list.is_empty() => rsx! { p { class: "orgs-empty", "This connection sees no repository." } },
                     Some(Ok(list)) => rsx! {
                         div { class: "conn-select conn-select-wide", key: "{connection}",

@@ -1,6 +1,6 @@
 /* Notebooks: cells in order, each a description and what came of it. */
 
-.nb { max-width: 56rem; }
+.nb { width: 100%; }
 
 .nb-detail {
   white-space: pre-wrap;

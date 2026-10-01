@@ -112,7 +112,7 @@ fn OrgTable(orgs: Vec<Org>) -> Element {
                     tr { key: "{org.id}",
                         // A plain link: the router lives in each app crate,
                         // and every app routes `/orgs/:slug` to `OrgPage`.
-                        td { a { href: "/orgs/{org.slug}", code { "{org.slug}" } } }
+                        td { Link { to: "/orgs/{org.slug}", code { "{org.slug}" } } }
                         td { "{org.name}" }
                         td { "{org.role}" }
                         td { "{org.created_at}" }

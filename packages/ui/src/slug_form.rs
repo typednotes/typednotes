@@ -45,32 +45,34 @@ pub(crate) fn NewSlugForm(
     let mut busy = use_signal(|| false);
 
     let check_scope = scope.clone();
-    // Re-runs (cancelling the previous request) whenever the slug changes.
+    // Cancellation drops the idle timer before it can start a server request.
     let check = use_resource(move || {
         let scope = check_scope.clone();
+        let s = slug().trim().to_lowercase();
         async move {
-            let s = slug().trim().to_lowercase();
             if s.is_empty() {
                 return None;
             }
             if let Err(message) = validate_slug(&s) {
-                return Some(SlugCheck {
+                return Some((s, SlugCheck {
                     available: false,
                     message,
-                });
+                }));
             }
+            futures_timer::Delay::new(std::time::Duration::from_millis(400)).await;
+            let checked = s.clone();
             let answer = match scope {
                 Scope::Org => check_org_slug(s).await,
                 Scope::Project { org } => check_project_slug(org, s).await,
                 Scope::Graph { org, project } => check_graph_slug(org, project, s).await,
             };
-            Some(answer.unwrap_or_else(|e| SlugCheck {
+            Some((checked, answer.unwrap_or_else(|e| SlugCheck {
                 available: false,
                 message: format!("could not check the slug: {}", error_message(&e)),
-            }))
+            })))
         }
     });
-    let verdict = check().flatten();
+    let verdict = check().flatten().filter(|(checked, _)| *checked == slug().trim().to_lowercase()).map(|(_, verdict)| verdict);
     let blocked = verdict.as_ref().is_some_and(|c| !c.available);
 
     let submit = move |evt: FormEvent| {

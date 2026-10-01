@@ -3,8 +3,8 @@
 .settings {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  max-width: 60rem;
+  gap: var(--app-panel-gap);
+  width: 100%;
   margin: 0 auto;
 }
 
@@ -14,7 +14,7 @@
 .settings-frame {
   display: grid;
   grid-template-columns: 12rem minmax(0, 1fr);
-  gap: 1.5rem;
+  gap: var(--app-panel-gap);
   align-items: start;
 }
 
@@ -45,7 +45,7 @@
 
 .settings-link:focus-visible { outline: 2px solid var(--app-accent-ring); outline-offset: 1px; }
 
-.settings-body { display: flex; flex-direction: column; gap: 1rem; min-width: 0; }
+.settings-body { display: flex; flex-direction: column; gap: var(--app-panel-gap); min-width: 0; }
 
 /* A frame with no sections (your account): the body alone. */
 .settings-frame:has(> .settings-body:only-child) { grid-template-columns: minmax(0, 1fr); }

@@ -101,6 +101,15 @@ pub fn compute_db_url() -> Option<String> {
     env("COMPUTE_DB_URL")
 }
 
+/// Address visible to the remote runner, when the app uses a local tunnel.
+pub fn runtime_liaison_url() -> Option<String> {
+    env("LIAISON_RUNTIME_URL").or_else(|| env("LIAISON_URL"))
+}
+
+pub fn background_enabled() -> bool {
+    !env("TYPEDNOTES_BACKGROUND").is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "off"))
+}
+
 /// A non-negative integer setting, with a default.
 pub fn number(name: &str, default: i64) -> i64 {
     match env(name) {

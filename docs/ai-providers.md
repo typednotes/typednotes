@@ -71,7 +71,21 @@ credit cost. Responses retain typed answers, confidence/probabilities and usage.
 
 ## Pricing UI
 
-The connection form and notebook's model selector display **USD per million
+The connection's **Models and pricing** panel, notebook model picker and TypeSafe
+workbench load model IDs from that account's native `models.list` operation via
+Liaison. No API key is exposed and no inference request is made to discover
+models. Menus normalize Gemini's `models/` prefix, deduplicate and sort IDs,
+preserving provider namespaces. Refresh explicitly reloads the provider catalog.
+The broker adapter uses the provider's inventory endpoint/default page; a model
+absent from that response is not invented from a public pricing catalog.
+
+Connect an account before choosing its model. Unavailable catalogs display the
+provider/broker error with a retry control. An existing saved model absent from
+the current catalog is identified without silently replacing it. Organization
+Connector/provider grants and connection `models.list` permission must be enabled;
+the model's inference grant is still checked separately when it runs.
+
+The connection panel and notebook's model selector display **USD per million
 tokens** for the exact model id: input, output and available cache rates. A token
 calculator shows an uncached-request estimate. The implementation log retains the
 provider's token usage. Cached input is normalized separately by the updated writer.

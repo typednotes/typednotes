@@ -1,8 +1,8 @@
 .orgs {
   display: flex;
   flex-direction: column;
-  gap: 1.5rem;
-  max-width: 48rem;
+  gap: var(--app-panel-gap);
+  width: 100%;
   margin: 0 auto;
 }
 
@@ -29,6 +29,7 @@
   flex-direction: column;
   gap: 0.4rem;
   flex: 1 1 12rem;
+  min-width: 0;
 }
 
 .orgs-table { width: 100%; border-collapse: collapse; }
@@ -70,4 +71,3 @@
 }
 
 .setup-hints p { margin: 0; }
-

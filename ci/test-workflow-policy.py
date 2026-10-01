@@ -77,7 +77,10 @@ def check_ci(repo, name, staged=False):
     filename = CI[name]
     workflow = load(repo / ".github/workflows" / filename, staged)
     for event in ("push", "pull_request"):
-        assert workflow["on"][event] == {"branches": ["main"]}, (name, event)
+        expected = {"branches": ["main"]}
+        if name == "typednotes" and event == "pull_request":
+            expected["types"] = ["opened", "synchronize", "reopened", "labeled", "unlabeled"]
+        assert workflow["on"][event] == expected, (name, event)
     assert triggers(workflow, "push", "refs/heads/main")
     assert not triggers(workflow, "push", "refs/heads/feature")
     assert not triggers(workflow, "push", "refs/tags/v1.2.3")
@@ -111,6 +114,11 @@ def check_ci(repo, name, staged=False):
             return jobs
 
         assert without_gate_tests(workflow["jobs"]) == without_gate_tests(before["jobs"]), f"{name}: changed CI jobs"
+    else:
+        assert workflow["on"]["workflow_dispatch"]["inputs"]["extended"]["type"] == "boolean"
+        assert workflow["on"]["workflow_dispatch"]["inputs"]["extended"]["default"] == "false"
+        assert workflow["jobs"]["extended"]["if"] == "github.event_name == 'push' || inputs.extended == true || contains(github.event.pull_request.labels.*.name, 'extended-ci')"
+        assert any("wasm32" in step.get("run", "") for step in workflow["jobs"]["extended"]["steps"])
     for filename in MANUAL.get(name, []):
         live = load(repo / ".github/workflows" / filename, staged)
         assert set(live["on"]) == {"workflow_dispatch"}
@@ -181,11 +189,14 @@ def main():
     args = parser.parse_args()
     app = Path(__file__).resolve().parents[1]
     repos = {name: args.siblings / name for name in CI} if args.siblings else {"typednotes": app}
-    canonical = contents(app, "ci/require-main-ci.sh", args.staged)
-    canonical_test = contents(app, "ci/test-require-main-ci.sh", args.staged)
+    # The app waits for CI now; older sibling publishers still share an
+    # immediate-check gate. Compare those copies to each other, not to the app.
+    reference = repos.get("linen", app)
+    canonical = contents(reference, "ci/require-main-ci.sh", args.staged)
+    canonical_test = contents(reference, "ci/test-require-main-ci.sh", args.staged)
     for name, repo in repos.items():
         check_ci(repo, name, args.staged)
-        if name in PUBLISHERS:
+        if name in PUBLISHERS and name != "typednotes":
             assert contents(repo, "ci/require-main-ci.sh", args.staged) == canonical, f"{name}: shared gate drift"
             assert contents(repo, "ci/test-require-main-ci.sh", args.staged) == canonical_test, f"{name}: shared gate test drift"
         if name in DOCKER:

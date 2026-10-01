@@ -5,7 +5,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
+    inputs:
+      extended:
+        description: 'Include browser compilation and branding checks'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -20,21 +26,34 @@ jobs:
         shell: bash
         run: bash ci/test-require-main-ci.sh
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Shared API and permission contracts
         run: cargo test -p api --features server --lib
-      - name: Server and browser builds
-        run: |
-          cargo check -p web --features server
-          cargo check -p web --features web --target wasm32-unknown-unknown
+      - name: Server build
+        run: cargo check -p web --features server
+      - name: Install workflow policy dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-yaml
+      - name: Workflow release policy
+        run: /usr/bin/python3 ci/test-workflow-policy.py
+
+  extended:
+    # Main always exercises the full release suite. PRs opt in with extended-ci;
+    # a manual dispatch can opt in using the checkbox above.
+    if: github.event_name == 'push' || inputs.extended == true || contains(github.event.pull_request.labels.*.name, 'extended-ci')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Browser build
+        run: cargo check -p web --features web --target wasm32-unknown-unknown
       - name: Install branding test dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends python3-fonttools python3-yaml fonts-firacode fontconfig librsvg2-bin
-      - name: Workflow release policy
-        run: /usr/bin/python3 ci/test-workflow-policy.py
       - name: Branding contracts
         # Use the distro interpreter that owns the apt-installed fontTools.
         run: /usr/bin/python3 scripts/test_logo.py
