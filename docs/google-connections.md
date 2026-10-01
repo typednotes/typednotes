@@ -36,6 +36,41 @@ verification/security assessment. External Testing refresh tokens for these
 scopes typically expire after seven days; reconnect after expiry. See
 [Google's OAuth guidance](https://developers.google.com/identity/protocols/oauth2/web-server).
 
+### Scope compatibility
+
+An enabled API and a verified OAuth client do not authorize every scope. The
+scopes requested by this app must also match its data-access configuration:
+
+- `calendar.calendarlist.readonly` only permits calendar inventory;
+  `calendar.events.public.readonly` only permits public events;
+  `calendar.events.freebusy` returns availability, not private event contents;
+  `calendar.app.created` applies to calendars created by the app. They are not
+  replacements for the current connector's `calendar.readonly` grant.
+- `gmail.labels` and label-only scopes do not permit reading message contents.
+  `gmail.addons.current.*` grants apply within a Google Workspace add-on's current
+  interaction, not the background/server connector. The current Gmail connector
+  requests `gmail.readonly` for message read/search and attachments.
+
+The app requests these read-only scopes explicitly in
+`packages/api/src/server/oauth.rs`; it does not silently substitute an inventory
+grant and advertise message/event access. Adding them can require additional
+Google verification: existing non-sensitive-scope approval does not cover new
+sensitive/restricted scopes. After the intended scopes are approved/configured,
+reconnect to obtain a token with those grants.
+
+Read-only inspection of the `typednotes` Cloud project on 2026-10-01 found:
+Google Drive and Gmail APIs enabled, Google Calendar API disabled, only
+non-sensitive consent scopes configured, and neither `calendar.readonly` nor
+`gmail.readonly` present. The deployed OAuth client matches that project, with
+both production and localhost callback URLs correctly registered. Its audience
+is External/In production. For the current connector functionality, enable
+[Google Calendar API](https://console.cloud.google.com/apis/library/calendar-json.googleapis.com?project=typednotes)
+and configure the two requested scopes in
+[Google Auth Platform → Data access](https://console.cloud.google.com/auth/scopes?project=typednotes),
+then complete any required verification and reconnect. This inspection changed
+no Cloud grants or settings; API enablement and consent approval are separate
+operator-owned steps.
+
 ## Connect and test
 
 1. Open your organization → **Settings → Notebooks**. An owner/admin enables
