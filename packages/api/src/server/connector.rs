@@ -62,6 +62,12 @@ pub async fn revoke(tx: &mut Transaction<'_, Postgres>, org: &str, connection: O
 }
 
 pub async fn revoke_cell(tx: &mut Transaction<'_, Postgres>, org: &str, cell: &str) -> Result<(), ServerFnError> {
+    let graph = sqlx::query("select g.id::text as graph from graph_cells c join graphs g on g.id=c.graph_id \
+        join projects p on p.id=g.project_id where c.id=$1::uuid and p.org_id=$2::uuid")
+        .bind(cell).bind(org).fetch_optional(&mut **tx).await.map_err(errors::db_error)?;
+    if let Some(graph) = graph {
+        revoke_writer(tx, org, &graph.get::<String, _>("graph")).await?;
+    }
     let rows = sqlx::query("select warrant_id::text as warrant, run_id::text as run from connector_authorities where org_id = $1::uuid and cell_id = $2::uuid")
         .bind(org).bind(cell).fetch_all(&mut **tx).await.map_err(errors::db_error)?;
     for row in rows {
@@ -74,6 +80,7 @@ pub async fn revoke_cell(tx: &mut Transaction<'_, Postgres>, org: &str, cell: &s
 }
 
 pub async fn revoke_graph(tx: &mut Transaction<'_, Postgres>, org: &str, graph: &str) -> Result<(), ServerFnError> {
+    revoke_writer(tx, org, graph).await?;
     let rows = sqlx::query("select warrant_id::text as warrant, run_id::text as run from connector_authorities where org_id = $1::uuid and graph_id = $2::uuid")
         .bind(org).bind(graph).fetch_all(&mut **tx).await.map_err(errors::db_error)?;
     for row in rows {
@@ -82,6 +89,21 @@ pub async fn revoke_graph(tx: &mut Transaction<'_, Postgres>, org: &str, graph: 
     }
     sqlx::query("delete from connector_authorities where org_id = $1::uuid and graph_id = $2::uuid")
         .bind(org).bind(graph).execute(&mut **tx).await.map_err(errors::db_error)?;
+    Ok(())
+}
+
+/// Cell/graph declaration edits also revoke anonymous HTTP/files authority,
+/// which has no warrant-keyed broker row. The same org transaction serializes
+/// edits with minting; Lode serializes this narrowing with actual tool effects.
+async fn revoke_writer(tx: &mut Transaction<'_, Postgres>, org: &str, graph: &str) -> Result<(), ServerFnError> {
+    let row = sqlx::query("select g.lode_session_id as session from graphs g join projects p on p.id=g.project_id \
+        where g.id=$1::uuid and p.org_id=$2::uuid and g.lode_session_id is not null")
+        .bind(graph).bind(org).fetch_optional(&mut **tx).await.map_err(errors::db_error)?;
+    if let Some(row) = row {
+        let tools = policy(tx, org).await?.tools;
+        super::lode::narrow(&row.get::<String, _>("session"), &tools).await
+            .map_err(|_| errors::bad_gateway("could not revoke the writer's cell/graph effect authority"))?;
+    }
     Ok(())
 }
 
@@ -238,7 +260,12 @@ pub async fn mint_for_cell(org: &Org, connection: &Connection, owner: &str, oper
 
 /// Bind only app-minted external writer warrants to a live graph and real Lode
 /// session. The projection contains policy metadata, never a credential/tag.
-pub async fn bind_writer(org: &Org, graph: &str, session: &str, credentials: &serde_json::Value, desired_tools: &[String]) -> Result<(), ServerFnError> {
+pub struct WriterBinding {
+    pub policy: EffectPolicy,
+    pub functions: Vec<String>,
+}
+
+pub async fn bind_writer(org: &Org, graph: &str, session: &str, credentials: &serde_json::Value, desired_tools: &[String]) -> Result<WriterBinding, ServerFnError> {
     if session.is_empty() || session.len() > 128 || !session.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_') {
         return Err(errors::bad_request("invalid writer conversation identity"));
     }
@@ -246,7 +273,9 @@ pub async fn bind_writer(org: &Org, graph: &str, session: &str, credentials: &se
     let source = sqlx::query("select g.slug::text as slug, g.model_connection_id::text as model, p.repo_connection_id::text as repo, \
         coalesce(p.repo_default_branch,'main') as branch from graphs g join projects p on p.id = g.project_id where g.id=$1::uuid and p.org_id=$2::uuid")
         .bind(graph).bind(&org.id).fetch_one(&mut *tx).await.map_err(errors::db_error)?;
-    let current = policy(&mut tx, &org.id).await?;
+    let cells = super::graphs::cells_of(graph).await?;
+    let current = policy(&mut tx, &org.id).await?.for_cells(&cells.iter().map(|row| row.cell.clone()).collect::<Vec<_>>());
+    let functions = cells.iter().filter(|row| row.cell.cell_type.has_function()).map(|row| row.cell.name.clone()).collect();
     let tools: Vec<_> = desired_tools.iter().filter(|tool| current.tools.contains(tool)).cloned().collect();
     let mut selected = Vec::new();
     for key in ["repo", "model", "lun"] {
@@ -294,7 +323,13 @@ pub async fn bind_writer(org: &Org, graph: &str, session: &str, credentials: &se
         sqlx::query("update connector_authorities set projection=$2::jsonb, graph_id=$3::uuid where warrant_id=$1::uuid")
             .bind(id).bind(projection.to_string()).bind(graph).execute(&mut *tx).await.map_err(errors::db_error)?;
     }
-    tx.commit().await.map_err(errors::db_error)
+    // Policy edits must see the new writer before generation starts. Register
+    // under the very same org lock used by edits and grant publication; after
+    // commit an edit either narrows this session or rejects its fresh tokens.
+    sqlx::query("update graphs set lode_session_id=$2 where id=$1::uuid")
+        .bind(graph).bind(session).execute(&mut *tx).await.map_err(errors::db_error)?;
+    tx.commit().await.map_err(errors::db_error)?;
+    Ok(WriterBinding { policy: current, functions })
 }
 
 #[cfg(test)]

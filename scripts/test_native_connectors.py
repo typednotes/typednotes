@@ -34,9 +34,9 @@ def port():
         return sock.getsockname()[1]
 
 
-def exchange(url, value=None, headers=None) -> tuple[int, Any]:
+def exchange(url, value=None, headers=None, method=None) -> tuple[int, Any]:
     request = Request(url, None if value is None else json.dumps(value).encode(),
-                      {"Content-Type": "application/json", **(headers or {})})
+                      {"Content-Type": "application/json", **(headers or {})}, method=method)
     try:
         with urlopen(request, timeout=30) as response:
             raw = response.read()
@@ -77,14 +77,22 @@ class Fixture(BaseHTTPRequestHandler):
             assert self.headers.get("Authorization") == "Bearer fixture-writer"
             body = json.loads(raw) if raw else None
             state["calls"].append((self.command, self.path, body))
+            def public_execution(execution):
+                fields = ["provider", "connection", "account", "bucket", "organization", "connectionPermissions", "cell", "warrantPermissions"]
+                return {"execution": {"policy": execution["policy"], "binding": execution["binding"],
+                    "connectors": {name: [{key: grant[key] for key in fields if key in grant} for grant in grants]
+                                   for name, grants in execution["connectors"].items()}},
+                    "functions": execution["functions"], "graphs": execution["graphs"]}
             if self.path == "/v0/sessions" and self.command == "POST":
                 assert isinstance(body, dict)
                 state["tools"] = body["tools"]
-                return self.reply(201, {"id": "writer-fixture", "state": "running", "tools": state["tools"]})
+                state["execution"] = public_execution(body["execution"])
+                return self.reply(201, {"id": "writer-fixture", "state": "running", "tools": state["tools"], "execution": state["execution"]})
             if "/messages" in self.path and self.command == "POST":
                 assert isinstance(body, dict)
                 assert set(body.get("tools", [])) <= set(state["tools"])
                 state["tools"] = body.get("tools", state["tools"])
+                if "execution" in body: state["execution"] = public_execution(body["execution"])
                 return self.reply(202, {})
             if "/credentials" in self.path and self.command == "PUT":
                 assert isinstance(body, dict)
@@ -92,12 +100,13 @@ class Fixture(BaseHTTPRequestHandler):
                 return self.reply(200, {})
             if "/messages" in self.path:
                 return self.reply(200, {"entries": [], "next": 0, "running": True})
-            return self.reply(200, {"state": "running", "entries": 0, "tools": state.get("tools", [])})
-        if state["service"] == "runtime-proxy":
-            assert self.headers.get("Authorization") == "Bearer fixture-lun"
+            return self.reply(200, {"state": "running", "entries": 0, "tools": state.get("tools", []), "execution": state.get("execution")})
+        if state["service"] in ["runtime-proxy", "writer-proxy"]:
+            token = "fixture-lun" if state["service"] == "runtime-proxy" else "fixture-writer"
+            assert self.headers.get("Authorization") == "Bearer " + token
             value = json.loads(raw) if raw else None
             state["calls"].append((self.command, self.path, value))
-            status, response = exchange(state["target"] + self.path, value, {"Authorization": "Bearer fixture-lun"})
+            status, response = exchange(state["target"] + self.path, value, {"Authorization": "Bearer " + token}, method=self.command)
             return self.reply(status, response)
         if state["service"] == "upstream" and state.get("pipeline"):
             return state["pipeline"].handle(self, raw)
@@ -189,7 +198,7 @@ def main():
     assert args.temp_root.is_dir() and args.broker.is_file() and args.app.is_file()
     vault, upstream = serve("vault"), serve("upstream")
     proxy = serve("runtime-proxy") if args.runtime else None
-    writer = serve("writer") if args.writer else None
+    writer = serve("writer") if args.writer else serve("writer-proxy") if args.real_writer else None
     vault.state["upstream"] = f"http://127.0.0.1:{upstream.server_port}"
     pg_port, app_port, broker_port = port(), port(), port()
     runtime_port = port()
@@ -251,18 +260,30 @@ def main():
                         "LUN_WORKDIR": str(scratch / "lun"), "LUN_ALLOW_LOCAL": "1", "LUN_BUILD_TIMEOUT": "240",
                         "LUN_LIAISON_URL": broker, "LUN_LIAISON_SDK_PATH": str(ROOT.parent / "liaison"),
                         "SECRETS_TOKEN": "runtime-read-fixture", "LUN_TEMP_ROOT": str(scratch / "temporary"), "LEAN_NUM_THREADS": "2"}
+                    if args.real_writer and args.runtime:
+                        from lode_runtime_bridge_cases import http_environment
+                        runtime_env.update(http_environment(scratch))
                     processes.append(subprocess.Popen([str(ROOT.parent / "lun/.lake/build/bin/lun")], env=runtime_env, stdout=runtime_log, stderr=runtime_log))
                     proxy.state["target"] = runtime
                     app_env.update(LUN_URL=f"http://127.0.0.1:{proxy.server_port}", LUN_TOKEN="fixture-lun", COMPUTE_DB_URL=database)
                 lode = f"http://127.0.0.1:{lode_port}"
+                lode_env = {}
                 if args.real_writer:
+                    assert writer is not None
                     lode_log = (scratch / "lode.log").open("w")
                     lode_env = {**env, "LODE_PORT": str(lode_port), "LODE_TOKEN": "fixture-writer", "LODE_WORKDIR": str(scratch / "lode"),
-                        "LODE_ALLOW_LOCAL": "1", "LODE_LIAISON_URL": broker, "LODE_MODEL_TIMEOUT": "30", "LODE_CHECK_TIMEOUT": "240", "LEAN_NUM_THREADS": "2"}
+                        "LODE_ALLOW_LOCAL": "1", "LODE_LIAISON_URL": broker, "LODE_MODEL_TIMEOUT": "30", "LODE_CHECK_TIMEOUT": "240", "LEAN_NUM_THREADS": "2",
+                        "LODE_LUN_URL": runtime, "LODE_LUN_TOKEN": "fixture-lun"}
+                    for name in ["LIAISON_ROOT_KEY", "DATABASE_URL", "COMPUTE_DB_URL", "SECRETS_TOKEN", "SECRETS_USERNAME", "SECRETS_PASSWORD"]:
+                        lode_env.pop(name, None)
                     processes.append(subprocess.Popen([str(ROOT.parent / "lode/.lake/build/bin/lode")], env=lode_env, stdout=lode_log, stderr=lode_log))
-                    app_env.update(LODE_URL=lode, LODE_TOKEN="fixture-writer")
+                    writer.state["target"] = lode
+                    app_env.update(LODE_URL=f"http://127.0.0.1:{writer.server_port}", LODE_TOKEN="fixture-writer")
                 processes.append(subprocess.Popen([str(args.app)], cwd=ROOT, env=app_env, stdout=app_log, stderr=app_log))
-                for origin, path in [(broker, "/_health"), (app, "/api/health")]:
+                health = [(broker, "/_health"), (app, "/api/health")]
+                if args.runtime or args.real_writer: health.append((runtime, "/_health"))
+                if args.real_writer: health.append((lode, "/_health"))
+                for origin, path in health:
                     for _ in range(200):
                         try:
                             with urlopen(origin + path, timeout=1):
@@ -385,12 +406,17 @@ def main():
                     assert proxy is not None
                     from native_runtime_cases import verify_runtime
                     verify_runtime(scratch, sql, api, exchange, runtime, pg_port, org, user, vault, upstream, app_env, command, proxy)
-                if writer:
+                if args.writer:
                     from native_writer_cases import verify_writer
                     verify_writer(sql, api, writer, vault, org, user)
                 if args.real_writer:
+                    assert writer is not None
                     from native_writer_pipeline import verify_pipeline
                     verify_pipeline(scratch, sql, api, exchange, lode, org, user, vault, upstream)
+                    if args.runtime:
+                        from lode_runtime_bridge_cases import verify_bridge
+                        verify_bridge(scratch, sql, api, exchange, lode, runtime, pg_port, org, user, vault, upstream,
+                                      writer, processes, lode_env)
                 if args.lean_workspace:
                     connection, run, ident = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
                     lp = lambda value: struct.pack(">Q", len(value.encode())) + value.encode()

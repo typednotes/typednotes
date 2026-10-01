@@ -67,10 +67,11 @@ pub fn narrowing_tools(status: &Value, desired: &[String]) -> Result<Vec<String>
     Ok(current.into_iter().filter(|tool| desired.contains(tool)).collect())
 }
 
-pub async fn message(id: &str, text: &str, credentials: Value, desired: &[String]) -> Result<Reply<()>, String> {
+pub async fn message(id: &str, text: &str, credentials: Value, desired: &[String], execution: &Value) -> Result<Reply<()>, String> {
     let status = match status(id).await? { Reply::Gone => return Ok(Reply::Gone), Reply::Ok(status) => status };
     let tools = narrowing_tools(&status, desired)?;
-    let body = json!({ "text": text, "credentials": credentials, "tools": tools });
+    let execution = narrowing_execution(&status, execution)?;
+    let body = json!({ "text": text, "credentials": credentials, "tools": tools, "execution": execution });
     let path = format!("/v0/sessions/{}/messages", segment(id));
     let a = rpc::quick(&service()?, Method::POST, &path, Some(&body))
         .await
@@ -83,8 +84,19 @@ pub async fn message(id: &str, text: &str, credentials: Value, desired: &[String
 }
 
 /// `PUT /v0/sessions/{id}/credentials`: fresh warrants for a run in flight.
-pub async fn refresh(id: &str, credentials: Value, desired: &[String]) -> Result<Reply<()>, String> {
-    if matches!(narrow(id, desired).await?, Reply::Gone) { return Ok(Reply::Gone); }
+pub async fn refresh(id: &str, mut credentials: Value, desired: &[String], execution: &Value) -> Result<Reply<()>, String> {
+    let status = match status(id).await? { Reply::Gone => return Ok(Reply::Gone), Reply::Ok(status) => status };
+    let tools = narrowing_tools(&status, desired)?;
+    let execution = narrowing_execution(&status, execution)?;
+    // Policy edits are acknowledged on the message path, serialized with actual
+    // execution. PUT can then replace operation tokens without changing ceilings.
+    if status.get("tools") != Some(&json!(tools)) || public_execution(&execution)? != status.get("execution").cloned().unwrap_or(Value::Null) {
+        let body = json!({"text": "Organization execution permissions narrowed. Continue within the allowed bounds.", "tools": tools, "execution": execution});
+        let a = rpc::quick(&service()?, Method::POST, &format!("/v0/sessions/{}/messages", segment(id)), Some(&body)).await?;
+        if a.status == 404 { return Ok(Reply::Gone); }
+        if !a.ok() { return Err(fail("execution narrowing", &a)); }
+    }
+    credentials["execution"] = execution;
     let path = format!("/v0/sessions/{}/credentials", segment(id));
     let a = rpc::quick(&service()?, Method::PUT, &path, Some(&credentials))
         .await
@@ -96,13 +108,103 @@ pub async fn refresh(id: &str, credentials: Value, desired: &[String]) -> Result
     }
 }
 
+/// Public wire projection mirrors Lun's Session publicExecution. It is only
+/// request shaping; Lean validates the transition and consumes its witness.
+fn public_execution(execution: &Value) -> Result<Value, String> {
+    let mut connectors = serde_json::Map::new();
+    for (name, values) in execution.get("connectors").and_then(Value::as_object).ok_or("invalid writer execution grants")? {
+        let mut grants = Vec::new();
+        for value in values.as_array().ok_or("invalid writer execution grants")? {
+            let mut grant = serde_json::Map::new();
+            for key in ["provider", "connection", "account", "bucket", "organization", "connectionPermissions", "cell", "warrantPermissions"] {
+                if let Some(value) = value.get(key) { grant.insert(key.into(), value.clone()); }
+            }
+            grants.push(Value::Object(grant));
+        }
+        connectors.insert(name.clone(), json!(grants));
+    }
+    Ok(json!({"execution": {"policy": execution["policy"], "binding": execution["binding"], "connectors": connectors},
+        "functions": execution["functions"], "graphs": execution["graphs"]}))
+}
+
+/// Reuse the app's structured permissions intersection to keep fresh grants
+/// below the writer's persisted current ceiling. Never infer authority from
+/// compiled code, a selected project, an operator key, or a changed owner.
+pub fn narrowing_execution(status: &Value, desired: &Value) -> Result<Value, String> {
+    let bounds = status.get("execution").filter(|value| !value.is_null()).ok_or("writer has no trusted execution ceiling; open a new session")?;
+    let old = bounds.get("execution").ok_or("invalid writer execution ceiling")?;
+    if old.get("binding") != desired.get("binding") { return Err("writer actor/graph binding cannot change".into()); }
+    let mut next = desired.clone();
+    for key in ["effects", "domains"] {
+        let old = old["policy"][key].as_array().ok_or("invalid writer policy ceiling")?;
+        let requested = desired["policy"][key].as_array().ok_or("invalid writer policy")?;
+        next["policy"][key] = json!(requested.iter().filter(|value| old.contains(value)).collect::<Vec<_>>());
+    }
+    for key in ["functions", "graphs"] {
+        let old = bounds[key].as_array().ok_or("invalid writer service ceiling")?;
+        let requested = desired[key].as_array().ok_or("invalid writer services")?;
+        next[key] = json!(requested.iter().filter(|value| old.contains(value)).collect::<Vec<_>>());
+    }
+    let old_grants = old["connectors"].as_object().ok_or("invalid writer grant ceiling")?;
+    let mut connectors = serde_json::Map::new();
+    for (name, values) in desired["connectors"].as_object().ok_or("invalid writer grants")? {
+        if !next["functions"].as_array().ok_or("invalid functions")?.contains(&json!(name)) { continue; }
+        let mut grants = Vec::new();
+        for value in values.as_array().ok_or("invalid writer grants")? {
+            let previous = old_grants.get(name).and_then(Value::as_array).and_then(|grants| grants.iter().find(|old|
+                ["provider", "connection", "account", "bucket"].iter().all(|key| old.get(*key) == value.get(*key))));
+            let Some(previous) = previous else { continue; };
+            let mut grant = value.clone();
+            for key in ["organization", "connectionPermissions", "cell", "warrantPermissions"] {
+                // Lun's documented omitted warrant ceiling equals the cell.
+                let current = value.get(key).or_else(|| (key == "warrantPermissions").then(|| value.get("cell")).flatten()).ok_or("missing grant ceiling")?;
+                let parent = previous.get(key).or_else(|| (key == "warrantPermissions").then(|| previous.get("cell")).flatten()).ok_or("missing grant ceiling")?;
+                if current.get("provider") != parent.get("provider") || current.get("connection") != parent.get("connection") { return Err("grant identity changed".into()); }
+                let permissions = |cap: &Value| serde_json::from_value::<crate::ConnectorPermissions>(json!({
+                    "scopes": cap["scopes"], "maxRequestBytes": cap["maxRequestBytes"], "maxResponseBytes": cap["maxResponseBytes"]
+                })).map_err(|_| "invalid grant permissions");
+                let current = permissions(current)?;
+                let parent_permissions = permissions(parent)?;
+                let permissions = current.intersect(&parent_permissions);
+                grant[key] = permissions.named_capability_json(value["provider"].as_str().ok_or("invalid provider")?, value["connection"].as_str().ok_or("invalid connection")?);
+            }
+            grants.push(grant);
+        }
+        connectors.insert(name.clone(), json!(grants));
+    }
+    next["connectors"] = Value::Object(connectors);
+    Ok(next)
+}
+
+/// The final app binding transaction re-reads live policy/cell declarations.
+/// Intersect a pre-minted envelope with that snapshot before model generation;
+/// later policy edits see the registered writer and narrow it at Lode itself.
+pub fn bind_execution(execution: &Value, live: &super::connector::WriterBinding) -> Result<Value, String> {
+    let mut next = execution.clone();
+    for (key, allowed) in [("effects", &live.policy.effects), ("domains", &live.policy.domains)] {
+        let values = execution["policy"][key].as_array().ok_or("invalid writer execution policy")?;
+        next["policy"][key] = json!(values.iter().filter(|value| value.as_str().is_some_and(|name| allowed.iter().any(|allowed| allowed == name))).collect::<Vec<_>>());
+    }
+    let functions = execution["functions"].as_array().ok_or("invalid writer functions")?;
+    next["functions"] = json!(functions.iter().filter(|value| value.as_str().is_some_and(|name| live.functions.iter().any(|allowed| allowed == name))).collect::<Vec<_>>());
+    next["connectors"].as_object_mut().ok_or("invalid writer grants")?.retain(|name, _| live.functions.contains(name));
+    Ok(next)
+}
+
 /// Tool changes belong on messages. PUT credentials stays credentials-only;
 /// asking for a larger organization list cannot restore removed session tools.
 pub async fn narrow(id: &str, desired: &[String]) -> Result<Reply<()>, String> {
     let status = match status(id).await? { Reply::Gone => return Ok(Reply::Gone), Reply::Ok(status) => status };
     let tools = narrowing_tools(&status, desired)?;
-    if status.get("tools") == Some(&json!(tools)) { return Ok(Reply::Ok(())); }
-    let body = json!({"text": "Organization writer permissions narrowed. Continue within the allowed tools.", "tools": tools});
+    let mut body = json!({"text": "Organization writer permissions changed; outstanding effect authority is revoked. Continue within the allowed tools.", "tools": tools});
+    if let Some(bounds) = status.get("execution").filter(|value| !value.is_null()) {
+        // This path runs under the org policy-edit transaction before commit.
+        // Revoke every outstanding effect, including anonymous HTTP/files whose
+        // authority has no broker row. A refresh cannot restore it in this writer.
+        body["execution"] = json!({"policy": {"effects": [], "domains": []},
+            "binding": bounds["execution"]["binding"], "connectors": {},
+            "functions": bounds["functions"], "graphs": bounds["graphs"]});
+    } else if status.get("tools") == Some(&json!(tools)) { return Ok(Reply::Ok(())); }
     let answer = rpc::quick(&service()?, Method::POST, &format!("/v0/sessions/{}/messages", segment(id)), Some(&body)).await?;
     match answer.status { 404 => Ok(Reply::Gone), 200..=299 => Ok(Reply::Ok(())), _ => Err(fail("tool narrowing", &answer)) }
 }
@@ -357,6 +459,57 @@ fn entry_detail(e: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn final_binding_cannot_republish_a_stale_launch_policy_or_deleted_cell() {
+        let execution = json!({"binding": {"org_id": "org", "user_id": "actor", "graph_id": "graph"},
+            "policy": {"effects": ["HTTP", "Trace"], "domains": ["old.example.org"]},
+            "functions": ["read", "removed"], "graphs": ["main"], "connectors": {"read": [], "removed": []}});
+        let binding = super::super::connector::WriterBinding {
+            policy: crate::EffectPolicy { effects: vec!["Trace".into()], domains: vec!["new.example.org".into()], ..Default::default() },
+            functions: vec!["read".into(), "added".into()],
+        };
+        let next = bind_execution(&execution, &binding).unwrap();
+        assert_eq!(next["policy"]["effects"], json!(["Trace"]));
+        assert_eq!(next["policy"]["domains"], json!([]));
+        assert_eq!(next["functions"], json!(["read"]));
+        assert!(next["connectors"].get("removed").is_none());
+        assert_eq!(next["binding"], execution["binding"]);
+    }
+
+    #[test]
+    fn runtime_refresh_intersects_every_ceiling_and_retains_the_real_owner() {
+        let cap = |root: &[&str]| json!({"provider": "s3", "connection": "connection", "scopes": [
+            {"operation": "objects.read", "root": root, "descendants": true}],
+            "maxRequestBytes": 1024, "maxResponseBytes": 2048});
+        let grant = |root: &[&str]| json!({"provider": "s3", "connection": "connection", "account": "owner/connection",
+            "bucket": null, "organization": cap(root), "connectionPermissions": cap(root), "cell": cap(root),
+            "warrants": [{"operation": "objects.read", "warrant": {"fixture": "fresh-token"}, "cost": 0}]});
+        let envelope = |root: &[&str]| json!({"binding": {"org_id": "org", "user_id": "actor", "graph_id": "graph"},
+            "policy": {"effects": ["Connector"], "domains": []}, "functions": ["read"], "graphs": ["main"],
+            "connectors": {"read": [grant(root)]}});
+        let original = envelope(&["reports"]);
+        let status = json!({"execution": public_execution(&original).unwrap()});
+        let mut wider = envelope(&[]);
+        wider["policy"]["effects"] = json!(["Connector", "HTTP"]);
+        wider["functions"] = json!(["read", "extra"]);
+        let narrowed = narrowing_execution(&status, &wider).unwrap();
+        assert_eq!(narrowed["policy"]["effects"], json!(["Connector"]));
+        assert_eq!(narrowed["functions"], json!(["read"]));
+        for key in ["organization", "connectionPermissions", "cell", "warrantPermissions"] {
+            assert_eq!(narrowed["connectors"]["read"][0][key], cap(&["reports"]));
+        }
+        assert_eq!(narrowed["connectors"]["read"][0]["account"], "owner/connection");
+        assert_eq!(narrowed["connectors"]["read"][0]["warrants"], original["connectors"]["read"][0]["warrants"]);
+        let mut substituted = original.clone();
+        substituted["binding"]["user_id"] = json!("owner");
+        assert!(narrowing_execution(&status, &substituted).is_err());
+        substituted = original.clone();
+        substituted["connectors"]["read"][0]["account"] = json!("actor/connection");
+        assert!(narrowing_execution(&status, &substituted).unwrap()["connectors"]["read"].as_array().unwrap().is_empty());
+        let public = public_execution(&narrowed).unwrap().to_string();
+        assert!(!public.contains("fresh-token") && !public.contains("warrants"));
+    }
+
     #[test]
     fn caller_tool_policy_only_attenuates_the_live_writer() {
         let current = json!({"tools": ["read", "todo"]});

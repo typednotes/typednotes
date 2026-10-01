@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Shared API and permission contracts
+        run: cargo test -p api --features server --lib
+      - name: Server and browser builds
+        run: |
+          cargo check -p web --features server
+          cargo check -p web --features web --target wasm32-unknown-unknown
+      - name: Branding contracts
+        run: python3 scripts/test_logo.py

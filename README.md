@@ -63,6 +63,11 @@ Notebook declarations and permission setup are in
 [`docs/notebook-ui.md`](docs/notebook-ui.md); verified native contracts and
 coordinated deployment requirements are in
 [`docs/native-connectors.md`](docs/native-connectors.md).
+The Graph/Lode questions, scoped runtime trials and Lean LSP are answered in
+[`docs/graph-and-lode.md`](docs/graph-and-lode.md); CI fixes and executed checks
+are recorded in [`docs/ci-verification.md`](docs/ci-verification.md).
+The deployment pair is Typednotes **v0.7.0** and Lode **v0.4.0**; the staged
+push order and exact CI gates are in [`docs/push-order.md`](docs/push-order.md).
 
 ```sh
 # a local Postgres, then the schema (the server never migrates itself)

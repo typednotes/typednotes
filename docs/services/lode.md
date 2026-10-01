@@ -46,6 +46,18 @@ commit plan, not a generic provider call or git-push process; `lun_build` and `l
 close the loop against `lun` itself — a session is done when the **published**
 commit builds clean and answers as intended.
 
+The app now attaches caller-owned `execution` at launch and re-mints the same
+graph/cell grants on steering and credential refresh. `lun_call` remains
+input-only; Lode privately merges the authenticated context after validating
+launch/current narrowing and dispatch-time warrant caveats. Actor identity stays
+separate from external credential ownership. Organization edits revoke outstanding
+writer effects before acknowledgment, including anonymous HTTP and temporary
+files. Persisted metadata holds public bounds only; restart drops every token.
+See Lode's [`runtime-bridge.md`](https://github.com/typednotes/lode/blob/main/docs/runtime-bridge.md)
+for the wire contract, consumed Lean witnesses, proofs and local real-runtime
+fixture. Existing standalone sessions without a launch ceiling must be replaced
+by a newly authenticated app launch to enable bounded trials.
+
 The `plan` agent (read-only tools) proposes; `build` writes.
 
 Model calls use named `inference.generate` through the native broker for Messages,
@@ -137,7 +149,7 @@ Git/API correspondence remain trusted boundaries.
 
 Local release verification passes the actual app → compiled Lode → real broker
 → local Git → compiled Lun positive and denial pipeline. Supporting suites pass
-99 app API tests, 24 browser groups, 655 real broker HTTP cases and 69 compiled
+101 app API tests, 24 browser groups, 655 real broker HTTP cases and 69 compiled
 runtime cases. Models/provider APIs in those tests are controlled local peers;
 paid-provider/OAuth conformance is not measured by them.
 
@@ -151,10 +163,10 @@ steps and fuel exhausted per session.
   implementing a cell. It is a new egress: should it go through `liaison` (an
   anonymous-fetch call kind, [`../computations.md`](../computations.md) §8) or
   out of the container directly, and what rate applies?
-- **Lean LSP loop** — `lake build` diagnostics say *that* something is wrong,
-  not *where the model should look*; an LSP session (hover, goals, diagnostics
-  at a point) would close the gap between lode's loop and the user's editor.
-  Cost: one more long-lived process per session.
+- **Lean LSP is implemented** — bounded ephemeral `lake serve` workers provide
+  hover, goals, completion, definition and diagnostics under the `lsp` permission.
+  They do not require a long-lived process per session. See
+  [`../graph-and-lode.md`](../graph-and-lode.md) for the closed questions and evidence.
 - **Fuel vs budget** are two caps; deriving fuel from remaining budget would
   make one knob, at the price of coupling authority and spend.
 - **Trust-domain deployment.** Its `bash` tool runs inside the container; path

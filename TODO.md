@@ -62,14 +62,14 @@ kernel-checked guarantees, fixture coverage and deployment requirements.
 
 # Graph
 
-- [ ] Can a node depend on multiple node themselves depending on one node
-- [ ] Can a node yield several times ? (it should be able like Reactive / Observable)
+- [x] Can a node depend on multiple node themselves depending on one node — yes; the real compiled diamond fixture joins two derived nodes sharing one upstream. [Details and evidence](docs/graph-and-lode.md#can-a-node-depend-on-derived-nodes-sharing-one-upstream).
+- [x] Can a node yield several times ? (it should be able like Reactive / Observable) — yes across live-session input occurrences; three emissions, duplicate suppression and error recovery are verified. [Exact stream semantics](docs/graph-and-lode.md#can-the-same-node-emit-several-times).
 
 # Lode
 
-- [ ] Has Lode enough doc about graphs to code them?
-- [ ] Does Lode have enough tools to develop the code? It should have access to the same Eff restricted interfaces as the code itself (DB, webcall, etc)
-- [ ] How does Lode call these tools? (it could write the code for each)
-- [ ] How does Lode test the code is working as expected?
-- [ ] Does Lode have access to a Lean 4 LSP server?
-- [ ] Can Lode search for the code in the repository? I guess after the repo is cloned locally with File utils (it should have the basic tools to search, read and edit files but maybe with).
+- [x] Has Lode enough doc about graphs to code them? — the prompt carries graph/function/effect contracts, examples, manifests and the real verification workflow. [Answer](docs/graph-and-lode.md#does-lode-have-enough-graph-documentation).
+- [x] Does Lode have enough tools to develop the code? It should have access to the same Eff restricted interfaces as the code itself (DB, webcall, etc) — implemented authenticated, proof-bounded runtime trials through the real Lun/broker path; DB, secrets, files, HTTP and connectors verified. [Bridge guarantees](docs/graph-and-lode.md#does-lode-have-the-same-restricted-eff-interfaces-as-its-implementation).
+- [x] How does Lode call these tools? (it could write the code for each) — finite parsed tools consume permission witnesses; bounded Lean trial functions use input-only `lun_call` with private caller authority. [Dispatch](docs/graph-and-lode.md#how-does-lode-call-tools).
+- [x] How does Lode test the code is working as expected? — real `check`, `lsp`, `lun_build` and authorized `lun_call`, with compiled positive/negative integration fixtures. [Testing](docs/graph-and-lode.md#how-does-lode-test-generated-code).
+- [x] Does Lode have access to a Lean 4 LSP server? — implemented bounded `lsp` diagnostics/hover/definition/completion/goals; 63 real dispatcher calls pass. [LSP](docs/graph-and-lode.md#does-lode-have-lean-lsp-access).
+- [x] Can Lode search for the code in the repository? I guess after the repo is cloned locally with File utils (it should have the basic tools to search, read and edit files but maybe with). — checked `ls`, `grep`, `read`, `write`, `edit` and LSP navigation, within the current agent/session permissions. [Repository tools](docs/graph-and-lode.md#can-lode-search-read-and-edit-repository-code).

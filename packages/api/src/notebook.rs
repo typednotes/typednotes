@@ -148,7 +148,7 @@ pub fn ordered_cells(cells: &[Cell], nodes: &[GraphNode], order: CellOrder) -> V
 }
 
 pub const NOTEBOOK_EFFECTS: &[&str] = &["Trace", "Error", "HTTP", "FileSystem", "PostgreSQL", "SecretStore", "ObjectStore", "Connector"];
-pub const WRITER_TOOLS: &[&str] = &["read", "ls", "grep", "write", "edit", "bash", "todo", "check", "publish", "lun_build", "lun_call"];
+pub const WRITER_TOOLS: &[&str] = &["read", "ls", "grep", "write", "edit", "bash", "todo", "check", "lsp", "publish", "lun_build", "lun_call"];
 
 /// Admin-owned upper bounds. Empty lists grant nothing; permissions are never
 /// widened by a cell's generated code or by a session update.
@@ -284,6 +284,10 @@ mod tests {
             assert!(EffectPolicy { domains: vec![domain.into()], ..Default::default() }.validate().is_err());
         }
         assert!(!EffectPolicy { providers: Vec::new(), ..Default::default() }.allows_provider(Provider::Openai));
+        assert!(WRITER_TOOLS.contains(&"lsp"));
+        assert!(EffectPolicy::default().tools.iter().any(|tool| tool == "lsp"));
+        assert!(EffectPolicy { tools: vec!["lsp".into()], ..Default::default() }.validate().is_ok());
+        assert!(EffectPolicy { tools: vec!["lsp_rpc".into()], ..Default::default() }.validate().is_err());
     }
 
     #[test]

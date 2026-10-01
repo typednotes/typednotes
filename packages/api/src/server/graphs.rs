@@ -1349,8 +1349,9 @@ async fn launch(
         ));
     }
     let (credentials, model) = lode_credentials(ctx).await?;
-    let policy = super::db::org_settings(&ctx.org).await?.effect_policy.validate().map_err(bad_request)?;
+    let mut policy = super::db::org_settings(&ctx.org).await?.effect_policy.validate().map_err(bad_request)?;
     let cells = cells_of(&ctx.row.graph.id).await?;
+    let mut execution = writer_execution(ctx, &cells).await.map_err(bad_gateway)?;
     let mut writer_text = text.to_string();
     if cells.iter().any(|row| row.cell.cell_type == CellType::DbSink || row.cell.config.connectors.iter().any(|grant| grant.connection == "compute")) {
         if !policy.effects.iter().any(|effect| effect == "PostgreSQL") { return Err(forbidden("organization PostgreSQL effect denied")); }
@@ -1384,9 +1385,11 @@ async fn launch(
             };
             if let Some(status) = &status {
                 let tools = lode::narrowing_tools(status, &policy.tools).map_err(bad_gateway)?;
-                super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, id, &credentials, &tools).await?;
+                let binding = super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, id, &credentials, &tools).await?;
+                policy.tools.retain(|tool| binding.policy.tools.contains(tool));
+                execution = lode::bind_execution(&execution, &binding).map_err(bad_gateway)?;
             }
-            lode::message(id, &writer_text, credentials.clone(), &policy.tools)
+            lode::message(id, &writer_text, credentials.clone(), &policy.tools, &execution)
                 .await
                 .map_err(bad_gateway)?
         }
@@ -1419,13 +1422,16 @@ async fn launch(
                 "lun": { "credentials": credentials["lun"] },
                 "agent": "build",
                 "tools": policy.tools,
+                "execution": execution,
             });
             log_start = 0;
             // Opening the checkout precedes generation: the broker policy must
             // bind the actual persisted Lode session ID before a model call.
             let id = lode::open(&body).await.map_err(bad_gateway)?;
-            super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, &id, &credentials, &policy.tools).await?;
-            if !matches!(lode::message(&id, &writer_text, credentials.clone(), &policy.tools).await.map_err(bad_gateway)?, lode::Reply::Ok(())) {
+            let binding = super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, &id, &credentials, &policy.tools).await?;
+            policy.tools.retain(|tool| binding.policy.tools.contains(tool));
+            execution = lode::bind_execution(&execution, &binding).map_err(bad_gateway)?;
+            if !matches!(lode::message(&id, &writer_text, credentials.clone(), &policy.tools, &execution).await.map_err(bad_gateway)?, lode::Reply::Ok(())) {
                 return Err(bad_gateway("writer session disappeared before starting"));
             }
             id
@@ -1826,8 +1832,12 @@ async fn refresh_warrants(ctx: &Ctx, lode_session: &str) {
                 Ok(lode::Reply::Ok(status)) => status, _ => return,
             };
             let tools = match lode::narrowing_tools(&status, &tools) { Ok(tools) => tools, Err(_) => return };
-            if super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, lode_session, &credentials, &tools).await.is_err() { return; }
-            if let Err(e) = lode::refresh(lode_session, credentials, &tools).await {
+            let cells = match cells_of(&ctx.row.graph.id).await { Ok(cells) => cells, Err(_) => return };
+            let execution = match writer_execution(ctx, &cells).await { Ok(execution) => execution, Err(_) => return };
+            let binding = match super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, lode_session, &credentials, &tools).await { Ok(binding) => binding, Err(_) => return };
+            let tools: Vec<_> = tools.into_iter().filter(|tool| binding.policy.tools.contains(tool)).collect();
+            let execution = match lode::bind_execution(&execution, &binding) { Ok(execution) => execution, Err(_) => return };
+            if let Err(e) = lode::refresh(lode_session, credentials, &tools, &execution).await {
                 eprintln!(
                     "could not refresh lode's warrants for {}: {e}",
                     ctx.row.graph.id
@@ -2400,6 +2410,21 @@ async fn connector_grants(ctx: &Ctx, cells: &[CellRow]) -> Result<Value, String>
         functions.insert(cell.cell.name.clone(), json!(grants));
     }
     Ok(json!(functions))
+}
+
+/// The writer gets the same freshly provisioned function grants as graph/source
+/// execution. Only the actor comes from Ctx; external accounts retain their real
+/// credential owners. Transport and private runtime configuration remain Lun's.
+async fn writer_execution(ctx: &Ctx, cells: &[CellRow]) -> Result<Value, String> {
+    let policy = super::db::org_settings(&ctx.org).await.map_err(|e| err_text(&e))?
+        .effect_policy.validate()?.for_cells(&cells.iter().map(|row| row.cell.clone()).collect::<Vec<_>>());
+    Ok(json!({
+        "binding": {"org_id": ctx.org.id, "user_id": ctx.user.id, "graph_id": ctx.row.graph.id},
+        "policy": {"effects": policy.effects, "domains": policy.domains},
+        "functions": cells.iter().filter(|row| row.cell.cell_type.has_function()).map(|row| row.cell.name.clone()).collect::<Vec<_>>(),
+        "graphs": [GRAPH_NAME],
+        "connectors": connector_grants(ctx, cells).await?,
+    }))
 }
 
 /// The scheduler uses the same authenticated execution envelope as graph
