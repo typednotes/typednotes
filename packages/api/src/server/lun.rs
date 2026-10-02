@@ -272,10 +272,15 @@ pub async fn update(session: &str, body: &Value) -> Result<Option<SessionAnswer>
 
 /// `DELETE /v0/sessions/{id}`, best-effort.
 pub async fn end(session: &str) {
-    if let Ok(svc) = service() {
-        let path = format!("/v0/sessions/{}", segment(session));
-        let _ = rpc::quick(&svc, Method::DELETE, &path, None).await;
-    }
+    let _ = end_checked(session).await;
+}
+
+/// Destructive account/org changes must acknowledge actual runtime teardown.
+/// A missing session is already gone; a service outage is a retryable failure.
+pub async fn end_checked(session: &str) -> Result<(), String> {
+    let path = format!("/v0/sessions/{}", segment(session));
+    let answer = rpc::quick(&service()?, Method::DELETE, &path, None).await?;
+    if answer.ok() || answer.status == 404 { Ok(()) } else { Err(fail("session deletion", &answer)) }
 }
 
 #[cfg(test)]

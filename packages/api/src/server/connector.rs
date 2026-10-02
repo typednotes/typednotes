@@ -6,7 +6,7 @@ use serde_json::json;
 use sqlx::{Postgres, Row, Transaction};
 
 use super::{db, errors, vault, warrant};
-use crate::{Connection, ConnectorPermissions, EffectPolicy, Org, PermissionPreset};
+use crate::{Connection, ConnectorPermissions, EffectPolicy, Org, PermissionPreset, User};
 
 pub fn organization_path(org: &str, provider: &str, connection: &str) -> String {
     format!("connector-policy/{org}/{provider}/{connection}")
@@ -22,6 +22,16 @@ pub async fn lock(org: &str) -> Result<Transaction<'static, Postgres>, ServerFnE
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(org).execute(&mut *tx).await.map_err(errors::db_error)?;
     Ok(tx)
+}
+
+/// Authentication can precede waiting on a deletion transaction. Revalidate the
+/// executing member after the lock, not just the (possibly shared) key's owner.
+pub async fn require_actor(tx: &mut Transaction<'_, Postgres>, org: &str, user: &str) -> Result<(), ServerFnError> {
+    let member = sqlx::query("select 1 from memberships m join users u on u.id=m.user_id \
+        where m.org_id=$1::uuid and m.user_id=$2::uuid and u.deleted_at is null")
+        .bind(org).bind(user).fetch_optional(&mut **tx).await.map_err(errors::db_error)?;
+    if member.is_none() { return Err(errors::forbidden("the executing account no longer belongs to this organization")); }
+    Ok(())
 }
 
 pub async fn policy(tx: &mut Transaction<'_, Postgres>, org: &str) -> Result<EffectPolicy, ServerFnError> {
@@ -138,18 +148,19 @@ pub fn bucket(connection: &Connection) -> Option<String> {
 
 /// The request can attenuate, never replace, a fresh connection ceiling.
 /// Stale DTOs cannot re-publish authority after an admin's policy change.
-pub async fn mint(org: &Org, connection: &Connection, owner: &str, operation: &str,
+pub async fn mint(org: &Org, user: &User, connection: &Connection, owner: &str, operation: &str,
     requested: &ConnectorPermissions, cost: u64) -> Result<Minted, ServerFnError> {
-    mint_for_cell(org, connection, owner, operation, requested, cost, None).await
+    mint_for_cell(org, user, connection, owner, operation, requested, cost, None).await
 }
 
 /// A cell mint reads its declaration under the same lock used by declaration
 /// edits. A stale request cannot restore a removed/wider cell permission.
-pub async fn mint_for_cell(org: &Org, connection: &Connection, owner: &str, operation: &str,
+pub async fn mint_for_cell(org: &Org, user: &User, connection: &Connection, owner: &str, operation: &str,
     requested: &ConnectorPermissions, cost: u64, cell_id: Option<&str>) -> Result<Minted, ServerFnError> {
     requested.validate(connection.provider).map_err(errors::bad_request)?;
     let root = warrant::root_key().map_err(errors::unavailable)?;
     let mut tx = lock(&org.id).await?;
+    require_actor(&mut tx, &org.id, &user.id).await?;
     let row = sqlx::query("select permissions::text as permissions, user_id::text as owner, provider, status \
         from connections where org_id = $1::uuid and id = $2::uuid")
         .bind(&org.id).bind(&connection.id).fetch_one(&mut *tx).await.map_err(errors::db_error)?;

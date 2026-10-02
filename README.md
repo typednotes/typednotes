@@ -72,10 +72,17 @@ coordinated deployment requirements are in
 The Graph/Lode questions, scoped runtime trials and Lean LSP are answered in
 [`docs/graph-and-lode.md`](https://github.com/typednotes/typednotes/blob/main/docs/graph-and-lode.md); CI fixes and executed checks
 are recorded in [`docs/ci-verification.md`](https://github.com/typednotes/typednotes/blob/main/docs/ci-verification.md).
-The current app release is Typednotes **v0.9.0**, paired with Liaison **v0.6.3**,
-Lun **v0.3.1** and the existing Lode **v0.4.2** deployment. Release notes are in
-[`docs/release-0.9.0.md`](https://github.com/typednotes/typednotes/blob/main/docs/release-0.9.0.md);
+The current app release is Typednotes **v0.9.1**, paired with Ledger **v0.3.7**,
+Liaison **v0.6.3**, Lun **v0.3.1** and the existing Lode **v0.4.2** deployment.
+Release notes are in
+[`docs/release-0.9.1.md`](https://github.com/typednotes/typednotes/blob/main/docs/release-0.9.1.md);
 push order and exact CI gates are in [`docs/push-order.md`](https://github.com/typednotes/typednotes/blob/main/docs/push-order.md).
+
+The **v0.9.1** deletion update fixes ledger FK cascades, resets removed
+workspace defaults and adds confirmed account deletion/ownership transfer.
+It requires app migration 0012 and Ledger **v0.3.7** migration 0003, adopted in
+fleet source release **v0.6.2**. See
+[`docs/deletion.md`](https://github.com/typednotes/typednotes/blob/main/docs/deletion.md).
 The shared CI/release and documentation-link conventions are in
 [`docs/workflow-policy.md`](https://github.com/typednotes/typednotes/blob/main/docs/workflow-policy.md).
 

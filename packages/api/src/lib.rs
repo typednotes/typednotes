@@ -118,6 +118,14 @@ pub async fn sign_out_elsewhere() -> Result<u64, ServerFnError> {
     server::account::sign_out_elsewhere(&user, current).await
 }
 
+/// Delete only the signed-in account; confirmation is its verified email.
+#[post("/api/account/delete")]
+pub async fn delete_account(confirm: String) -> Result<(), ServerFnError> {
+    let user = session::require_user().await?;
+    server::deletion::account(&user, &confirm).await?;
+    logout().await
+}
+
 /// The caller's orgs, newest first.
 #[get("/api/orgs")]
 pub async fn list_orgs() -> Result<Vec<Org>, ServerFnError> {
@@ -171,8 +179,8 @@ pub async fn rename_org(slug: String, name: String) -> Result<Org, ServerFnError
 /// Delete the org and everything in it (owners); `confirm` is its slug.
 #[post("/api/org/delete")]
 pub async fn delete_org(slug: String, confirm: String) -> Result<(), ServerFnError> {
-    let (_, org) = member_org(&slug).await?;
-    server::account::delete_org(&org, &confirm).await
+    let (user, org) = member_org(&slug).await?;
+    server::deletion::organization(&org, &user, &confirm).await
 }
 
 /// The org's settings.
@@ -687,6 +695,13 @@ pub async fn add_member(
 pub async fn remove_member(slug: String, user_id: String) -> Result<(), ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     members::remove(&org, &user, &user_id).await
+}
+
+/// Change a member's role, including transferring organization ownership.
+#[post("/api/members/role")]
+pub async fn set_member_role(slug: String, user_id: String, role: String) -> Result<(), ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    server::members::set_role(&org, &user, &user_id, &role).await
 }
 
 // ── Notebooks (docs/computations.md) ────────────────────────────────────

@@ -1,5 +1,5 @@
 //! Settings that are not a page's content: the signed-in user's account,
-//! renaming and deleting an org, renaming a project.
+//! and renaming an org. Destructive changes live in `deletion`.
 //!
 //! Deleting an org deletes what it holds outside Postgres first — every
 //! connection's credential, every notebook secret and every compute
@@ -11,9 +11,8 @@ use dioxus::prelude::ServerFnError;
 use sqlx::Row;
 
 use super::db::pool;
-use super::errors::{bad_gateway, bad_request, db_error, forbidden};
-use super::{compute, graphs, vault};
-use crate::{validate_name, Account, Identity, Org, Provider, User};
+use super::errors::{bad_request, db_error, forbidden};
+use crate::{validate_name, Account, Identity, Org, User};
 
 pub async fn account(user: &User) -> Result<Account, ServerFnError> {
     let pool = pool()?;
@@ -114,90 +113,4 @@ pub async fn rename_org(org: &Org, name: &str) -> Result<Org, ServerFnError> {
         name: name.trim().to_string(),
         ..org.clone()
     })
-}
-
-/// Delete an org and everything in it (owners only), once `confirm` is its
-/// slug.
-pub async fn delete_org(org: &Org, confirm: &str) -> Result<(), ServerFnError> {
-    if org.role != "owner" {
-        return Err(forbidden("only the org's owners can delete it"));
-    }
-    if confirm.trim() != org.slug {
-        return Err(bad_request(format!(
-            "type the org's slug, {}, to confirm",
-            org.slug
-        )));
-    }
-    let pool = pool()?;
-    let vault_error = |what: String| {
-        move |e: String| {
-            eprintln!(
-                "deleting org {}: vault delete of {what} failed: {e}",
-                org.id
-            );
-            bad_gateway(
-                "could not delete the org's credentials from the vault; nothing was deleted",
-            )
-        }
-    };
-    for r in sqlx::query(
-        "select id::text as id, user_id::text as user_id, provider from connections where org_id = $1::uuid",
-    )
-    .bind(&org.id)
-    .fetch_all(pool)
-    .await
-    .map_err(db_error)?
-    {
-        let (id, owner, provider): (String, String, String) =
-            (r.get("id"), r.get("user_id"), r.get("provider"));
-        let Some(provider) = Provider::from_id(&provider) else {
-            continue;
-        };
-        let path = vault::credential_path(provider, &owner, &id);
-        vault::delete(&path).await.map_err(vault_error(path))?;
-    }
-    for r in sqlx::query(
-        "select g.id::text as graph_id, c.config ->> 'name' as name from graph_cells c \
-         join graphs g on g.id = c.graph_id join projects p on p.id = g.project_id \
-         where p.org_id = $1::uuid and c.variant = 'secret' and c.config ? 'set_at'",
-    )
-    .bind(&org.id)
-    .fetch_all(pool)
-    .await
-    .map_err(db_error)?
-    {
-        let (graph_id, name): (String, Option<String>) = (r.get("graph_id"), r.get("name"));
-        if let Some(name) = name {
-            let path = graphs::secret_path(&org.id, &graph_id, &name);
-            vault::delete(&path).await.map_err(vault_error(path))?;
-        }
-    }
-    let schemas: Vec<(String, String)> = sqlx::query(
-        "select user_id::text as user_id, name from compute_schemas where org_id = $1::uuid",
-    )
-    .bind(&org.id)
-    .fetch_all(pool)
-    .await
-    .map_err(db_error)?
-    .iter()
-    .map(|r| (r.get("user_id"), r.get("name")))
-    .collect();
-    for (user_id, _) in &schemas {
-        let path = compute::credential_path(&org.id, user_id);
-        vault::delete(&path).await.map_err(vault_error(path))?;
-    }
-    for (_, name) in &schemas {
-        if let Err(e) = compute::drop_schema(name).await {
-            eprintln!(
-                "deleting org {}: dropping compute schema {name} failed: {e}",
-                org.id
-            );
-        }
-    }
-    sqlx::query("delete from orgs where id = $1::uuid")
-        .bind(&org.id)
-        .execute(pool)
-        .await
-        .map_err(db_error)?;
-    Ok(())
 }

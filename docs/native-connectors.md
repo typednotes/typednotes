@@ -28,6 +28,12 @@ is an app responsibility, tested separately from the proved effect ceiling.
 
 ## Trusted provisioning
 
+Tenant deletion and credential provisioning share the org transaction lock.
+Minting now carries the actual executing user separately from credential ownership
+and rechecks that user's live membership after the lock. Account deletion closes
+all affected org gates/projections and resets active sessions before removing
+credentials/rows. See [deletion and its trusted boundaries](deletion.md).
+
 The app sends `kind: connector`, a named operation, component-wise resource list
 and JSON payload string. It supplies no provider URL, HTTP method, authentication
 header or raw fallback. Warrant time/credit fields remain decimal strings.

@@ -267,7 +267,7 @@ pub async fn repo_page(org: &Org, user: &User, connection_id: &str, page: u32) -
     if !(1..=100).contains(&page) { return Err(bad_request("repository page: 1 to 100")); }
     let (connection, owner) = code_connection(org, user, connection_id).await?;
     let request = ProviderCall::new("repositories.list", Vec::new(), serde_json::json!({"page": page.to_string()}));
-    let body = connections::call_ok(org, &connection, &owner, request).await?;
+    let body = connections::call_ok(org, user, &connection, &owner, request).await?;
     let repos = parse_repos(connection.provider, &body).map_err(bad_gateway)?;
     if repos.len() > 100 { return Err(bad_gateway("the provider exceeded the bounded repository page size")); }
     let full = repos.len() == 100;
@@ -287,7 +287,7 @@ pub async fn set_repo(
     let (project, _) = get(org, project_slug).await?;
     let (connection, owner) = code_connection(org, user, connection_id).await?;
     let full_name = crate::repository_name(connection.provider, full_name).map_err(bad_request)?;
-    let body = connections::call_ok(org, &connection, &owner,
+    let body = connections::call_ok(org, user, &connection, &owner,
         ProviderCall::new("repositories.read", full_name.split('/').map(str::to_string).collect(), serde_json::json!({"view":"metadata"}))).await?;
     let repo = checked_repo(connection.provider, &full_name, &body).map_err(bad_gateway)?;
     sqlx::query(

@@ -83,7 +83,9 @@ pub async fn add(org: &Org, email: &str, role: &str) -> Result<Member, ServerFnE
             }
         )));
     }
-    let mut tx = pool()?.begin().await.map_err(db_error)?;
+    let mut tx = super::connector::lock(&org.id).await?;
+    sqlx::query("select id from orgs where id=$1::uuid for update").bind(&org.id)
+        .fetch_one(&mut *tx).await.map_err(db_error)?;
     // The user, or a new one waiting for its first sign-in.
     sqlx::query("insert into users (email) values ($1::citext) on conflict (email) do nothing")
         .bind(&email)
@@ -131,7 +133,9 @@ pub async fn add(org: &Org, email: &str, role: &str) -> Result<Member, ServerFnE
 /// the caller's role manages. The last owner cannot go — an org always has
 /// someone who can manage it.
 pub async fn remove(org: &Org, user: &User, user_id: &str) -> Result<(), ServerFnError> {
-    let mut tx = pool()?.begin().await.map_err(db_error)?;
+    let mut tx = super::connector::lock(&org.id).await?;
+    sqlx::query("select id from orgs where id=$1::uuid for update").bind(&org.id)
+        .fetch_one(&mut *tx).await.map_err(db_error)?;
     // Lock the org's memberships, so two removals cannot both see "another
     // owner remains".
     let rows = sqlx::query(
@@ -167,6 +171,30 @@ pub async fn remove(org: &Org, user: &User, user_id: &str) -> Result<(), ServerF
         .map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(())
+}
+
+/// Existing members can become owners before an account is deleted. Role
+/// changes are serialized with deletion; the last owner cannot be demoted.
+pub async fn set_role(org: &Org, user: &User, user_id: &str, role: &str) -> Result<(), ServerFnError> {
+    if !ROLES.contains(&role) { return Err(bad_request("role: owner, admin or member")); }
+    let mut tx = super::connector::lock(&org.id).await?;
+    sqlx::query("select id from orgs where id=$1::uuid for update").bind(&org.id)
+        .fetch_one(&mut *tx).await.map_err(db_error)?;
+    let rows = sqlx::query("select user_id::text as id, role from memberships where org_id=$1::uuid")
+        .bind(&org.id).fetch_all(&mut *tx).await.map_err(db_error)?;
+    let actor = rows.iter().find(|r| r.get::<String, _>("id") == user.id)
+        .ok_or_else(|| forbidden("you no longer belong to this organization"))?.get::<String, _>("role");
+    let current = rows.iter().find(|r| r.get::<String, _>("id") == user_id.trim())
+        .ok_or_else(|| not_found("no such member"))?.get::<String, _>("role");
+    if !may_manage(&actor, &current) || !may_manage(&actor, role) {
+        return Err(forbidden("your role cannot make this membership change"));
+    }
+    if current == "owner" && role != "owner" && rows.iter().filter(|r| r.get::<String, _>("role") == "owner").count() <= 1 {
+        return Err(conflict("add another owner before changing the last owner's role"));
+    }
+    sqlx::query("update memberships set role=$3 where org_id=$1::uuid and user_id=$2::uuid")
+        .bind(&org.id).bind(user_id.trim()).bind(role).execute(&mut *tx).await.map_err(db_error)?;
+    tx.commit().await.map_err(db_error)
 }
 
 #[cfg(test)]

@@ -74,3 +74,10 @@ See [public sharing](release-0.9.0.md#public-read-only-sharing) for snapshot
 contents, visitor isolation, pure execution, revocation, expiry and limits.
 Only UI source inputs are editable. Definition/configuration/secret mutation APIs
 remain membership-authenticated; a public token is not an organization session.
+
+## Deleting a workspace or account
+
+[Deletion](deletion.md) explains organization cascades, automatic default resets,
+owned-project cleanup, last-owner transfer and retry behavior. Account settings
+contains the confirmed account deletion action; existing members can become
+owners through Organization settings → Members before a sole owner departs.

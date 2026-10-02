@@ -120,3 +120,16 @@ Verified locally: 106 API tests, 33 browser groups, 675 real broker HTTP cases,
 12 app/broker/SQL groups, 9 compiled app/runtime groups, Lean suites and offline
 fleet checks. Rollout needs app v0.9.0, Liaison v0.6.3, Lun v0.3.1, and fleet
 v0.6.1 adopting migrations 0009–0011. [Publication/deployment order](docs/push-order.md).
+
+- [x] When trying to delete an Org, I get: ```database error: error returned from database: update or delete on table "orgs" violates foreign key constraint "credit_ledger_org_id_fkey" on table "credit_ledger" at line 2621```. When deleting an org all connections to the org should be removed in cascade and org-less user should be back to the onboarding state, just without the default org and project. — append-only ledger cascades, locked authority/session/vault/compute cleanup and full default/completion reset. Older ledger FKs are refused before credential deletion. [Deletion guide](docs/deletion.md).
+- [x] When deleting a user, if a project becomes without an owner, it is also destroyed, same for orgs, an org with no user is deleted and the related entities are deleted in cascade. — confirmed self-account deletion, owned-project/empty-org cascades, identity/session/credential cleanup and other-owner/tenant preservation. As agreed, a sole owner with other members must transfer ownership first; the Members UI can promote an existing member. [Account deletion](docs/deletion.md#delete-your-account).
+
+Deletion verification: 106 API tests, 41 browser groups, 13 real app/broker/SQL
+groups, 9 compiled app/runtime groups, Ledger Lean tests and offline fleet checks.
+Requires app migration 0012 and ledger migration 0003; release refs are app
+v0.9.1 / ledger v0.3.7 / fleet v0.6.2. These changes are local until published/applied.
+
+- [ ] The 3 collapsable boxes in https://app.typednotes.com/onboarding with Organization, Project, Notebook are weird.
+- [ ] When connected to a repo, the listing of orgs/repo under a user fails: `Could not list repositories: the credential broker refused the call (502 credential_unavailable) Review notebook permissions`
+- [ ] The setup process should not be based on a new screen, it is just a state of the user telling that you should be guided through the standard UI to set things up.
+- [ ] Out of the box a default org and a default project are created when the user is created.

@@ -127,7 +127,7 @@ pub async fn pricing(provider: Provider, model: &str) -> TokenPricing {
 pub async fn models(org: &Org, user: &User, id: &str) -> Result<Vec<String>, ServerFnError> {
     let (connection, owner) = connections::get(org, user, id).await?;
     if !connection.provider.is_ai() { return Err(errors::bad_request("choose an AI connection")); }
-    let bytes = connections::call_ok(org, &connection, &owner,
+    let bytes = connections::call_ok(org, user, &connection, &owner,
         connections::ProviderCall::new("models.list", Vec::new(), serde_json::json!({}))).await?;
     model_ids(connection.provider, &bytes).map_err(errors::bad_gateway)
 }
@@ -183,6 +183,7 @@ pub async fn classify(
     }
     let outcome = connections::call_with_cost(
         org,
+        user,
         &connection,
         &owner,
         connections::ProviderCall::new("classification.evaluate", vec![model], payload),

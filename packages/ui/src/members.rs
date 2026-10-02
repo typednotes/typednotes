@@ -1,4 +1,4 @@
-use api::{add_member, list_members, may_manage, remove_member, Member, ROLES};
+use api::{add_member, list_members, may_manage, remove_member, set_member_role, Member, ROLES};
 use dioxus::prelude::*;
 
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
@@ -34,7 +34,8 @@ pub(crate) fn MembersPanel(slug: ReadSignal<String>, role: String) -> Element {
                                 MemberRow {
                                     key: "{member.user_id}",
                                     slug: slug(),
-                                    member,
+                                     member,
+                                    actor_role: role.clone(),
                                     on_removed: move |left: bool| {
                                         if left {
                                             navigate_to("/");
@@ -56,9 +57,10 @@ pub(crate) fn MembersPanel(slug: ReadSignal<String>, role: String) -> Element {
 }
 
 #[component]
-fn MemberRow(slug: String, member: Member, on_removed: EventHandler<bool>) -> Element {
+fn MemberRow(slug: String, member: Member, actor_role: String, on_removed: EventHandler<bool>) -> Element {
     let mut confirming = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
+    let mut busy = use_signal(|| false);
     let who = member
         .display_name
         .clone()
@@ -82,8 +84,25 @@ fn MemberRow(slug: String, member: Member, on_removed: EventHandler<bool>) -> El
             }
             if member.can_remove {
                 div { class: "conn-actions",
+                    if actor_role == "owner" && member.role != "owner" && !is_you {
+                        Button { size: ButtonSize::Sm, variant: ButtonVariant::Outline, disabled: busy(),
+                            title: "An owner can manage members and permissions and delete this organization.",
+                            onclick: {
+                                let (slug, id) = (slug.clone(), id.clone()); move |_| {
+                                    let (slug, id) = (slug.clone(), id.clone()); async move {
+                                        busy.set(true);
+                                        match set_member_role(slug, id, "owner".into()).await {
+                                            Ok(()) => { error.set(None); on_removed.call(false); },
+                                            Err(e) => error.set(Some(error_message(&e))),
+                                        }
+                                        busy.set(false);
+                                    }
+                                }
+                            }, "Make owner" }
+                    }
                     Button {
                         size: ButtonSize::Sm,
+                        disabled: busy(),
                         variant: if confirming() { ButtonVariant::Destructive } else { ButtonVariant::Ghost },
                         onclick: move |_| {
                             let (slug, id) = (slug.clone(), id.clone());

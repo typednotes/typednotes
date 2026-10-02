@@ -135,6 +135,7 @@ pub async fn store(
     let guard = sqlx::query("select exists(select 1 from pg_trigger where tgrelid='public.connections'::regclass and tgname='connections_provider_once' and tgenabled in ('O','A')) as ready")
         .fetch_one(&mut *tx).await.map_err(db_error)?.get::<bool,_>("ready");
     if !guard { return Err(unavailable("connection creation requires migration 0009_connection_provider_guard.sql")); }
+    connector::require_actor(&mut tx, &org.id, &user.id).await?;
     let existing = sqlx::query("select 1 from connections where org_id=$1::uuid and provider=$2 limit 1")
         .bind(&org.id).bind(new.provider.id()).fetch_optional(&mut *tx).await.map_err(db_error)?;
     if existing.is_some() { return Err(conflict(format!("{} is already connected to this organization; use or remove that connection first", new.provider.name()))); }
@@ -478,16 +479,18 @@ fn describe_caldav(body: &[u8]) -> Result<String, String> {
 /// and audits the call — make it. The app never sees the credential.
 pub async fn call(
     org: &Org,
+    user: &User,
     connection: &Connection,
     owner: &str,
     request: ProviderCall,
 ) -> Result<Outcome, ServerFnError> {
-    call_with_cost(org, connection, owner, request, 0).await
+    call_with_cost(org, user, connection, owner, request, 0).await
 }
 
 /// Budgeted inference uses the same confinement and broker as read-only probes.
 pub async fn call_with_cost(
     org: &Org,
+    user: &User,
     connection: &Connection,
     owner: &str,
     request: ProviderCall,
@@ -510,7 +513,7 @@ pub async fn call_with_cost(
         return Err(forbidden("the connection does not permit this native resource"));
     }
     let provider = connection.provider.id();
-    let minted = connector::mint_for_cell(org, connection, owner, &request.operation, &requested, cost, request.cell_id.as_deref()).await?;
+    let minted = connector::mint_for_cell(org, user, connection, owner, &request.operation, &requested, cost, request.cell_id.as_deref()).await?;
     if !minted.cell.permits(&request.operation, &request.resource)
         || request.payload.to_string().len() as u64 > minted.cell.max_request_bytes {
         return Err(forbidden("the live organization ceiling does not permit this native call"));
@@ -544,11 +547,12 @@ pub async fn call_with_cost(
 /// [`call`], expecting a `2xx` answer: its body, or a message fit to show.
 pub async fn call_ok(
     org: &Org,
+    user: &User,
     connection: &Connection,
     owner: &str,
     request: ProviderCall,
 ) -> Result<Vec<u8>, ServerFnError> {
-    match call(org, connection, owner, request).await? {
+    match call(org, user, connection, owner, request).await? {
         Outcome::Upstream { status, body } if (200..300).contains(&status) => Ok(body),
         Outcome::Upstream { status, body } => Err(bad_gateway(format!(
             "{} answered {status}: {}",
@@ -569,7 +573,7 @@ pub fn snippet(body: &[u8]) -> String {
 pub async fn test(org: &Org, user: &User, id: &str) -> Result<TestResult, ServerFnError> {
     let (connection, owner) = get(org, user, id).await?;
     let request = probe(&connection).map_err(super::errors::bad_request)?;
-    let result = match call(org, &connection, &owner, request).await? {
+    let result = match call(org, user, &connection, &owner, request).await? {
         Outcome::Upstream { status, body } if (200..300).contains(&status) => {
             match describe(&connection, &body) {
                 Ok(message) => TestResult { ok: true, message },

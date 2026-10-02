@@ -98,6 +98,10 @@ pub async fn health() -> Health {
         && table_exists(pool, "public.notebook_shares").await
         && table_exists(pool, "public.notebook_share_sessions").await
         && table_exists(pool, "public.notebook_share_calls").await;
+    let schema = schema && sqlx::query("select to_regprocedure('tenant_deletion_ready()') is not null as ready")
+        .fetch_one(pool).await.map(|row| row.get::<bool, _>("ready")).unwrap_or(false);
+    let schema = schema && sqlx::query("select tenant_deletion_ready() as ready")
+        .fetch_one(pool).await.map(|row| row.get::<bool, _>("ready")).unwrap_or(false);
     let ledger = database && table_exists(pool, "public.credit_ledger").await;
     // `compute_schemas` is the newest table of `0004_computations`.
     let computations = schema

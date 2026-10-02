@@ -2,6 +2,13 @@
 
 **Language:** Lean 4 + `linen` · **Deploys** [`ledger`](ledger.md) as a module
 
+**Current implementation note:** identity/workspace control currently lives in
+the Rust fullstack app; the service design below describes the intended split.
+Its confirmed org/account deletion and ownership/default transitions are in
+[the deletion contract](../deletion.md). Migration 0012 adds relational guards;
+ledger migration 0003 supplies compatible billing cascades. Rust/SQL ownership
+checks are trusted boundaries, separate from Lean runtime effect guarantees.
+
 ## 1. Purpose
 
 Own the identity *data* model and all authorization decisions, and mint the warrants that

@@ -232,9 +232,9 @@ def main():
         try:
             for migration in sorted((ROOT / "migrations").glob("*.sql")):
                 sql(migration.read_text())
-            sql("create table credit_holds (id uuid primary key default gen_random_uuid(), org_id uuid, run_id uuid, amount bigint, state text, expires_at timestamptz);"
-                "create table credit_ledger (id uuid default gen_random_uuid(), org_id uuid, run_id uuid, delta bigint, reason text);"
-                + (ROOT.parent / "liaison/sql/0001_audit_log.sql").read_text())
+            for migration in sorted((ROOT.parent / "ledger/sql").glob("*.sql")):
+                sql(migration.read_text())
+            sql((ROOT.parent / "liaison/sql/0001_audit_log.sql").read_text())
             sql(f"insert into users(id,email) values('{user}','native@example.invalid');"
                 f"insert into orgs(id,slug,name) values('{org}','native-fixture','Native fixture');"
                 f"insert into memberships(user_id,org_id,role) values('{user}','{org}','owner');"
@@ -333,6 +333,38 @@ def main():
                 result = api("/api/connections/test", {"id": connection_id})
                 assert result["ok"], result
                 passed("actual app probe uses models.list through real broker/HMAC/Postgres")
+                # Hold the policy lock after a shared-key caller authenticated,
+                # remove that caller, then admit the queued mint. A surviving
+                # credential owner must not authorize the deleted membership.
+                late_user, late_token = str(uuid.uuid4()), "late-member-fixture"
+                sql(f"insert into users(id,email) values('{late_user}','late-member@example.invalid');"
+                    f"insert into memberships(org_id,user_id,role) values('{org}','{late_user}','member');"
+                    f"insert into sessions(id_hash,user_id,expires_at) values(sha256(convert_to('{late_token}','UTF8')),'{late_user}',now()+interval '1 hour')")
+                locker = subprocess.Popen([str(args.pg_bin / "psql"), database, "-X", "-v", "ON_ERROR_STOP=1", "-qtAc",
+                    f"begin;select pg_advisory_xact_lock(hashtextextended('{org}',0));select pg_sleep(30);commit"],
+                    env={**os.environ,"PGAPPNAME":"late-mint-fixture"}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                try:
+                    deadline = time.monotonic()+10
+                    while sql("select count(*) from pg_stat_activity where application_name='late-mint-fixture' and wait_event='PgSleep'") != "1":
+                        assert time.monotonic() < deadline
+                        time.sleep(.05)
+                    before_egress, before_reads = len(upstream.state["calls"]), len(vault.state["reads"])
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        pending = executor.submit(exchange, app + "/api/connections/test", {"slug":"native-fixture","id":connection_id}, {"Cookie":f"tn_session={late_token}"})
+                        deadline = time.monotonic()+10
+                        while sql("select count(*) from pg_stat_activity where wait_event='advisory'") == "0":
+                            assert time.monotonic() < deadline and not pending.done()
+                            time.sleep(.05)
+                        sql(f"delete from memberships where org_id='{org}' and user_id='{late_user}'")
+                        sql("select pg_cancel_backend(pid) from pg_stat_activity where application_name='late-mint-fixture'")
+                        status, refused = pending.result(timeout=10)
+                        assert status == 403, refused
+                    assert len(upstream.state["calls"]) == before_egress and len(vault.state["reads"]) == before_reads
+                finally:
+                    if locker.poll() is None:
+                        sql("select pg_cancel_backend(pid) from pg_stat_activity where application_name='late-mint-fixture'")
+                    locker.wait(timeout=10)
+                passed("a queued shared-credential mint rechecks the actual actor after membership removal and denies before vault/provider reads")
                 assert api("/api/ai/models", {"connection_id": connection_id}) == ["jev-latest"]
                 baseten = api("/api/connections/ai", {"provider": "Baseten", "base_url": "https://fixture.example.invalid/base", "api_key": "local-provider-fixture"})
                 upstream.state["models"] = {"data": [{"id": "z-model"}, {"id": "a-model"}, {"id": "a-model"}]}

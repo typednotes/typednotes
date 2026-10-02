@@ -3,6 +3,12 @@
 **Language:** Lean 4 + `linen` · **Deployed inside** [`core`](core.md), documented separately
 because its invariants are distinct
 
+**Current deletion contract:** append-only ledger migration 0003 cascades billing
+rows with a removed org and nulls the removed actor pointer in a surviving org's
+usage history. The app owns confirmation, ownership checks and external cleanup;
+the fleet orders both updated histories before rollout. The original schema
+below is the baseline; see [the current deletion contract](../deletion.md).
+
 ## 1. Purpose
 
 Record what was consumed and what it cost, and hold the credit balance that bounds spend.

@@ -1288,13 +1288,13 @@ async fn lode_credentials(ctx: &Ctx) -> Result<(Value, Connection), ServerFnErro
     // the connection/admin ceiling. The read/write preset never adds deletion.
     let delete_permissions = super::connector::scoped(&repo, "repositories.delete", write_root, true);
     write_permissions.scopes.extend(delete_permissions.scopes);
-    let repo_read = super::connector::mint(&ctx.org, &repo, &repo_owner, "repositories.read",
+    let repo_read = super::connector::mint(&ctx.org, &ctx.user, &repo, &repo_owner, "repositories.read",
         &super::connector::scoped(&repo, "repositories.read", repo_root.clone(), true), 0).await?.grant;
-    let repo_write = super::connector::mint(&ctx.org, &repo, &repo_owner, "repositories.write",
+    let repo_write = super::connector::mint(&ctx.org, &ctx.user, &repo, &repo_owner, "repositories.write",
         &write_permissions, 0).await?.grant;
-    let model_grant = super::connector::mint(&ctx.org, &model, &model_owner, "inference.generate",
+    let model_grant = super::connector::mint(&ctx.org, &ctx.user, &model, &model_owner, "inference.generate",
         &super::connector::scoped(&model, "inference.generate", crate::model_resource(model.provider, name), false), cost).await?.grant;
-    let lun_read = super::connector::mint(&ctx.org, &repo, &repo_owner, "repositories.read",
+    let lun_read = super::connector::mint(&ctx.org, &ctx.user, &repo, &repo_owner, "repositories.read",
         &super::connector::scoped(&repo, "repositories.read", repo_root, true), 0).await?.grant;
     let mut repo_credentials = warrant::credentials_json(&repo_read, &repo_owner, &repo.id, None);
     repo_credentials["operations"] = json!([{ "operation": "repositories.write", "warrant": repo_write.warrant.to_json() }]);
@@ -2068,6 +2068,7 @@ async fn branch_head(ctx: &Ctx) -> Result<String, ServerFnError> {
     let pointer = if connection.provider == Provider::Gitlab { "/commit/id" } else { "/commit/sha" };
     let body = connections::call_ok(
         &ctx.org,
+        &ctx.user,
         &connection,
         &owner,
         ProviderCall::new("repositories.read", repo.full_name.split('/').map(str::to_string).collect(), json!({"view": "branch", "ref": branch})),
@@ -2088,6 +2089,7 @@ async fn read_repo_file(ctx: &Ctx, path: &str, commit: &str) -> Result<Vec<u8>, 
     let resource = repo.full_name.split('/').chain(file.split('/')).map(str::to_string).collect();
     let body = connections::call_ok(
         &ctx.org,
+        &ctx.user,
         &connection,
         &owner,
         ProviderCall::new("repositories.read", resource, json!({"ref": commit})),
@@ -2169,7 +2171,7 @@ pub async fn cell_code(
 async fn build_request(ctx: &Ctx, commit: &str) -> Result<(Value, LunJson), ServerFnError> {
     let lun_json = read_lun_json(ctx, commit).await?;
     let (connection, owner, repo) = repo_connection(ctx).await?;
-    let read = super::connector::mint(&ctx.org, &connection, &owner, "repositories.read",
+    let read = super::connector::mint(&ctx.org, &ctx.user, &connection, &owner, "repositories.read",
         &super::connector::scoped(&connection, "repositories.read", repo.full_name.split('/').map(str::to_string).collect(), true), 0).await?.grant;
     let cells: Vec<Cell> = cells_of(&ctx.row.graph.id).await?.into_iter().map(|row| row.cell).collect();
     let mut functions = serde_json::to_value(&lun_json.functions).map_err(|_| bad_request("invalid function declarations"))?;
@@ -2317,7 +2319,7 @@ async fn storage_warrants(ctx: &Ctx, cells: &[CellRow]) -> Result<Vec<Value>, St
         if let Some(permissions) = c.cell.config.connectors.iter().find(|grant| grant.connection == connection.id).and_then(|grant| grant.permissions.as_ref()) {
             requested = requested.intersect(permissions);
         }
-        let grant = super::connector::mint_for_cell(&ctx.org, &connection, &owner, operation, &requested, cost, Some(&c.cell.id)).await
+        let grant = super::connector::mint_for_cell(&ctx.org, &ctx.user, &connection, &owner, operation, &requested, cost, Some(&c.cell.id)).await
             .map_err(|e| err_text(&e))?.grant;
         out.push(json!({
             "cell": c.cell.name,
@@ -2374,7 +2376,7 @@ async fn connector_grants(ctx: &Ctx, cells: &[CellRow]) -> Result<Value, String>
             let mut warrants = Vec::new();
             for operation in operations {
                 let cost = if operation == "inference.generate" || operation == "classification.evaluate" { config::model_call_cost() } else { 0 };
-                let minted = super::connector::mint_for_cell(&ctx.org, &connection, &owner, &operation, &effective, cost, Some(&cell.cell.id)).await.map_err(text)?;
+                let minted = super::connector::mint_for_cell(&ctx.org, &ctx.user, &connection, &owner, &operation, &effective, cost, Some(&cell.cell.id)).await.map_err(text)?;
                 parent = parent.intersect(&minted.connection);
                 organization = organization.intersect(&minted.organization);
                 effective = effective.intersect(&minted.cell);

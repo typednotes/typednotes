@@ -1,6 +1,29 @@
 # Push order and CI gates
 
-## Current UX release: app v0.9.0, broker v0.6.3, runtime v0.3.1
+## Current deletion release: app v0.9.1, ledger v0.3.7, fleet v0.6.2
+
+The user can push each new service release's main branch and tag together:
+
+```sh
+# In ledger:
+git push origin main v0.3.7
+# In typednotes:
+git push origin main v0.9.1
+```
+
+The bounded publishers wait for successful exact-SHA main CI. Wait for both
+service image publications before advancing the fleet; also ensure the existing
+Liaison v0.6.3 and Lun v0.3.1 images are available for the prior UX capabilities.
+No new broker/runtime version is needed for deletion.
+
+Then, in **typednotes-infra**, push `main` and `v0.6.2` together. Wait for its CI
+and read-only Plan, review the plan and use the existing manual Apply. The fleet
+reads app migrations through 0012 and ledger migrations through 0003 at their
+new source tags and applies both histories before the app rollout. A tag push
+does not itself apply cloud changes. Existing tags stay immutable.
+See [v0.9.1 notes](release-0.9.1.md) and [deletion](deletion.md).
+
+## Previous UX release: app v0.9.0, broker v0.6.3, runtime v0.3.1
 
 The local batch is coordinated across four repositories. The user can push each
 main branch and its new tag together:

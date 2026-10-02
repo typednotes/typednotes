@@ -111,9 +111,12 @@ class Mock(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         STATE["log"].append([self.service, method, path, body])
         if self.service == "vault":
+            if method == "DELETE" and path == STATE.get("vault_fail_delete"):
+                return self.reply(503, {"error":"fixture deletion unavailable"})
             if path.endswith("/login"):
                 return self.reply(200, {"auth": {"client_token": "fixture", "lease_duration": 3600}})
-            STATE["vault"][path] = body
+            if method == "DELETE": STATE["vault"].pop(path, None)
+            else: STATE["vault"][path] = body
             return self.reply(200, {})
         if self.service == "broker":
             call = body["call"]
@@ -723,12 +726,17 @@ def verify(page, context, app, output):
     for name in ("New user's organization", "New user's project", "New user's notebook"):
         fresh_page.locator("#new-name").fill(name)
         fresh_page.get_by_role("button", name="Create", exact=True).click()
-        expect(fresh_page.locator("#new-name")).not_to_have_value(name)
+        if name == "New user's notebook":
+            expect(fresh_page.get_by_role("button", name="Default notebook", exact=True)).to_contain_text(name)
+        else:
+            expect(fresh_page.locator("#new-name")).not_to_have_value(name)
     expect(fresh_page.get_by_role("button", name="Save defaults and open notebook", exact=True)).to_be_disabled()
     forbidden = fresh.request.post(app + "/api/workspace/defaults", data={"slug":"notebook-fixture","project":"sheets","notebook":"lifecycle","finish":False})
     assert forbidden.status == 403
     fresh.close()
     passed("first login enters resumable guided setup, creates a default workspace, explains its terms and refuses foreign default targets")
+    from deletion_cases import verify_deletion
+    verify_deletion(page, context, app, SQL, STATE, passed)
     assert not errors, errors
     passed("no browser JavaScript errors")
     output.joinpath("results.json").write_text(json.dumps({"passed": results, "page_errors": errors}, indent=2))
@@ -776,6 +784,8 @@ def main():
         SQL = sql
         for migration in sorted(ROOT.joinpath("migrations").glob("*.sql")):
             sql(migration.read_text())
+        for migration in sorted(ROOT.parent.joinpath("ledger/sql").glob("*.sql")):
+            sql(migration.read_text())
         sql(f"""
           insert into users(id,email,display_name) values('{USER}','notebook@example.invalid','Notebook UI fixture');
           insert into orgs(id,slug,name,auto_repairs) values('{ORG}','notebook-fixture','Notebook UI fixture',0);
@@ -807,8 +817,8 @@ def main():
                     "LIAISON_URL": f"http://127.0.0.1:{args.mock_port + 1}", "LIAISON_ROOT_KEY": "42" * 32,
                     "LODE_URL": f"http://127.0.0.1:{args.mock_port + 2}", "LODE_TOKEN": "fixture",
                     "LUN_URL": f"http://127.0.0.1:{args.mock_port + 3}", "LUN_TOKEN": "fixture", "TYPEDNOTES_AUTO_REPAIRS": "0"})
-        # Real services cannot be reached through the fixture mocks. No compute DB is needed.
-        env.pop("COMPUTE_DB_URL", None)
+        # The isolated database also exercises compute-schema/role teardown.
+        env["COMPUTE_DB_URL"] = env["DATABASE_URL"]
         proc = subprocess.Popen(["dx", "serve", "-p", "web", "--fullstack", "true", "--debug-symbols", "false", "--port", str(args.app_port),
                                  "--addr", "127.0.0.1", "--open", "false", "--interactive", "false", "--watch", "false", "--hot-reload", "false"],
                                 cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -836,7 +846,7 @@ def main():
             except Exception:
                 page.screenshot(path=str(output / "failure.png"), full_page=True)
                 output.joinpath("failure-dom.html").write_text(page.content())
-                output.joinpath("failure-state.json").write_text(json.dumps({"build": BUILD, "sessions": STATE["sessions"], "graph": json.loads(SQL("select row_to_json(g) from graphs g"))}, indent=2))
+                output.joinpath("failure-state.json").write_text(json.dumps({"build": BUILD, "sessions": STATE["sessions"], "graphs": json.loads(SQL("select coalesce(json_agg(g),'[]') from graphs g"))}, indent=2))
                 raise
             finally:
                 browser.close()

@@ -164,6 +164,7 @@ pub fn credential_path(org_id: &str, user_id: &str) -> String {
 /// Make sure (org, user) has its schema and role; their name.
 pub async fn ensure(org_id: &str, org_slug: &str, user_id: &str) -> Result<String, String> {
     let mut app = super::connector::lock(org_id).await.map_err(|e| super::errors::message(&e))?;
+    super::connector::require_actor(&mut app, org_id, user_id).await.map_err(|e| super::errors::message(&e))?;
     if let Some(row) = sqlx::query(
         "select name from compute_schemas where org_id = $1::uuid and user_id = $2::uuid",
     )
@@ -266,12 +267,17 @@ pub async fn drop_schema(name: &str) -> Result<(), String> {
         .begin()
         .await
         .map_err(|e| format!("the notebook database is unreachable: {e}"))?;
-    for statement in [
-        format!("grant \"{name}\" to current_user"),
-        format!("drop schema if exists \"{name}\" cascade"),
-        format!("revoke \"{name}\" from current_user"),
-        format!("drop role if exists \"{name}\""),
-    ] {
+    let exists: bool = sqlx::query("select exists(select 1 from pg_roles where rolname=$1) as present")
+        .bind(name).fetch_one(&mut *tx).await
+        .map_err(|e| format!("the notebook database is unreachable: {e}"))?.get("present");
+    let mut statements = Vec::new();
+    if exists { statements.push(format!("grant \"{name}\" to current_user")); }
+    statements.push(format!("drop schema if exists \"{name}\" cascade"));
+    if exists {
+        statements.push(format!("revoke \"{name}\" from current_user"));
+        statements.push(format!("drop role if exists \"{name}\""));
+    }
+    for statement in statements {
         sqlx::query(AssertSqlSafe(statement))
             .execute(&mut *tx)
             .await

@@ -11,7 +11,7 @@
 //! projects, notebooks, the inbox — and link here when something is missing.
 
 use api::{
-    current_user, delete_org, get_account, get_org, get_org_settings, get_project, remove_member,
+    current_user, delete_account, delete_org, get_account, get_org, get_org_settings, get_project, remove_member,
     rename_org, rename_project, set_display_name, set_org_settings, sign_out_elsewhere, Org,
     OrgSettings, Provider, MAX_AUTO_REPAIRS, EffectPolicy, NOTEBOOK_EFFECTS, WRITER_TOOLS,
     set_notebook_permissions,
@@ -290,6 +290,45 @@ pub fn AccountPage() -> Element {
                             AccountOrgRow { key: "{org.id}", org: org.clone(), me: me.clone(), on_left: move |_| account.restart() }
                         }
                     }
+                }
+            }
+            DeleteAccount { email: a.user.email.clone() }
+        }
+    }
+}
+
+#[component]
+fn DeleteAccount(email: String) -> Element {
+    let mut confirm = use_signal(String::new);
+    let mut busy = use_signal(|| false);
+    let mut error = use_signal(|| None::<String>);
+    let enabled = confirm().trim().eq_ignore_ascii_case(&email);
+    rsx! {
+        Card {
+            CardHeader {
+                CardTitle { "Delete your account" }
+                CardDescription {
+                    "Permanently delete your sign-ins, sessions, connections and owned projects with their notebooks. Organizations with no remaining members are deleted too. Transfer ownership first if other members remain and you are their only owner."
+                }
+            }
+            CardContent {
+                form { class: "conn-subform", onsubmit: move |evt: FormEvent| {
+                    evt.prevent_default();
+                    let confirmation = confirm();
+                    async move {
+                        busy.set(true); error.set(None);
+                        match delete_account(confirmation).await {
+                            Ok(()) => navigate_to("/"),
+                            Err(e) => { error.set(Some(error_message(&e))); busy.set(false); }
+                        }
+                    }
+                },
+                    Label { html_for: "delete-account-confirm", "Type your email to confirm: {email}" }
+                    Input { id: "delete-account-confirm", r#type: "email", autocomplete: "off",
+                        value: confirm(), disabled: busy(), oninput: move |evt: FormEvent| confirm.set(evt.value()) }
+                    Button { r#type: "submit", variant: ButtonVariant::Destructive, disabled: busy() || !enabled,
+                        if busy() { "Deleting account…" } else { "Delete my account permanently" } }
+                    if let Some(error) = error() { p { class: "orgs-error", role: "alert", "{error}" } }
                 }
             }
         }

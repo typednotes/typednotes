@@ -191,6 +191,7 @@ pub async fn slack_channels(
     let (connection, owner) = channel_connection(org, user, connection_id, Provider::Slack).await?;
     let body = connections::call_ok(
         org,
+        user,
         &connection,
         &owner,
         ProviderCall::new("channels.list", Vec::new(), json!({})),
@@ -501,7 +502,7 @@ pub async fn send_scoped(
     let scoped = connectors.iter().find(|grant| grant.connection == connection.id).and_then(|grant| grant.permissions.as_ref())
         .map_or(scoped.clone(), |permissions| scoped.intersect(permissions));
     let call = call.with_permissions(scoped).with_cell(cell_id);
-    let body = connections::call_ok(org, &connection, &owner, call).await?;
+    let body = connections::call_ok(org, user, &connection, &owner, call).await?;
     let external_id = sent_id(connection.provider, &body).map_err(bad_gateway)?;
     let id = record(NewMessage {
         channel_id: &routed.channel.id,
