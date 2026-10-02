@@ -10,10 +10,19 @@ pub use dioxus_primitives::select::SelectGroup;
 #[css_module("/src/components/select/style.css")]
 struct Styles;
 
+/// Application pickers are controlled so external resets and asynchronous
+/// account changes cannot leave an initial-only value displayed in the menu.
+pub fn use_selected<T: Clone + PartialEq + 'static>(value: ReadSignal<T>) -> ReadSignal<Option<T>> {
+    use_memo(move || Some(value())).into()
+}
+
 #[component]
 pub fn Select<T: Clone + PartialEq + 'static>(props: SelectProps<T>) -> Element {
+    let trigger_attributes: Vec<_> = props.attributes.iter().filter(|attribute|
+        matches!(attribute.name, "id" | "aria-label" | "aria-labelledby" | "aria-describedby" | "aria-invalid"))
+        .cloned().collect();
     let base = attributes!(div { class: Styles::dx_select });
-    let merged = merge_attributes(vec![base, props.attributes]);
+    let merged = merge_attributes(vec![base, props.attributes.into_iter().filter(|attribute| attribute.name != "id").collect()]);
 
     rsx! {
         select::Select {
@@ -30,6 +39,7 @@ pub fn Select<T: Clone + PartialEq + 'static>(props: SelectProps<T>) -> Element 
             attributes: merged,
             select::SelectTrigger {
                 class: Styles::dx_select_trigger,
+                attributes: trigger_attributes,
                 select::SelectValue {}
                 ChevronDown {
                     class: "dx-select-expand-icon",
@@ -47,8 +57,11 @@ pub fn Select<T: Clone + PartialEq + 'static>(props: SelectProps<T>) -> Element 
 
 #[component]
 pub fn SelectMulti<T: Clone + PartialEq + 'static>(props: SelectMultiProps<T>) -> Element {
+    let trigger_attributes: Vec<_> = props.attributes.iter().filter(|attribute|
+        matches!(attribute.name, "id" | "aria-label" | "aria-labelledby" | "aria-describedby" | "aria-invalid"))
+        .cloned().collect();
     let base = attributes!(div { class: Styles::dx_select });
-    let merged = merge_attributes(vec![base, props.attributes]);
+    let merged = merge_attributes(vec![base, props.attributes.into_iter().filter(|attribute| attribute.name != "id").collect()]);
 
     rsx! {
         select::SelectMulti {
@@ -65,6 +78,7 @@ pub fn SelectMulti<T: Clone + PartialEq + 'static>(props: SelectMultiProps<T>) -
             attributes: merged,
             select::SelectTrigger {
                 class: Styles::dx_select_trigger,
+                attributes: trigger_attributes,
                 select::SelectValue {}
                 ChevronDown {
                     class: "dx-select-expand-icon",

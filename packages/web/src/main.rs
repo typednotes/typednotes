@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 use ui::{Navbar, UserMenu};
 use views::{
     AccountView, GraphView, Home, Login, OrgSettingsHome, OrgSettingsView, OrgView,
-    ProjectSettingsHome, ProjectSettingsView, ProjectView,
+    ProjectSettingsHome, ProjectSettingsView, ProjectView, Organizations, Onboarding,
 };
 
 mod views;
@@ -14,6 +14,12 @@ enum Route {
     #[layout(WebNavbar)]
     #[route("/")]
     Home {},
+    #[route("/organizations")]
+    Organizations {},
+    #[route("/onboarding")]
+    Onboarding {},
+    #[route("/s/:token")]
+    SharedView { token: String },
     #[route("/login?:error")]
     Login { error: String },
     #[route("/orgs/:slug?:connected&:error")]
@@ -67,6 +73,11 @@ fn App() -> Element {
     }
 }
 
+#[component]
+fn SharedView(token: String) -> Element {
+    rsx! { ui::SharedNotebookPage { token } }
+}
+
 /// A web-specific Router around the shared `Navbar` component
 /// which allows us to use the web-specific `Route` enum.
 #[component]
@@ -85,6 +96,6 @@ fn WebNavbar() -> Element {
             UserMenu {}
         }
 
-        main { class: "page", Outlet::<Route> {} }
+        main { class: "page", ui::WorkspaceGuide {} Outlet::<Route> {} }
     }
 }

@@ -13,7 +13,7 @@ use super::connections::{self, ProviderCall};
 use super::db::{pool, slug_check};
 use super::errors::{bad_gateway, bad_request, conflict, db_error, forbidden, not_found};
 use crate::{
-    validate_org, validate_repo_name, Org, Project, Provider, Repo, RepoRef, SlugCheck, User,
+    validate_org, Org, Project, Provider, Repo, RepoRef, SlugCheck, User,
 };
 
 macro_rules! project_columns {
@@ -218,7 +218,6 @@ fn parse_repos(provider: Provider, body: &[u8]) -> Result<Vec<Repo>, String> {
     }
 }
 
-#[cfg(test)]
 fn parse_repo(provider: Provider, body: &[u8]) -> Result<Repo, String> {
     let unreadable = |e: serde_json::Error| format!("unreadable repository: {e}");
     match provider {
@@ -255,17 +254,24 @@ async fn code_connection(
     Ok((connection, owner))
 }
 
-/// The repositories a code connection can see, most recently active first
-/// (the first hundred).
+/// Compatibility entry point for the first bounded repository page.
 pub async fn list_repos(
     org: &Org,
     user: &User,
     connection_id: &str,
 ) -> Result<Vec<Repo>, ServerFnError> {
+    Ok(repo_page(org, user, connection_id, 1).await?.repos)
+}
+
+pub async fn repo_page(org: &Org, user: &User, connection_id: &str, page: u32) -> Result<crate::RepoPage, ServerFnError> {
+    if !(1..=100).contains(&page) { return Err(bad_request("repository page: 1 to 100")); }
     let (connection, owner) = code_connection(org, user, connection_id).await?;
-    let request = ProviderCall::new("repositories.list", Vec::new(), serde_json::json!({}));
+    let request = ProviderCall::new("repositories.list", Vec::new(), serde_json::json!({"page": page.to_string()}));
     let body = connections::call_ok(org, &connection, &owner, request).await?;
-    parse_repos(connection.provider, &body).map_err(bad_gateway)
+    let repos = parse_repos(connection.provider, &body).map_err(bad_gateway)?;
+    if repos.len() > 100 { return Err(bad_gateway("the provider exceeded the bounded repository page size")); }
+    let full = repos.len() == 100;
+    Ok(crate::RepoPage { repos, next_page: (full && page < 100).then_some(page + 1), truncated: full && page == 100 })
 }
 
 /// Make `full_name` the project's primary repository, after reading it
@@ -280,14 +286,10 @@ pub async fn set_repo(
 ) -> Result<Project, ServerFnError> {
     let (project, _) = get(org, project_slug).await?;
     let (connection, owner) = code_connection(org, user, connection_id).await?;
-    let full_name = validate_repo_name(connection.provider, full_name).map_err(bad_request)?;
-    if full_name.split('/').count() != 2 {
-        return Err(bad_request("nested GitLab namespaces require a native repository-selector adapter"));
-    }
-    let _ = owner;
-    let repo = list_repos(org, user, connection_id).await?.into_iter()
-        .find(|repo| repo.full_name == full_name)
-        .ok_or_else(|| bad_request("the repository is not in the connection's native inventory"))?;
+    let full_name = crate::repository_name(connection.provider, full_name).map_err(bad_request)?;
+    let body = connections::call_ok(org, &connection, &owner,
+        ProviderCall::new("repositories.read", full_name.split('/').map(str::to_string).collect(), serde_json::json!({"view":"metadata"}))).await?;
+    let repo = checked_repo(connection.provider, &full_name, &body).map_err(bad_gateway)?;
     sqlx::query(
         "update projects set repo_connection_id = $2::uuid, repo_provider = $3, \
          repo_full_name = $4, repo_web_url = $5, repo_default_branch = $6 where id = $1::uuid",
@@ -302,6 +304,17 @@ pub async fn set_repo(
     .await
     .map_err(db_error)?;
     Ok(get(org, project_slug).await?.0)
+}
+
+fn checked_repo(provider: Provider, expected: &str, body: &[u8]) -> Result<Repo, String> {
+    let repo = parse_repo(provider, body)?;
+    crate::repository_name(provider, &repo.full_name)?;
+    let matches = if provider == Provider::Github { repo.full_name.eq_ignore_ascii_case(expected) } else { repo.full_name == expected };
+    let host = if provider == Provider::Github { "https://github.com" } else { "https://gitlab.com" };
+    if !matches || repo.web_url.trim_end_matches('/') != format!("{host}/{}", repo.full_name) {
+        return Err("repository metadata does not match the selected provider and resource".into());
+    }
+    Ok(repo)
 }
 
 pub async fn clear_repo(org: &Org, project_slug: &str) -> Result<Project, ServerFnError> {
@@ -363,5 +376,19 @@ mod tests {
             ),
             "https://gitlab.com/api/v4/projects/grp%2Fsub%2Fproj"
         );
+    }
+
+    #[test]
+    fn direct_names_and_metadata_are_bound_to_the_selected_provider() {
+        assert_eq!(crate::repository_name(Provider::Github, " https://github.com/Org/Repo.git ").unwrap(), "Org/Repo");
+        assert_eq!(crate::repository_name(Provider::Gitlab, "group/repo").unwrap(), "group/repo");
+        for bad in ["https://evil.example/owner/repo", "https://github.com.evil.example/owner/repo", "https://github.com/owner/repo?ref=main", "owner/../repo", "https://gitlab.com/group/repo"] {
+            assert!(crate::repository_name(Provider::Github, bad).is_err());
+        }
+        assert!(crate::repository_name(Provider::Gitlab, "group/sub/repo").is_err());
+        let good = br#"{"full_name":"Org/Repo","html_url":"https://github.com/Org/Repo","default_branch":"main"}"#;
+        assert!(checked_repo(Provider::Github, "org/repo", good).is_ok());
+        assert!(checked_repo(Provider::Github, "other/repo", good).is_err());
+        assert!(checked_repo(Provider::Github, "Org/Repo", br#"{"full_name":"Org/Repo","html_url":"javascript:alert(1)"}"#).is_err());
     }
 }

@@ -116,7 +116,7 @@ pub fn connector_operations(provider: Provider) -> &'static [ConnectorOperation]
         ],
         Provider::Whatsapp | Provider::Signal => operations!["messages.send" => "Send messages", true],
         Provider::Github | Provider::Gitlab => operations![
-            "repositories.list" => "List repositories", false; "repositories.read" => "Read code", false;
+            "repositories.list" => "List repositories", false; "repositories.read" => "Read repositories and code", false;
             "repositories.write" => "Write code", true; "repositories.delete" => "Delete code files", true; "issues.read" => "Read issues", false;
             "issues.write" => "Update issues", true; "pull_requests.write" => "Update pull requests", true;
         ],

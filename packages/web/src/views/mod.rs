@@ -1,5 +1,5 @@
 mod home;
-pub use home::{Home, Login};
+pub use home::{Home, Login, Organizations, Onboarding};
 
 mod org;
 pub use org::{

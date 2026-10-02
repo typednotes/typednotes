@@ -1,6 +1,33 @@
 # Push order and CI gates
 
-## Current broker release: v0.6.2
+## Current UX release: app v0.9.0, broker v0.6.3, runtime v0.3.1
+
+The local batch is coordinated across four repositories. The user can push each
+main branch and its new tag together:
+
+```sh
+# In liaison:
+git push origin main v0.6.3
+# In lun:
+git push origin main v0.3.1
+# In typednotes:
+git push origin main v0.9.0
+```
+
+These source/dependency pins remain on already published SDK refs. Main CI and
+image publication may run in parallel; all three must succeed before deployment.
+The publishers at these new commits wait up to two hours for exact-SHA main CI.
+Previously published tags remain immutable.
+
+Then, in **typednotes-infra**, push `main` and its source tag `v0.6.1` together.
+Wait for its offline CI and read-only Plan; use the existing manual Apply after
+review. This declaration adopts the app's v0.9.0 SQL history through 0011 before
+app rollout and resolves the three `latest` images to immutable digests. No new
+Lode or Linen release is required. There is no automatic cloud apply from a tag.
+See [v0.9.0 notes](release-0.9.0.md) and the
+[fleet rollout](https://github.com/typednotes/typednotes-infra/blob/main/docs/release-0.6.1.md).
+
+## Previous broker release: v0.6.2
 
 The GitHub User-Agent fix and shared CI waiting are prepared in Liaison v0.6.2.
 From the broker repository the user can push both refs together:
@@ -148,7 +175,7 @@ new commit/ref, then `gh run watch RUN_ID --repo typednotes/REPO --exit-status`.
 A green image build does not substitute for a green test workflow: these run
 independently. Avoid `--tags`, which could publish other locally prepared tags.
 
-## Deployment after the push gates
+## Historical deployment after the push gates
 
 The existing Typednotes-infra fleet selects `latest` for the app image and
 resolves selectors to immutable image digests during plan/apply. Publishing a

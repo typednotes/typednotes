@@ -5,7 +5,7 @@ use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardContent, CardDescription, CardHeader, CardTitle};
 use crate::components::input::Input;
 use crate::components::label::Label;
-use crate::components::select::{Select, SelectOption};
+use crate::components::select::{use_selected, Select, SelectOption};
 use crate::{error_message, navigate_to};
 
 /// An org's members: owners and admins add people by email and remove
@@ -121,6 +121,7 @@ fn MemberRow(slug: String, member: Member, on_removed: EventHandler<bool>) -> El
 fn AddMember(slug: String, role: String, on_added: EventHandler<()>) -> Element {
     let mut email = use_signal(String::new);
     let mut new_role = use_signal(|| "member".to_string());
+    let selected_role = use_selected(new_role.into());
     let mut error = use_signal(|| None::<String>);
     let mut done = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
@@ -164,7 +165,7 @@ fn AddMember(slug: String, role: String, on_added: EventHandler<()>) -> Element 
                 div { class: "orgs-field conn-select",
                     Label { html_for: "member-role", "Role" }
                     Select::<String> {
-                        default_value: new_role(),
+                        id: "member-role", value: Some(selected_role), disabled: busy(),
                         aria_label: "Role",
                         on_value_change: move |v: Option<String>| {
                             if let Some(r) = v {

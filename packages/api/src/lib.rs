@@ -85,6 +85,16 @@ pub async fn logout() -> Result<(), ServerFnError> {
 
 // ── Account ─────────────────────────────────────────────────────────────
 
+#[post("/api/workspace")]
+pub async fn get_workspace() -> Result<UserWorkspace, ServerFnError> {
+    server::workspace::get(&session::require_user().await?).await
+}
+
+#[post("/api/workspace/defaults")]
+pub async fn set_workspace_defaults(slug: String, project: Option<String>, notebook: Option<String>, finish: bool) -> Result<UserWorkspace, ServerFnError> {
+    server::workspace::set(&session::require_user().await?, &slug, project.as_deref(), notebook.as_deref(), finish).await
+}
+
 /// The caller's account: profile, sign-in methods, sessions, orgs.
 #[get("/api/account")]
 pub async fn get_account() -> Result<Account, ServerFnError> {
@@ -448,6 +458,30 @@ pub async fn test_connection(slug: String, id: String) -> Result<TestResult, Ser
 
 // ── Projects ────────────────────────────────────────────────────────────
 
+#[post("/api/notebook/share")]
+pub async fn create_notebook_share(slug: String, project: String, graph: String) -> Result<ShareCreated, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    server::shares::create(&org, &user, &project, &graph).await
+}
+
+#[post("/api/notebook/share/revoke")]
+pub async fn revoke_notebook_share(slug: String, project: String, graph: String, share: String) -> Result<(), ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    server::shares::revoke(&org, &user, &project, &graph, &share).await
+}
+
+#[post("/api/notebook/shares")]
+pub async fn list_notebook_shares(slug: String, project: String, graph: String) -> Result<Vec<ShareInfo>, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    server::shares::list(&org, &user, &project, &graph).await
+}
+
+#[post("/api/shared-notebook")]
+pub async fn get_shared_notebook(token: String) -> Result<SharedNotebook, ServerFnError> { server::shares::get(&token).await }
+
+#[post("/api/shared-notebook/input")]
+pub async fn feed_shared_notebook(token: String, cell: String, value: serde_json::Value) -> Result<SharedNotebook, ServerFnError> { server::shares::feed(&token, &cell, value).await }
+
 /// The org's projects, newest first.
 #[post("/api/projects")]
 pub async fn list_projects(slug: String) -> Result<Vec<Project>, ServerFnError> {
@@ -506,6 +540,12 @@ pub async fn list_repos(slug: String, connection: String) -> Result<Vec<Repo>, S
     projects::list_repos(&org, &user, &connection).await
 }
 
+#[post("/api/repos/page")]
+pub async fn list_repo_page(slug: String, connection: String, page: u32) -> Result<RepoPage, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    projects::repo_page(&org, &user, &connection, page).await
+}
+
 /// Make a repository the project's primary one.
 #[post("/api/project/repo")]
 pub async fn set_project_repo(
@@ -554,6 +594,13 @@ pub async fn add_slack_channel(
 ) -> Result<Channel, ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     channels::add_slack(&org, &user, &project, &connection, &channel).await
+}
+
+/// Reuse an existing WhatsApp or Signal sender as a project interface.
+#[post("/api/channels/existing")]
+pub async fn add_existing_interface(slug: String, project: String, connection: String) -> Result<Channel, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    channels::add_existing(&org, &user, &project, &connection).await
 }
 
 /// Connect a WhatsApp Cloud API number as an interface of the project.

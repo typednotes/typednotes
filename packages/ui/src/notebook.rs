@@ -22,7 +22,7 @@ use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardContent, CardDescription, CardHeader, CardTitle};
 use crate::components::input::Input;
 use crate::components::label::Label;
-use crate::components::select::{Select, SelectOption};
+use crate::components::select::{use_selected, Select, SelectOption};
 use crate::components::textarea::Textarea;
 use crate::connections::{PermissionEditor, CONNECTIONS_CSS};
 use crate::orgs::ORGS_CSS;
@@ -242,7 +242,7 @@ pub fn NotebookPage(
                                 }
                             },
                         }
-                        ActivityCard { detail: d.clone() }
+                        details { class: "nb-advanced", summary { "Activity and diagnostics" } ActivityCard { detail: d.clone() } }
                     }
                 }
             }
@@ -335,7 +335,7 @@ fn Header(
     rsx! {
         Card {
             CardHeader {
-                CardTitle { "{detail.graph.name}" }
+                CardTitle { title: "Notebook: the basic work unit, a reactive graph of described cells, inputs and outputs.", "{detail.graph.name}" }
                 CardDescription {
                     code { "{detail.org.slug}/{detail.project.slug}/{detail.graph.slug}" }
                     " · "
@@ -360,6 +360,8 @@ fn Header(
                         Link { to: "/orgs/{slug}/projects/{project}/settings/repository", "Choose one in the project's settings" }
                     }
                 }
+                details { class: "nb-advanced nb-setup", open: detail.graph.model_name.is_none(),
+                    summary { title: "AI model, token costs and default-workspace settings.", "Notebook setup" }
                 ModelPicker {
                     slug: slug.clone(),
                     project: project.clone(),
@@ -367,7 +369,11 @@ fn Header(
                     ai,
                     on_changed: move |_| on_changed.call(()),
                 }
+                Link { to: "/onboarding", "Choose your default workspace" }
+                }
                 div { class: "conn-subform",
+                    details { class: "nb-advanced", open: implementing,
+                        summary { "Writing instructions" }
                     div { class: "orgs-field conn-wide",
                         Label { html_for: "nb-note",
                             if implementing { "Steer the writing (taken into account at the next step)" } else { "A note for the code writing (optional)" }
@@ -380,6 +386,7 @@ fn Header(
                             oninput: move |e: FormEvent| note.set(e.value()),
                         }
                     }
+                    }
                     div { class: "conn-actions",
                         if implementing {
                             Button { disabled: busy() || note().trim().is_empty(), onclick: move |_| steer(true), "Steer" }
@@ -390,6 +397,8 @@ fn Header(
                                 onclick: move |_| implement(false),
                                  if graph.commit.is_some() { "Regenerate all code" } else { "Generate all code" }
                             }
+                            details { class: "nb-advanced nb-maintenance",
+                                summary { "Session and repository controls" }
                             Button {
                                 variant: ButtonVariant::Outline,
                                 disabled: busy() || detail.project.repo.is_none(),
@@ -399,18 +408,23 @@ fn Header(
                             if graph.status == "ready" {
                                 Button { variant: ButtonVariant::Outline, disabled: busy(), onclick: move |_| restart("restart"), "Restart session" }
                             }
+                            }
                         }
+                        details { class: "nb-advanced nb-danger",
+                            summary { "Delete notebook" }
                         Button {
                             size: ButtonSize::Sm,
                             variant: if confirming() { ButtonVariant::Destructive } else { ButtonVariant::Ghost },
                             onclick: delete,
                             if confirming() { "Confirm: delete the notebook, its cells and secrets" } else { "Delete notebook" }
                         }
+                        }
                     }
                 }
                 if let Some(e) = error() {
                     p { class: "orgs-error", "{e}" }
                 }
+                crate::shares::ShareControls { slug: slug.clone(), project: project.clone(), graph: g.clone(), ready: graph.status == "ready" }
             }
         }
     }
@@ -418,7 +432,7 @@ fn Header(
 
 /// The AI connection and model lode works with.
 #[component]
-fn ModelPicker(
+pub(crate) fn ModelPicker(
     slug: String,
     project: String,
     graph: Graph,
@@ -437,6 +451,7 @@ fn ModelPicker(
             .unwrap_or_default()
     });
     let mut model = use_signal(|| graph.model_name.clone().unwrap_or_default());
+    let selected_connection = use_selected(connection.into());
     let ai_for_price = ai.clone();
     let price_provider = use_memo(move || {
         ai_for_price
@@ -472,12 +487,11 @@ fn ModelPicker(
             div { class: "orgs-field conn-select",
                 Label { html_for: "nb-model-conn", "Model through" }
                 Select::<String> {
-                    default_value: connection(),
+                    id: "nb-model-conn", value: Some(selected_connection), disabled: graph.status == "implementing",
                     aria_label: "AI connection",
                     on_value_change: move |v: Option<String>| {
                         if let Some(id) = v {
-                            connection.set(id);
-                            model.set(String::new());
+                            if id != connection() { connection.set(id); model.set(String::new()); }
                         }
                     },
                     for (i, c) in ai.iter().enumerate() {
@@ -550,6 +564,7 @@ fn Cells(
     on_fed: EventHandler<FeedResult>,
 ) -> Element {
     let mut order = use_signal(|| CellOrder::Declaration);
+    let selected_order = use_selected(order.into());
     let mut diagram = use_signal(|| false);
     let mut selected = use_signal(|| None::<String>);
     let implementing = graph.status == "implementing";
@@ -570,10 +585,11 @@ fn Cells(
                 }
             }
             CardContent {
+                details { class: "nb-advanced nb-view-options", summary { "View options" }
                 div { class: "nb-toolbar",
                     div { class: "conn-select",
                         Select::<CellOrder> {
-                            default_value: order(), aria_label: "Cell order",
+                            value: Some(selected_order), aria_label: "Cell order",
                             on_value_change: move |value: Option<CellOrder>| { if let Some(value) = value { order.set(value); } },
                             SelectOption::<CellOrder> { index: 0usize, value: CellOrder::Declaration, text_value: "Declaration order", "Declaration order" }
                             SelectOption::<CellOrder> { index: 1usize, value: CellOrder::Name, text_value: "Name", "Name" }
@@ -582,6 +598,7 @@ fn Cells(
                     }
                     Button { variant: if !diagram() { ButtonVariant::Secondary } else { ButtonVariant::Ghost }, aria_pressed: (!diagram()).to_string(), onclick: move |_| diagram.set(false), "Notebook" }
                     Button { variant: if diagram() { ButtonVariant::Secondary } else { ButtonVariant::Ghost }, aria_pressed: diagram().to_string(), onclick: move |_| diagram.set(true), "Dependency graph" }
+                }
                 }
                 if detail.cells.is_empty() {
                     p { class: "orgs-empty", "No cell yet — add the first one below." }
@@ -617,6 +634,7 @@ fn Cells(
                         }
                     }
                 }
+                details { class: "nb-advanced nb-add-cell", open: detail.cells.is_empty(), summary { "Add a cell" }
                 CellEditor {
                     slug: slug.clone(),
                     project: project.clone(),
@@ -629,6 +647,7 @@ fn Cells(
                     connections: connections.clone(),
                     on_saved: move |_| on_changed.call(()),
                     on_cancel: None,
+                }
                 }
             }
         }
@@ -824,6 +843,7 @@ fn CellView(
                 }
             }
             p { class: "nb-description", "{cell.description}" }
+            details { class: "nb-advanced", summary { "Dependencies and configuration" }
             div { class: "nb-declarations",
                 span { class: "conn-meta", "Inputs" }
                 if cell_dependencies(&cell, &cells, &nodes).is_empty() {
@@ -845,6 +865,7 @@ fn CellView(
             if let Some(label) = channel_label {
                 p { class: "conn-meta", "interface: {label}" }
             }
+            }
             Lifecycle {
                 slug: slug.clone(),
                 project: project.clone(),
@@ -856,9 +877,11 @@ fn CellView(
                 run,
                 on_started: move |g: Graph| on_started.call(g),
             }
+            details { class: "nb-advanced nb-code-details", summary { "Implementation and wiring" }
             ImplView { cell: cell.clone() }
             if let Some(n) = node.clone() {
                 Relations { node: n, nodes: nodes.clone(), sources, sinks }
+            }
             }
             match cell.cell_type {
                 CellType::UiInput => rsx! {
@@ -1320,6 +1343,7 @@ fn InputWidget(
         (_, Some(v)) => v.to_string(),
     };
     let mut text = use_signal(|| initial);
+    let selected_text = use_selected(text.into());
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     let id = format!("nb-input-{}", cell.id);
@@ -1415,7 +1439,7 @@ fn InputWidget(
                 Widget::Select(choices) => rsx! {
                     div { class: "conn-select",
                         Select::<String> {
-                            default_value: text(),
+                            id: id.clone(), value: Some(selected_text),
                             aria_label: "{cell.name}",
                             disabled,
                             on_value_change: move |v: Option<String>| {
@@ -1643,6 +1667,10 @@ fn CellEditor(
             .clone()
             .unwrap_or_else(|| "table".to_string())
     });
+    let selected_kind = use_selected(cell_type.into());
+    let selected_channel = use_selected(channel.into());
+    let selected_storage = use_selected(connection.into());
+    let selected_format = use_selected(format.into());
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     let mut shown_url = use_signal(|| None::<String>);
@@ -1732,7 +1760,7 @@ fn CellEditor(
             if !editing {
                 div { class: "conn-select conn-select-wide",
                     Select::<CellType> {
-                        default_value: cell_type(),
+                        value: Some(selected_kind), disabled: busy(),
                         aria_label: "Kind of cell",
                         on_value_change: move |v: Option<CellType>| {
                             if let Some(v) = v {
@@ -1830,7 +1858,7 @@ fn CellEditor(
                         div { class: "orgs-field conn-select conn-select-wide",
                             Label { html_for: "{prefix}-channel", "Interface" }
                             Select::<String> {
-                                default_value: channel(),
+                                id: "{prefix}-channel", value: Some(selected_channel), disabled: busy(),
                                 aria_label: "Interface",
                                 on_value_change: move |v: Option<String>| {
                                     if let Some(v) = v {
@@ -1871,7 +1899,7 @@ fn CellEditor(
                             div { class: "orgs-field conn-select",
                                 Label { html_for: "{prefix}-conn", "Storage" }
                                 Select::<String> {
-                                    default_value: connection(),
+                                    id: "{prefix}-conn", value: Some(selected_storage), disabled: busy(),
                                     aria_label: "Storage connection",
                                     on_value_change: move |v: Option<String>| {
                                         if let Some(v) = v {
@@ -1894,7 +1922,7 @@ fn CellEditor(
                     div { class: "orgs-field conn-select",
                         Label { html_for: "{prefix}-format", "Shown as" }
                         Select::<String> {
-                            default_value: format(),
+                            id: "{prefix}-format", value: Some(selected_format), disabled: busy(),
                             aria_label: "Format",
                             on_value_change: move |v: Option<String>| {
                                 if let Some(v) = v {

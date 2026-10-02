@@ -347,6 +347,26 @@ pub fn validate_repo_name(provider: Provider, full_name: &str) -> Result<String,
     }
 }
 
+/// The repository selector accepts a name or a public-host HTTPS repository
+/// URL, but never turns that URL into a broker transport or credential origin.
+pub fn repository_name(provider: Provider, input: &str) -> Result<String, String> {
+    let host = match provider {
+        Provider::Github => "https://github.com/",
+        Provider::Gitlab => "https://gitlab.com/",
+        _ => return Err("choose a GitHub or GitLab connection".into()),
+    };
+    let input = input.trim();
+    let name = if input.contains("://") {
+        let path = input.strip_prefix(host).ok_or("repository URL must use the selected provider's HTTPS host")?.trim_end_matches('/');
+        path.strip_suffix(".git").unwrap_or(path)
+    } else { input };
+    let name = validate_repo_name(provider, name)?;
+    if name.split('/').count() != 2 {
+        return Err("native repository selectors support owner/repository; nested GitLab namespaces are not supported".into());
+    }
+    Ok(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

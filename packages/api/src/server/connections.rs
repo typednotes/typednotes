@@ -7,7 +7,7 @@ use sqlx::postgres::PgRow;
 use sqlx::Row;
 
 use super::db::pool;
-use super::errors::{bad_gateway, db_error, forbidden, not_found, unavailable};
+use super::errors::{bad_gateway, conflict, db_error, forbidden, not_found, unavailable};
 use super::liaison::{self, Call, Outcome, Request};
 use super::{connector, vault};
 use crate::{Connection, Org, Provider, TestResult, User};
@@ -83,6 +83,13 @@ pub async fn list(org: &Org, user: &User) -> Result<Vec<Connection>, ServerFnErr
     Ok(rows.iter().map(|r| connection_of(r, org, user)).collect())
 }
 
+pub async fn ensure_available(org: &Org, provider: Provider) -> Result<(), ServerFnError> {
+    let existing = sqlx::query("select 1 from connections where org_id=$1::uuid and provider=$2 limit 1")
+        .bind(&org.id).bind(provider.id()).fetch_optional(pool()?).await.map_err(db_error)?;
+    if existing.is_some() { return Err(conflict(format!("{} is already connected to this organization; use or remove that connection first", provider.name()))); }
+    Ok(())
+}
+
 /// One connection of `org`, with its owner's id (which names its vault path).
 pub async fn get(org: &Org, user: &User, id: &str) -> Result<(Connection, String), ServerFnError> {
     let row = sqlx::query(concat!(
@@ -124,8 +131,14 @@ pub async fn store(
             "connections are disabled: the vault is not configured",
         ));
     }
-    let pool = pool()?;
-    let id: String = sqlx::query(
+    let mut tx = connector::lock(&org.id).await?;
+    let guard = sqlx::query("select exists(select 1 from pg_trigger where tgrelid='public.connections'::regclass and tgname='connections_provider_once' and tgenabled in ('O','A')) as ready")
+        .fetch_one(&mut *tx).await.map_err(db_error)?.get::<bool,_>("ready");
+    if !guard { return Err(unavailable("connection creation requires migration 0009_connection_provider_guard.sql")); }
+    let existing = sqlx::query("select 1 from connections where org_id=$1::uuid and provider=$2 limit 1")
+        .bind(&org.id).bind(new.provider.id()).fetch_optional(&mut *tx).await.map_err(db_error)?;
+    if existing.is_some() { return Err(conflict(format!("{} is already connected to this organization; use or remove that connection first", new.provider.name()))); }
+    let inserted = sqlx::query(
         "insert into connections (org_id, user_id, provider, label, base_url, external_id) \
          values ($1::uuid, $2::uuid, $3, $4, $5, $6) returning id::text as id",
     )
@@ -135,10 +148,13 @@ pub async fn store(
     .bind(new.label)
     .bind(new.base_url)
     .bind(new.external_id)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
-    .map_err(db_error)?
-    .get("id");
+    .map_err(|error| match error {
+        sqlx::Error::Database(ref e) if e.constraint() == Some("connections_org_provider_once") => conflict(format!("{} is already connected to this organization", new.provider.name())),
+        other => db_error(other),
+    })?;
+    let id: String = inserted.get("id");
 
     if let Err(e) = vault::write(
         &vault::credential_path(new.provider, &user.id, &id),
@@ -147,10 +163,7 @@ pub async fn store(
     .await
     {
         eprintln!("vault write for connection {id} failed: {e}");
-        let _ = sqlx::query("delete from connections where id = $1::uuid")
-            .bind(&id)
-            .execute(pool)
-            .await;
+        let _ = vault::delete(&vault::credential_path(new.provider, &user.id, &id)).await;
         return Err(bad_gateway(format!(
             "could not store the credential in the vault: {e}"
         )));
@@ -159,10 +172,9 @@ pub async fn store(
     let path = vault::credential_path(new.provider, &user.id, &id);
     if let Err(e) = vault::write(&format!("{path}/permissions"), &serde_json::json!(permissions)).await {
         let _ = vault::delete(&path).await;
-        let _ = sqlx::query("delete from connections where id = $1::uuid").bind(&id).execute(pool).await;
+        let _ = vault::delete(&format!("{path}/permissions")).await;
         return Err(bad_gateway(format!("could not provision connection permissions: {e}")));
     }
-    let mut tx = connector::lock(&org.id).await?;
     let policy = connector::policy(&mut tx, &org.id).await?;
     let organization = if policy.allows_connector(new.provider) {
         policy.connector_ceilings.get(new.provider.id()).cloned().unwrap_or_else(|| permissions.clone())

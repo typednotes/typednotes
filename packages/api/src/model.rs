@@ -12,6 +12,42 @@ pub struct User {
     pub display_name: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UserWorkspace {
+    pub org: Option<Org>,
+    pub project: Option<Project>,
+    pub notebook: Option<crate::Graph>,
+    pub requirements: Vec<String>,
+    pub setup_required: bool,
+    pub default_url: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SharedCell {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub input: Option<String>,
+    pub input_type: Option<String>,
+    pub choices: Vec<String>,
+    pub node_id: Option<u64>,
+    pub renderer: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SharedNotebook {
+    pub name: String,
+    pub cells: Vec<SharedCell>,
+    pub nodes: Vec<crate::GraphNode>,
+    pub inputs: std::collections::BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShareCreated { pub id: String, pub url: String }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShareInfo { pub id: String, pub created_at: String }
+
 /// An org, as a member sees it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Org {
@@ -514,6 +550,15 @@ pub struct Repo {
     pub web_url: String,
     pub default_branch: Option<String>,
     pub private: bool,
+}
+
+/// A bounded native inventory page. Namespaces are derived from repositories
+/// this credential can see; this does not grant organization-directory access.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RepoPage {
+    pub repos: Vec<Repo>,
+    pub next_page: Option<u32>,
+    pub truncated: bool,
 }
 
 /// A project's messaging interface: one inbound address.

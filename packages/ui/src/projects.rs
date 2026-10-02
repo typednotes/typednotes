@@ -1,6 +1,6 @@
 use api::{
     clear_project_repo, current_user, delete_project, get_project, health, list_connections,
-    list_projects, list_repos, set_project_repo, Connection, Project, Provider,
+    list_projects, list_repo_page, repository_name, set_project_repo, Connection, Project, Provider, Repo,
 };
 use dioxus::prelude::*;
 
@@ -8,7 +8,8 @@ use crate::auth::LoginPanel;
 use crate::channels::InboxPanel;
 use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardContent, CardDescription, CardHeader, CardTitle};
-use crate::components::select::{Select, SelectOption};
+use crate::components::select::{use_selected, Select, SelectOption};
+use crate::components::{input::Input, label::Label};
 use crate::connections::{connect_url, oauth_ready, CONNECTIONS_CSS};
 use crate::error_message;
 use crate::navigate_to;
@@ -117,7 +118,7 @@ pub fn ProjectPage(
                     rsx! {
                         Card {
                             CardHeader {
-                                CardTitle { "{d.project.name}" }
+                                CardTitle { title: "Project: a primary code repository, its notebooks and messaging interfaces.", "{d.project.name}" }
                                 CardDescription {
                                     "in {d.org.name} · "
                                     match &d.project.repo {
@@ -256,7 +257,11 @@ pub(crate) fn RepoPanel(slug: String, project: Project, on_changed: EventHandler
                     }
                 }
                 if picking() {
-                    if code.is_empty() {
+                    if connections().is_none() {
+                        p { class: "conn-meta", role: "status", "Loading code connections…" }
+                    } else if let Some(Err(error)) = connections() {
+                        p { class: "orgs-error", "Could not load code connections: {error_message(&error)}" }
+                    } else if code.is_empty() {
                         p { class: "conn-meta", "Connect a code host first; you will come back here." }
                         div { class: "conn-oauth",
                             for provider in Provider::CODE {
@@ -274,6 +279,7 @@ pub(crate) fn RepoPanel(slug: String, project: Project, on_changed: EventHandler
                         }
                     } else {
                         RepoPicker {
+                            key: "{slug}-{project.id}",
                             slug: slug.clone(),
                             project: project.slug.clone(),
                             connections: code,
@@ -296,40 +302,70 @@ pub(crate) fn RepoPanel(slug: String, project: Project, on_changed: EventHandler
 fn RepoPicker(
     slug: String,
     project: String,
-    connections: Vec<Connection>,
+    connections: ReadSignal<Vec<Connection>>,
     on_set: EventHandler<()>,
 ) -> Element {
     let mut connection = use_signal(|| {
-        connections
+        connections()
             .first()
             .map(|c| c.id.clone())
             .unwrap_or_default()
     });
-    let mut repo = use_signal(|| None::<String>);
+    let mut owner = use_signal(String::new);
+    let mut repo = use_signal(String::new);
+    let mut filter = use_signal(String::new);
+    let mut page = use_signal(|| 1_u32);
+    let mut previous = use_signal(Vec::<Repo>::new);
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
+    let selected_connection = use_selected(connection.into());
+    let selected_owner = use_selected(owner.into());
     let org = slug.clone();
     let permissions_href = format!("/orgs/{slug}/settings/notebooks");
-    let repos = use_resource(move || {
+    let mut pages = use_resource(move || {
         let org = org.clone();
+        let id = connection();
+        let requested_page = page();
         async move {
-            let id = connection();
-            if id.is_empty() {
-                return Ok(Vec::new());
-            }
-            list_repos(org, id).await.map_err(|e| error_message(&e))
+            let result = if id.is_empty() { Err("Select a code connection.".into()) }
+                else { list_repo_page(org, id.clone(), requested_page).await.map_err(|e| error_message(&e)) };
+            (id, requested_page, result)
         }
     });
+    let current = pages().filter(|(id, number, _)| *id == connection() && *number == page()).map(|(_, _, result)| result);
+    let mut inventory = previous();
+    if let Some(Ok(current)) = &current { inventory.extend(current.repos.clone()); }
+    inventory.sort_by(|a, b| a.full_name.cmp(&b.full_name));
+    inventory.dedup_by(|a, b| a.full_name == b.full_name);
+    let owners: Vec<String> = inventory.iter().filter_map(|r| r.full_name.split_once('/').map(|(owner, _)| owner.to_string()))
+        .collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+    let choices: Vec<Repo> = inventory.iter().filter(|r| owner().is_empty() || r.full_name.split_once('/').is_some_and(|(name, _)| name == owner()))
+        .filter(|r| r.full_name.to_lowercase().contains(&filter().to_lowercase())).cloned().collect();
+    use_effect(move || {
+        let id = connection();
+        if !id.is_empty() && !connections().iter().any(|c| c.id == id) {
+            connection.set(String::new()); repo.set(String::new()); owner.set(String::new());
+            previous.set(Vec::new()); page.set(1);
+        }
+    });
+    let provider = connections().iter().find(|c| c.id == connection()).map(|c| c.provider);
+    let parsed = provider.and_then(|provider| repository_name(provider, &repo()).ok());
+    let displayed_repository = use_memo(move || {
+        connections().iter().find(|c| c.id == connection()).and_then(|c| repository_name(c.provider, &repo()).ok())
+    });
+    let loading = pages.state()() == UseResourceState::Pending;
+    let can_load = current.as_ref().and_then(|result| result.as_ref().ok()).and_then(|result| result.next_page);
+    let choice_count = choices.len();
 
-    let save = move |_| {
+    let save = move |event: FormEvent| {
+        event.prevent_default();
         let (slug, project) = (slug.clone(), project.clone());
+        let selected_connection = connection();
+        let selected_repo = repo();
         async move {
-            let Some(full_name) = repo() else {
-                error.set(Some("choose a repository".to_string()));
-                return;
-            };
             busy.set(true);
-            match set_project_repo(slug, project, connection(), full_name).await {
+            error.set(None);
+            match set_project_repo(slug, project, selected_connection, selected_repo).await {
                 Ok(_) => {
                     error.set(None);
                     on_set.call(());
@@ -341,19 +377,22 @@ fn RepoPicker(
     };
 
     rsx! {
-        div { class: "conn-subform",
-            div { class: "conn-picker",
-                div { class: "conn-select",
+        form { class: "conn-subform repo-picker", onsubmit: save,
+            div { class: "conn-grid",
+                div { class: "orgs-field conn-select",
+                    Label { html_for: "repo-connection", "Code connection" }
                     Select::<String> {
-                        default_value: connection(),
+                        id: "repo-connection", value: Some(selected_connection), disabled: busy(),
                         aria_label: "Code connection",
                         on_value_change: move |v: Option<String>| {
                             if let Some(id) = v {
-                                repo.set(None);
-                                connection.set(id);
+                                if id != connection() {
+                                    repo.set(String::new()); owner.set(String::new()); filter.set(String::new());
+                                    previous.set(Vec::new()); page.set(1); error.set(None); connection.set(id);
+                                }
                             }
                         },
-                        for (i, c) in connections.iter().enumerate() {
+                        for (i, c) in connections().iter().enumerate() {
                             SelectOption::<String> {
                                 key: "{c.id}",
                                 index: i,
@@ -364,31 +403,63 @@ fn RepoPicker(
                         }
                     }
                 }
-                match repos() {
-                    None => rsx! { p { class: "conn-meta", "Loading repositories…" } },
-                    Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not list repositories: {e} ", Link { to: permissions_href.clone(), "Review notebook permissions" } } },
-                    Some(Ok(list)) if list.is_empty() => rsx! { p { class: "orgs-empty", "This connection sees no repository." } },
-                    Some(Ok(list)) => rsx! {
-                        div { class: "conn-select conn-select-wide", key: "{connection}",
-                            Select::<String> {
-                                aria_label: "Repository",
-                                on_value_change: move |v: Option<String>| repo.set(v),
-                                for (i, r) in list.iter().enumerate() {
-                                    SelectOption::<String> {
-                                        key: "{r.full_name}",
-                                        index: i,
-                                        value: r.full_name.clone(),
-                                        text_value: r.full_name.clone(),
-                                        "{r.full_name}"
-                                        if r.private { span { class: "conn-meta", " · private" } }
-                                    }
-                                }
-                            }
+                div { class: "orgs-field conn-select",
+                    Label { html_for: "repo-owner", "Account or organization" }
+                    Select::<String> {
+                        id: "repo-owner", value: Some(selected_owner), aria_label: "Account or organization",
+                        disabled: busy() || owners.is_empty() || provider.is_none(),
+                        on_value_change: move |value: Option<String>| { if let Some(value) = value { owner.set(value); repo.set(String::new()); } },
+                        SelectOption::<String> { index: 0usize, value: String::new(), text_value: "All accounts and organizations", "All accounts and organizations" }
+                        for (index, name) in owners.iter().enumerate() {
+                            SelectOption::<String> { key: "{name}", index: index + 1, value: name.clone(), text_value: name.clone(), "{name}" }
                         }
-                    },
+                    }
                 }
             }
-            Button { disabled: busy() || repo().is_none(), onclick: save, "Set as primary repository" }
+            div { class: "orgs-field",
+                Label { html_for: "repo-filter", "Filter loaded repositories" }
+                Input { id: "repo-filter", value: filter(), disabled: busy(), placeholder: "Search by owner or repository name",
+                    oninput: move |event: FormEvent| filter.set(event.value()) }
+            }
+            div { class: "orgs-field conn-select",
+                Label { html_for: "repo-menu", "Repository" }
+                Select::<String> {
+                    id: "repo-menu", key: "{connection}", value: Some(displayed_repository.into()), aria_label: "Repository",
+                    disabled: busy() || choice_count == 0 || provider.is_none(),
+                    on_value_change: move |value: Option<String>| { if let Some(value) = value { repo.set(value); error.set(None); } },
+                    for (index, r) in choices.iter().enumerate() {
+                        SelectOption::<String> { key: "{r.full_name}", index, value: r.full_name.clone(), text_value: r.full_name.clone(), aria_label: r.full_name.clone(),
+                            "{r.full_name}" if r.private { span { class: "conn-meta", " · private" } } }
+                    }
+                }
+            }
+            if loading { p { class: "conn-meta", role: "status", "Loading repositories…" } }
+            if let Some(Err(message)) = &current {
+                p { class: "orgs-error", "Could not list repositories: {message} ", Link { to: permissions_href.clone(), "Review notebook permissions" } }
+                Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Outline, onclick: move |_| pages.restart(), "Retry repository inventory" }
+            }
+            if !loading && current.as_ref().is_some_and(Result::is_ok) && choices.is_empty() {
+                p { class: "conn-meta", "No loaded repository matches. Load another page or enter the repository name below." }
+            }
+            div { class: "conn-actions",
+                p { class: "conn-meta", "{inventory.len()} repositories loaded" }
+                if let Some(next) = can_load {
+                    Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Outline, disabled: loading || busy(), onclick: {
+                        let inventory = inventory.clone(); move |_| { previous.set(inventory.clone()); page.set(next); }
+                    }, "Load more repositories" }
+                }
+            }
+            if current.as_ref().is_some_and(|r| r.as_ref().is_ok_and(|r| r.truncated)) {
+                p { class: "conn-meta", "Inventory is limited to 10,000 repositories. Enter a specific repository below." }
+            }
+            div { class: "orgs-field",
+                Label { html_for: "repo-name", "Repository name or URL" }
+                Input { id: "repo-name", value: repo(), disabled: busy(), placeholder: "owner/repository or https://github.com/owner/repository",
+                    oninput: move |event: FormEvent| { repo.set(event.value()); owner.set(String::new()); error.set(None); } }
+                p { class: "conn-meta", "Choose from the menus or type a repository directly. Saving verifies this exact repository through the connection's read grant; browsing uses its inventory grant." }
+            }
+            Button { r#type: "submit", disabled: busy() || parsed.is_none(),
+                if busy() { "Checking repository…" } else { "Set as primary repository" } }
             if let Some(e) = error() {
                 p { class: "orgs-error", "{e}" }
             }

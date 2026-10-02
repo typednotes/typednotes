@@ -100,3 +100,23 @@ restoring defaults.
 # Dev experience problem
 
 - [x] Is there a way to test the app locally and iterate on it by linking it to other prod services? — private environment launcher, worker-visible transport addresses and optional background scheduling. [Local/remote development](docs/local-development.md).
+
+# UX problems
+
+- [x] When selecting a repo on github, a selector should show other orgs and repo within each orgs.
+It should be possible to fill in the string. — account/organization grouping, bounded page loading and direct name/HTTPS selection; exact metadata/resource checks at app and broker. [Guide](docs/workspaces.md#selecting-a-repository).
+- [x] Can you make sure other selection mechanisms work. — controlled values, reset/stale-account handling, real-trigger labels and scrollable menus; browser restores model/input selections after hydration and sorting.
+- [x] When a connection exist it should not be able to create a new connection (the creation UI widget disapears) — one provider/org, including failed/pending connections; hidden forms, OAuth preflight, serialized server storage and database insertion guard. Concurrent real API creation allows only one winner.
+- [x] A user should have a default org and a default project and land on a Notebook — persisted per-user defaults, membership/parent revalidation and direct sign-in landing; deleted/foreign targets never authorize navigation.
+- [x] When logging in for the first time, the user should be forced to setup the necessary field by leading it through the interface with tooltips. He may be invited to set optional settings too. — resumable required setup and server completion checks; optional integrations stay skippable and existing connections are reused.
+- [x] Can you define in the doc and inline (with tooltips and text) whet each are, e.g. (correct if I'm wrong): — [workspace definitions](docs/workspaces.md), inline text, native tooltips and keyboard-accessible explanations.
+  - Org, the invoicing unit, where connectors are defined and user/permissions
+  - Project, backed by a git repo and has its own messaging interfaces
+  - Notebook, the basic work unit.
+- [x] A notebook should look simpler and the complexity should unfold if necessary. — setup, writing notes, view options, cell configuration/code/wiring, activity and maintenance controls unfold on demand; inputs/results stay visible.
+- [x] A use should be able to share a notebook through a link in read-only mode (only user input should be editable). — anyone-with-link snapshots, isolated expiring viewer sessions, UI-input-only API, owner/visitor isolation and revocation. Public responses exclude secret cells/nodes; Lun consumes proof-checked Trace/Error-only execution. [Sharing contract](docs/release-0.9.0.md#public-read-only-sharing).
+
+Verified locally: 106 API tests, 33 browser groups, 675 real broker HTTP cases,
+12 app/broker/SQL groups, 9 compiled app/runtime groups, Lean suites and offline
+fleet checks. Rollout needs app v0.9.0, Liaison v0.6.3, Lun v0.3.1, and fleet
+v0.6.1 adopting migrations 0009–0011. [Publication/deployment order](docs/push-order.md).

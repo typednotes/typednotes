@@ -25,3 +25,5 @@ pub mod scheduler;
 pub mod session;
 pub mod vault;
 pub mod warrant;
+pub mod workspace;
+pub mod shares;

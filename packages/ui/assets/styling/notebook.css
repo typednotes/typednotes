@@ -1,6 +1,12 @@
 /* Notebooks: cells in order, each a description and what came of it. */
 
 .nb { width: 100%; }
+.nb-advanced { width: 100%; min-width: 0; }
+.nb-advanced > summary { cursor: pointer; color: var(--app-muted); padding: .35rem 0; font-size: .85rem; }
+.nb-advanced[open] > :not(summary) { margin-top: .65rem; }
+.nb-danger { width: auto; }
+.nb-danger > summary { color: var(--app-danger); }
+.nb-cell .nb-description { font-size: 1rem; }
 
 .nb-detail {
   white-space: pre-wrap;

@@ -12,7 +12,7 @@ use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardContent, CardDescription, CardHeader, CardTitle};
 use crate::components::input::Input;
 use crate::components::label::Label;
-use crate::components::select::{Select, SelectOption};
+use crate::components::select::{use_selected, Select, SelectOption};
 use crate::components::textarea::Textarea;
 use crate::error_message;
 use crate::navigate_to;
@@ -26,7 +26,7 @@ pub(crate) const CONNECTIONS_CSS: Asset = asset!("/assets/styling/connections.cs
 /// keys to the server, which puts them in the vault and answers with the
 /// connection's public description only.
 #[component]
-pub(crate) fn ConnectionsPanel(slug: ReadSignal<String>) -> Element {
+pub(crate) fn ConnectionsPanel(slug: ReadSignal<String>, #[props(default = false)] setup_only: bool) -> Element {
     let mut list = use_resource(move || list_connections(slug()));
     let settings = use_resource(move || api::get_org_settings(slug()));
 
@@ -63,7 +63,11 @@ pub(crate) fn ConnectionsPanel(slug: ReadSignal<String>) -> Element {
                 }
             }
         }
-        AddConnection { slug: slug(), on_added: move |_| list.restart() }
+        if let Some(Ok(items)) = list() {
+            if Provider::ALL.iter().any(|provider| !provider.is_channel() && (!setup_only || provider.is_code() || provider.can_generate()) && !items.iter().any(|c| c.provider == *provider)) {
+                AddConnection { slug: slug(), connected: items.iter().map(|c| c.provider).collect::<Vec<_>>(), setup_only, on_added: move |_| list.restart() }
+            }
+        }
     }
 }
 
@@ -425,14 +429,15 @@ pub(crate) fn connect_url(provider: Provider, org: &str, project: Option<&str>) 
 #[component]
 fn ProviderSelect(
     options: Vec<Provider>,
-    value: Provider,
+    value: ReadSignal<Provider>,
     on_change: EventHandler<Provider>,
     label: String,
 ) -> Element {
+    let selected = use_selected(value);
     rsx! {
         div { class: "conn-select",
             Select::<Provider> {
-                default_value: value,
+                value: Some(selected),
                 aria_label: "{label}",
                 on_value_change: move |v: Option<Provider>| {
                     if let Some(p) = v {
@@ -455,13 +460,23 @@ fn ProviderSelect(
 
 /// The ways to add a connection, grouped by what it is for.
 #[component]
-fn AddConnection(slug: String, on_added: EventHandler<()>) -> Element {
+fn AddConnection(slug: String, connected: ReadSignal<Vec<Provider>>, setup_only: bool, on_added: EventHandler<()>) -> Element {
     let status = use_resource(health);
     let h = status().and_then(|r| r.ok());
     let vault = h.as_ref().is_some_and(|h| h.vault);
     let mut storage = use_signal(|| Provider::S3);
     let mut calendar = use_signal(|| Provider::GoogleCalendar);
     let mut mail = use_signal(|| Provider::Gmail);
+    let available = |providers: &[Provider]| providers.iter().copied().filter(|p| !connected().contains(p)).collect::<Vec<_>>();
+    let code_options = available(&Provider::CODE);
+    let storage_options = available(&Provider::STORAGE);
+    let calendar_options = available(&Provider::CALENDARS);
+    let mail_options = available(&Provider::MAIL);
+    let ai_options = available(Provider::AI).into_iter().filter(|p| !setup_only || p.can_generate()).collect::<Vec<_>>();
+    let selected = |options: &[Provider], requested: Provider| options.iter().copied().find(|p| *p == requested).or_else(|| options.first().copied());
+    let chosen_storage = selected(&storage_options, storage());
+    let chosen_calendar = selected(&calendar_options, calendar());
+    let chosen_mail = selected(&mail_options, mail());
 
     let oauth_button = |provider: Provider, primary: bool| {
         let url = connect_url(provider, &slug, None);
@@ -479,33 +494,34 @@ fn AddConnection(slug: String, on_added: EventHandler<()>) -> Element {
         Card {
             CardHeader {
                 CardTitle { "Add a connection" }
-                if !vault {
+                if status().is_none() {
+                    CardDescription { "Checking connection services…" }
+                } else if !vault {
                     CardDescription { class: "orgs-error",
                         "Connections are disabled: the vault is not configured (SECRETS_URL, SECRETS_PASSWORD) or refuses the app's login."
                     }
                 } else {
                     CardDescription {
-                        "Slack, WhatsApp and Signal are connected from a project's Interfaces."
+                        "One connection per provider in this organization. Remove an existing connection before replacing it. Slack, WhatsApp and Signal are connected from a project's Interfaces."
                     }
                 }
             }
             CardContent {
-                div { class: "conn-section",
+                if !code_options.is_empty() { div { class: "conn-section",
                     h4 { "Code" }
                     div { class: "conn-oauth",
-                        {oauth_button(Provider::Github, true)}
-                        {oauth_button(Provider::Gitlab, false)}
+                        for provider in code_options { {oauth_button(provider, provider == Provider::Github)} }
                     }
-                }
-                div { class: "conn-section",
+                } }
+                if !setup_only { if let Some(chosen) = chosen_storage { div { class: "conn-section",
                     h4 { "Storage" }
                     ProviderSelect {
-                        options: Provider::STORAGE.to_vec(),
-                        value: storage(),
+                        options: storage_options,
+                        value: chosen,
                         on_change: move |p| storage.set(p),
                         label: "Storage provider",
                     }
-                    match storage() {
+                    match chosen {
                         Provider::S3 => rsx! { S3Form { slug: slug.clone(), disabled: !vault, on_added } },
                         Provider::Azure => rsx! { AzureForm { slug: slug.clone(), disabled: !vault, on_added } },
                         p => rsx! {
@@ -515,40 +531,41 @@ fn AddConnection(slug: String, on_added: EventHandler<()>) -> Element {
                             {oauth_button(p, true)}
                         },
                     }
-                }
-                div { class: "conn-section",
+                } }
+                if let Some(chosen) = chosen_calendar { div { class: "conn-section",
                     h4 { "Calendars" }
                     ProviderSelect {
-                        options: Provider::CALENDARS.to_vec(),
-                        value: calendar(),
+                        options: calendar_options,
+                        value: chosen,
                         on_change: move |p| calendar.set(p),
                         label: "Calendar provider",
                     }
-                    if calendar() == Provider::Caldav {
+                    if chosen == Provider::Caldav {
                         CaldavForm { slug: slug.clone(), disabled: !vault, on_added }
                     } else {
-                        ProductivityOAuth { slug: slug.clone(), provider: calendar(), health: h.clone() }
+                        ProductivityOAuth { slug: slug.clone(), provider: chosen, health: h.clone() }
                     }
-                }
-                div { class: "conn-section",
+                } }
+                if let Some(chosen) = chosen_mail { div { class: "conn-section",
                     h4 { "Webmail" }
                     ProviderSelect {
-                        options: Provider::MAIL.to_vec(),
-                        value: mail(),
+                        options: mail_options,
+                        value: chosen,
                         on_change: move |p| mail.set(p),
                         label: "Webmail provider",
                     }
-                    if mail() == Provider::Jmap {
+                    if chosen == Provider::Jmap {
                         JmapForm { slug: slug.clone(), disabled: !vault, on_added }
                     } else {
-                        ProductivityOAuth { slug: slug.clone(), provider: mail(), health: h.clone() }
+                        ProductivityOAuth { slug: slug.clone(), provider: chosen, health: h.clone() }
                     }
-                }
-                div { class: "conn-section",
+                } }
+                if !connected().contains(&Provider::Notion) { div { class: "conn-section",
                     h4 { "Workspaces" }
                     NotionForm { slug: slug.clone(), disabled: !vault, on_added }
+                } }
                 }
-                AiForm { slug: slug.clone(), disabled: !vault, on_added }
+                if !ai_options.is_empty() { AiForm { slug: slug.clone(), options: ai_options, disabled: !vault, on_added } }
             }
         }
     }
@@ -939,14 +956,21 @@ fn AzureForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Elemen
 }
 
 #[component]
-fn AiForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
-    let mut provider = use_signal(|| Provider::Anthropic);
+fn AiForm(slug: String, options: ReadSignal<Vec<Provider>>, disabled: bool, on_added: EventHandler<()>) -> Element {
+    let mut requested_provider = use_signal(|| Provider::Anthropic);
+    let provider = use_memo(move || options().iter().copied().find(|p| *p == requested_provider())
+        .or_else(|| options().first().copied()).unwrap_or(Provider::Anthropic));
     let mut base_url = use_signal(String::new);
     let mut key = use_signal(String::new);
     let env_slug = slug.clone();
     let environment = use_resource(move || ai_environment(env_slug.clone()));
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
+    let mut last_provider = use_signal(|| provider());
+    use_effect(move || {
+        let current = provider();
+        if current != last_provider() { key.set(String::new()); base_url.set(String::new()); error.set(None); last_provider.set(current); }
+    });
     let key_name = provider().ai_info().map(|p| p.env).unwrap_or("API_KEY");
 
     let submit = move |evt: FormEvent| {
@@ -989,10 +1013,10 @@ fn AiForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Element {
         form { class: "conn-section", onsubmit: submit,
             h4 { "AI" }
             ProviderSelect {
-                options: Provider::AI.to_vec(),
+                options: options(),
                 value: provider(),
                 on_change: move |p| {
-                    provider.set(p); key.set(String::new()); base_url.set(String::new());
+                    requested_provider.set(p); key.set(String::new()); base_url.set(String::new());
                 },
                 label: "AI provider",
             }

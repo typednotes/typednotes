@@ -1,5 +1,10 @@
 # Notebook declarations and permission setup
 
+The [workspace guide](workspaces.md) documents default notebook landing, guided
+setup, repository organization/paging/direct entry, controlled selection, unique
+provider connections and progressive notebook controls. Public sharing is
+described in [v0.9.0](release-0.9.0.md#public-read-only-sharing).
+
 ## Cells
 
 The notebook's cell name is its reference name. Enter input names in argument

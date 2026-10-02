@@ -91,6 +91,13 @@ pub async fn health() -> Health {
         && table_exists(pool, "public.channel_messages").await
         && table_exists(pool, "public.connector_authorities").await
         && authority_schema_ready(pool).await;
+    let schema = schema && sqlx::query("select exists(select 1 from pg_trigger where tgrelid='public.connections'::regclass and tgname='connections_provider_once' and tgenabled in ('O','A')) as ready")
+        .fetch_one(pool).await.map(|row| row.get::<bool,_>("ready")).unwrap_or(false);
+    let schema = schema
+        && table_exists(pool, "public.user_workspaces").await
+        && table_exists(pool, "public.notebook_shares").await
+        && table_exists(pool, "public.notebook_share_sessions").await
+        && table_exists(pool, "public.notebook_share_calls").await;
     let ledger = database && table_exists(pool, "public.credit_ledger").await;
     // `compute_schemas` is the newest table of `0004_computations`.
     let computations = schema

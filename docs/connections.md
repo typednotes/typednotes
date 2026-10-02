@@ -473,18 +473,27 @@ Slack, WhatsApp, Azure, GitHub/GitLab repository APIs.
 
 ## 10. Projects and their primary repository
 
+Typednotes 0.9.0 requires Liaison 0.6.3 for paged browsing and direct selection.
+The [workspace guide](workspaces.md) explains account/organization grouping,
+controlled choices and the one-provider-per-org creation guard.
+
 A project belongs to an org (`projects`, unique `(org_id, slug)`); any member can create one,
 its creator or an org admin can delete it. Its primary repository is chosen from what a `github`
 or `gitlab` connection of the org can see, read through liaison:
 
 | Provider | Listing | One repository |
 |---|---|---|
-| `github` | `GET /user/repos?per_page=100&sort=updated` | `GET /repos/{owner}/{name}` |
-| `gitlab` | `GET /projects?membership=true&per_page=100&order_by=last_activity_at` | `GET /projects/{url-encoded path}` |
+| `github` | `GET /user/repos?per_page=100&page=N&sort=full_name&direction=asc` | `GET /repos/{owner}/{name}` |
+| `gitlab` | `GET /projects?membership=true&per_page=100&page=N&order_by=path&sort=asc` | `GET /projects/{url-encoded path}` |
 
 Setting it re-reads the repository, so its name, URL and default branch are the host's. The
 project keeps `repo_connection_id` (set to null if that connection is removed — the name
 stays, the access goes).
+
+`N` is canonical decimal text from 1 through 100; inventory replies are limited
+to 100 entries. Names can be typed as `owner/repo` or a matching host's HTTPS URL.
+Metadata identity and canonical web URL are checked; first-page presence is not
+required. Nested GitLab namespaces remain unsupported.
 
 ## 11. Interfaces and inbox
 

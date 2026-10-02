@@ -184,13 +184,15 @@ pub fn AccountPage() -> Element {
 
     rsx! {
         SettingsLayout {
-            back_href: "/",
+            back_href: "/organizations",
             back_label: "Your organisations",
             title: "Your account",
             subtitle: Some(a.user.email.clone()),
             base: "/settings",
             sections: Vec::new(),
             active: "",
+            Card { CardHeader { CardTitle { "Default workspace" } CardDescription { "Choose the organization, project and notebook to open after sign-in." } }
+                CardContent { Link { to: "/onboarding", "Choose your default workspace" } } }
             Card {
                 CardHeader {
                     CardTitle { "Profile" }
@@ -281,7 +283,7 @@ pub fn AccountPage() -> Element {
                 }
                 CardContent {
                     if a.orgs.is_empty() {
-                        p { class: "orgs-empty", "None yet: create one from ", Link { to: "/", "your organisations" }, "." }
+                        p { class: "orgs-empty", "None yet: create one from ", Link { to: "/organizations", "your organisations" }, "." }
                     }
                     div { class: "conn-list",
                         for org in a.orgs.iter() {
@@ -808,7 +810,7 @@ pub fn ProjectSettingsPage(
                 "repository" => rsx! {
                     RepoPanel { slug: o.clone(), project: d.project.clone(), on_changed: move |_| detail.restart() }
                 },
-                "interfaces" => rsx! { InterfacesPanel { slug: o.clone(), project: p.clone() } },
+                "interfaces" => rsx! { InterfacesPanel { key: "{o}-{p}", slug: o.clone(), project: p.clone() } },
                 "danger" => rsx! {
                     Card {
                         CardHeader {

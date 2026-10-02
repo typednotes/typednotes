@@ -1,5 +1,5 @@
 use api::{
-    add_slack_channel, connect_signal, connect_whatsapp, health, list_channels, list_connections,
+    add_existing_interface, add_slack_channel, connect_signal, connect_whatsapp, health, list_channels, list_connections,
     list_messages, list_slack_channels, remove_channel, send_message, validate_message,
     validate_phone, validate_signal, validate_whatsapp, Channel, Health, Message, Provider,
 };
@@ -9,7 +9,7 @@ use crate::components::button::{Button, ButtonSize, ButtonVariant};
 use crate::components::card::{Card, CardContent, CardDescription, CardHeader, CardTitle};
 use crate::components::input::Input;
 use crate::components::label::Label;
-use crate::components::select::{Select, SelectOption};
+use crate::components::select::{use_selected, Select, SelectOption};
 use crate::components::textarea::Textarea;
 use crate::connections::{connect_url, oauth_ready};
 use crate::error_message;
@@ -216,12 +216,16 @@ fn AddInterface(
     on_added: EventHandler<()>,
 ) -> Element {
     let mut kind = use_signal(|| Provider::CHANNELS[0]);
+    let selected_kind = use_selected(kind.into());
+    let org = slug.clone();
+    let mut connections = use_resource(move || list_connections(org.clone()));
+    let existing = connections().and_then(Result::ok).unwrap_or_default().into_iter().filter(|c| c.provider == kind()).collect::<Vec<_>>();
     rsx! {
         div { class: "conn-section",
             h4 { "Add an interface" }
             div { class: "conn-select",
                 Select::<Provider> {
-                    default_value: kind(),
+                    value: Some(selected_kind),
                     aria_label: "Messaging provider",
                     on_value_change: move |v: Option<Provider>| {
                         if let Some(p) = v {
@@ -239,11 +243,43 @@ fn AddInterface(
                     }
                 }
             }
-            match kind() {
+            if connections().is_none() {
+                p { class: "conn-meta", "Loading messaging connections…" }
+            } else if let Some(Err(error)) = connections() {
+                p { class: "orgs-error", "Could not load connections: {error_message(&error)}" }
+            } else if kind() != Provider::Slack && !existing.is_empty() {
+                ExistingInterface { key: "{kind().id()}", slug: slug.clone(), project: project.clone(), connections: existing, on_added }
+            } else { match kind() {
                 Provider::Slack => rsx! { SlackForm { slug: slug.clone(), project: project.clone(), health: health.clone(), on_added } },
-                Provider::Whatsapp => rsx! { WhatsappForm { slug: slug.clone(), project: project.clone(), on_added } },
-                _ => rsx! { SignalForm { slug: slug.clone(), project: project.clone(), on_added } },
+                Provider::Whatsapp => rsx! { WhatsappForm { slug: slug.clone(), project: project.clone(), on_added: move |_| { connections.restart(); on_added.call(()); } } },
+                _ => rsx! { SignalForm { slug: slug.clone(), project: project.clone(), on_added: move |_| { connections.restart(); on_added.call(()); } } },
+            } }
+        }
+    }
+}
+
+#[component]
+fn ExistingInterface(slug: String, project: String, connections: Vec<api::Connection>, on_added: EventHandler<()>) -> Element {
+    let mut connection = use_signal(|| connections.first().map(|c| c.id.clone()).unwrap_or_default());
+    let selected = use_selected(connection.into());
+    let mut busy = use_signal(|| false);
+    let mut error = use_signal(|| None::<String>);
+    rsx! {
+        div { class: "conn-subform",
+            p { class: "conn-meta", "This provider is already connected. Reuse its sender identity; credentials are not requested again. Each inbound sender can route to only one project." }
+            Select::<String> { value: Some(selected), aria_label: "Existing messaging connection", disabled: busy(),
+                on_value_change: move |value: Option<String>| { if let Some(value) = value { connection.set(value); } },
+                for (index, c) in connections.iter().enumerate() {
+                    SelectOption::<String> { index, value: c.id.clone(), text_value: c.label.clone(), "{c.label}" }
+                }
             }
+            Button { disabled: busy() || connection().is_empty(), onclick: move |_| {
+                let (slug, project, connection) = (slug.clone(), project.clone(), connection());
+                async move { busy.set(true); match add_existing_interface(slug, project, connection).await {
+                    Ok(_) => { error.set(None); on_added.call(()); }, Err(e) => error.set(Some(error_message(&e))),
+                } busy.set(false); }
+            }, "Use existing connection" }
+            if let Some(error) = error() { p { class: "orgs-error", "{error}" } }
         }
     }
 }
@@ -272,6 +308,8 @@ fn SlackForm(
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     let current = workspace().or_else(|| workspaces.first().map(|(id, _)| id.clone()));
+    let workspace_value = current.clone();
+    let selected_workspace = use_memo(use_reactive!(|(workspace_value,)| workspace_value));
     let install_url = connect_url(Provider::Slack, &slug, Some(&project));
     let ready = oauth_ready(health.as_ref(), Provider::Slack);
 
@@ -280,14 +318,16 @@ fn SlackForm(
     let available = use_resource(use_reactive!(|(chosen,)| {
         let org = org.clone();
         async move {
-            match chosen {
+            let result = match chosen.clone() {
                 Some(id) => list_slack_channels(org, id)
                     .await
                     .map_err(|e| error_message(&e)),
                 None => Ok(Vec::new()),
-            }
+            };
+            (chosen, result)
         }
     }));
+    let current_channels = available().filter(|(id, _)| *id == current).map(|(_, result)| result);
 
     let add = {
         let current = current.clone();
@@ -320,7 +360,7 @@ fn SlackForm(
                 div { class: "conn-picker",
                     div { class: "conn-select",
                         Select::<String> {
-                            default_value: current.clone().unwrap_or_default(),
+                            value: Some(selected_workspace.into()), disabled: busy(),
                             aria_label: "Slack workspace",
                             on_value_change: move |v: Option<String>| {
                                 slack_channel.set(None);
@@ -331,13 +371,14 @@ fn SlackForm(
                             }
                         }
                     }
-                    match available() {
+                    match current_channels {
                         None => rsx! { p { class: "conn-meta", "Loading channels…" } },
                         Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not list channels: {e}" } },
                         Some(Ok(list)) => rsx! {
                             div { class: "conn-select", key: "{current:?}",
                                 Select::<String> {
                                     aria_label: "Slack channel",
+                                    value: Some(slack_channel.into()), disabled: busy(),
                                     on_value_change: move |v: Option<String>| slack_channel.set(v),
                                     for (i, c) in list.iter().enumerate() {
                                         SelectOption::<String> {
@@ -354,14 +395,14 @@ fn SlackForm(
                         },
                     }
                 }
-                Button { disabled: busy() || slack_channel().is_none(), onclick: add, "Add channel" }
+                Button { disabled: busy() || slack_channel().is_none() || available.state()() == UseResourceState::Pending, onclick: add, "Add channel" }
             }
-            Button {
+            if workspaces.is_empty() { Button {
                 variant: ButtonVariant::Outline,
                 disabled: !ready,
                 onclick: move |_| navigate_to(&install_url),
-                if workspaces.is_empty() { "Add to Slack" } else { "Add to another workspace" }
-            }
+                "Add to Slack"
+            } }
             if let Some(e) = error() {
                 p { class: "orgs-error", "{e}" }
             }
@@ -522,6 +563,7 @@ fn Composer(
 ) -> Element {
     let first = channels.first().map(|c| c.id.clone()).unwrap_or_default();
     let mut channel = use_signal(|| first);
+    let selected_channel = use_selected(channel.into());
     let mut recipient = use_signal(String::new);
     let mut text = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
@@ -574,9 +616,9 @@ fn Composer(
         form { class: "conn-section", onsubmit: submit,
             h4 { "Send a message" }
             div { class: "conn-picker",
-                div { class: "conn-select", key: "{channel}",
+                div { class: "conn-select",
                     Select::<String> {
-                        default_value: channel(),
+                        value: Some(selected_channel), disabled: busy(),
                         aria_label: "Interface",
                         on_value_change: move |v: Option<String>| {
                             if let Some(id) = v {

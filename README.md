@@ -72,9 +72,9 @@ coordinated deployment requirements are in
 The Graph/Lode questions, scoped runtime trials and Lean LSP are answered in
 [`docs/graph-and-lode.md`](https://github.com/typednotes/typednotes/blob/main/docs/graph-and-lode.md); CI fixes and executed checks
 are recorded in [`docs/ci-verification.md`](https://github.com/typednotes/typednotes/blob/main/docs/ci-verification.md).
-The current app release is Typednotes **v0.8.0**, compatible with the existing Lode
-**v0.4.2** deployment. Release notes are in
-[`docs/release-0.8.0.md`](https://github.com/typednotes/typednotes/blob/main/docs/release-0.8.0.md);
+The current app release is Typednotes **v0.9.0**, paired with Liaison **v0.6.3**,
+Lun **v0.3.1** and the existing Lode **v0.4.2** deployment. Release notes are in
+[`docs/release-0.9.0.md`](https://github.com/typednotes/typednotes/blob/main/docs/release-0.9.0.md);
 push order and exact CI gates are in [`docs/push-order.md`](https://github.com/typednotes/typednotes/blob/main/docs/push-order.md).
 The shared CI/release and documentation-link conventions are in
 [`docs/workflow-policy.md`](https://github.com/typednotes/typednotes/blob/main/docs/workflow-policy.md).
@@ -101,11 +101,11 @@ status line on the home page lists what is missing.
 | `SLACK_SIGNING_SECRET` | inbound Slack messages (Event Subscriptions request URL `…/hooks/slack`) |
 | `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN` | inbound WhatsApp messages (Meta webhook `…/hooks/whatsapp`, field `messages`) |
 | `SECRETS_URL`, `SECRETS_PASSWORD` (`SECRETS_USERNAME`, default `typednotes-app`) | storing connections, in a `secrets-server` ≥ 1.3.0 that declares the `typednotes-app` identity (`SECRETS_SERVER_SERVICE_IDENTITIES`; `typednotes-infra` does). `/api/health` reports `vault: true` only once the app can log in |
-| `LIAISON_URL`, `LIAISON_ROOT_KEY` | native provider calls through liaison ≥ 0.6.0 (same root key and independent policy projections) |
+| `LIAISON_URL`, `LIAISON_ROOT_KEY` | native provider calls through liaison ≥ 0.6.3 (same root key and independent policy projections; bounded repository pages/metadata) |
 | `PUBLIC_URL` | overrides the origin used in OAuth redirect URIs (default: the request's forwarded host) |
 | `TYPEDNOTES_WELCOME_CREDITS` | credits granted to each new org (default 1000, `0` disables) |
 | `LODE_URL`, `LODE_TOKEN` | implementing notebooks (lode ≥ 0.3.0) |
-| `LUN_URL`, `LUN_TOKEN` | building and running them (lun ≥ 0.3.0) |
+| `LUN_URL`, `LUN_TOKEN` | building and running them (lun ≥ 0.3.1 for proof-checked public share execution) |
 | `COMPUTE_DB_URL` | `db` sinks: an identity that may create roles and schemas on compute-db |
 | `TYPEDNOTES_SOURCE_CHECKS_PER_HOUR`, `TYPEDNOTES_ENDPOINT_CALLS_PER_MINUTE`, `TYPEDNOTES_MODEL_CALL_COST`, `TYPEDNOTES_STORAGE_WRITE_COST`, `TYPEDNOTES_AUTO_REPAIRS` | notebook caps and costs (defaults 120, 60, 10, 1, 2 — [`docs/connections.md`](https://github.com/typednotes/typednotes/blob/main/docs/connections.md) §8) |
 
@@ -116,7 +116,7 @@ cron, cells, `lun.json`, SCRAM verifiers, renderers);
 `cargo check -p web --features web --target wasm32-unknown-unknown` check both halves.
 
 Calendar, webmail and Notion connections live in **Organization settings → Connections**.
-Apply the complete migration history through `0008_connector_authority.sql` first. Google/Microsoft connections request
+Apply the complete migration history through `0011_notebook_shares.sql` first. Google/Microsoft connections request
 read-only access. CalDAV uses a calendar URL and app password; JMAP uses a session URL and
 mail-enabled API token; Notion uses an internal integration or personal access token.
 Provider setup, Gmail verification requirements and broker compatibility are documented in

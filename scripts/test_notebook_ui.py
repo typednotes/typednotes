@@ -86,6 +86,8 @@ def evaluate(inputs):
             else:
                 node["output"] = sum(n["output"] for n in deps) if deps else 7
         out.append(node)
+    if STATE.get("hidden_share_node"):
+        out.append({"id": 999, "function": "private_key", "output": "do-not-publish"})
     return out
 
 
@@ -120,6 +122,12 @@ class Mock(BaseHTTPRequestHandler):
             resource = call["resource"]
             if call["operation"] == "models.list":
                 answer = json.dumps({"data": [{"id": "fixture-model"}, {"id": "other-model"}]}).encode()
+            elif call["operation"] == "repositories.list":
+                names = [f"other-org/repo-{n:03}" for n in range(100)] if payload.get("page", "1") == "1" else ["late-org/late-repo"]
+                answer = json.dumps([{"full_name":name,"html_url":"https://github.com/"+name,"default_branch":"main","private":True} for name in names]).encode()
+            elif payload.get("view") == "metadata":
+                name = "/".join(resource)
+                answer = json.dumps({"full_name":name,"html_url":"https://github.com/"+name,"default_branch":"main","private":True}).encode()
             elif resource and resource[-1] == "lun.json":
                 contents = json.dumps(manifest()).encode()
                 answer = json.dumps({"encoding": "base64", "content": base64.b64encode(contents).decode()}).encode()
@@ -162,6 +170,10 @@ class Mock(BaseHTTPRequestHandler):
                 manifest()
                 return self.reply(200, BUILD)
             if path.endswith("/sessions"):
+                if body.get("safeShare"):
+                    assert set(body["policy"]["effects"]) <= {"Trace", "Error"} and body["connectors"] == {}
+                    if STATE.get("reject_share_runtime"):
+                        return self.reply(400, {"error": "fixture shared input failed type validation"})
                 STATE["session_n"] += 1
                 sid = f"S{STATE['session_n']}"
                 inputs = dict(body.get("inputs", {}))
@@ -174,6 +186,8 @@ class Mock(BaseHTTPRequestHandler):
             if sid not in STATE["sessions"]:
                 return self.reply(404, {"error": "fixture runtime forgot the session"})
             session = STATE["sessions"][sid]
+            if session["start"].get("safeShare") and STATE.get("reject_share_runtime"):
+                return self.reply(400, {"error": "fixture shared input failed type validation"})
             before = evaluate(session["inputs"])
             session["inputs"].update(body.get("inputs", {}))
             after = evaluate(session["inputs"])
@@ -218,9 +232,16 @@ def verify(page, context, app, output):
         return page.locator(".nb-cell").filter(has=page.locator(".nb-cell-name", has_text=name))
 
     def choose(label, option):
-        # The dx Select applies aria-label to its wrapper, not its trigger.
-        wrapper = page.locator(f'[aria-label="{label}"]')
-        wrapper.get_by_role("button").click()
+        if label == "Kind of cell":
+            details = page.locator(".nb-add-cell")
+            if details.count() and details.get_attribute("open") is None: details.locator(":scope > summary").click()
+        if label == "Cell order":
+            details = page.locator(".nb-view-options")
+            if details.count() and details.get_attribute("open") is None: details.locator(":scope > summary").click()
+        if label == "Provider model":
+            details = page.locator(".nb-setup")
+            if details.count() and details.get_attribute("open") is None: details.locator(":scope > summary").click()
+        page.get_by_role("button", name=label, exact=True).click()
         page.get_by_role("option", name=option, exact=True).click()
 
     def add(name, kind="Node", dependencies="", ty="Nat", choices=""):
@@ -236,6 +257,27 @@ def verify(page, context, app, output):
         editor.get_by_role("button", name="Add cell", exact=True).click()
         expect(cell(name)).to_be_visible()
 
+    def ready():
+        expect(page.locator(".nb-maintenance button").filter(has_text="Restart session")).to_have_count(1, timeout=45000)
+        if page.locator(".nb-maintenance").get_attribute("open") is None: page.locator(".nb-maintenance > summary").click()
+        expect(page.get_by_role("button", name="Restart session", exact=True)).to_be_visible(timeout=45000)
+
+    go(app + "/orgs/notebook-fixture/projects/sheets/settings/repository")
+    page.get_by_role("button", name="Change", exact=True).click()
+    choose("Account or organization", "other-org")
+    choose("Repository", "other-org/repo-000")
+    expect(page.get_by_label("Repository name or URL")).to_have_value("other-org/repo-000")
+    page.get_by_role("button", name="Load more repositories", exact=True).click()
+    choose("Account or organization", "late-org")
+    choose("Repository", "late-org/late-repo")
+    page.get_by_role("button", name="Set as primary repository", exact=True).click()
+    wait_sql("select repo_full_name from projects", "late-org/late-repo")
+    page.get_by_role("button", name="Change", exact=True).click()
+    page.get_by_label("Repository name or URL").fill("https://github.com/fixture/sheets.git")
+    page.get_by_role("button", name="Set as primary repository", exact=True).click()
+    wait_sql("select repo_full_name from projects", "fixture/sheets")
+    passed("repository owner groups, second-page inventory and direct HTTPS entry use exact-resource metadata validation")
+
     go(notebook)
     output.joinpath("initial-dom.html").write_text(page.content())
     notebook_width = page.locator(".nb").bounding_box()["width"]
@@ -243,7 +285,8 @@ def verify(page, context, app, output):
     page.get_by_role("button", name="Save model", exact=True).click()
     wait_sql("select model_name from graphs", "other-model")
     go(notebook)
-    expect(page.locator('[aria-label="Provider model"]').get_by_role("button")).to_contain_text("other-model")
+    page.locator(".nb-setup > summary").click()
+    expect(page.get_by_role("button", name="Provider model", exact=True)).to_contain_text("other-model")
     choose("Provider model", "fixture-model")
     page.get_by_role("button", name="Save model", exact=True).click()
     wait_sql("select model_name from graphs", "fixture-model")
@@ -264,6 +307,7 @@ def verify(page, context, app, output):
     cell("amount").get_by_role("button", name="Move amount up").click()
     expect(page.locator(".nb-cell-name")).to_have_text(["amount", "tax", "total", "view"])
     passed("name/topological sort preserves declaration numbers; declaration movement persists")
+    if page.locator(".nb-view-options").get_attribute("open") is None: page.locator(".nb-view-options > summary").click()
     page.get_by_role("button", name="Dependency graph", exact=True).click()
     expect(page.locator(".nb-graph-edge")).to_have_count(3)
     page.get_by_role("button", name="Go to cell amount").focus()
@@ -346,10 +390,11 @@ def verify(page, context, app, output):
     passed("cell cannot add denied operations or raise inherited byte limits; API rejects widened grants")
     add("base", dependencies="", ty="Nat")
     page.get_by_role("button", name="Generate all code", exact=True).click()
-    expect(page.get_by_role("button", name="Restart session", exact=True)).to_be_visible(timeout=45000)
+    ready()
     expect(cell("amount").locator('input[type="number"]')).to_be_visible()
     expect(cell("base").locator(".nb-output")).to_contain_text("7")
     expect(cell("total").locator(".nb-impl")).to_contain_text("Nat → Nat → Eff [] Nat")
+    cell("total").locator(".nb-code-details > summary").click()
     cell("total").get_by_role("button", name="Show the code ▾", exact=True).click()
     expect(cell("total").locator(".nb-code")).to_contain_text("def total")
     cell("amount").locator('input[type="number"]').fill("10")
@@ -358,6 +403,61 @@ def verify(page, context, app, output):
     cell("tax").get_by_role("button", name="Feed input", exact=True).click()
     expect(cell("view").locator(".nb-output")).to_contain_text("Total: 12")
     passed("generate all → adopted build → typed numeric widgets → feed → dependent output")
+    before_inputs = SQL("select count(*) from graph_inputs")
+    private_nodes = SQL(f"select last_nodes from graphs where id='{GRAPH}'")
+    SQL(f"insert into graph_cells(graph_id,position,name,kind,variant,description,config) values('{GRAPH}',99,'private_key','source','secret','not-public-description','{{\"name\":\"private_key\"}}');"
+        f"update graphs set last_nodes=last_nodes || '[{{\"id\":999,\"function\":\"private_key\",\"args\":[],\"outcome\":{{\"output\":\"do-not-publish\"}}}}]'::jsonb where id='{GRAPH}'")
+    created = page.request.post(app + "/api/notebook/share", data=BASE_ARGS)
+    assert created.status == 200, created.text()
+    share = created.json()
+    stored_snapshot = SQL(f"select snapshot from notebook_shares where id='{share['id']}'")
+    assert "do-not-publish" not in stored_snapshot and "not-public-description" not in stored_snapshot
+    SQL(f"delete from graph_cells where name='private_key';update graphs set last_nodes='{private_nodes}'::jsonb where id='{GRAPH}'")
+    STATE["hidden_share_node"] = True
+    public = context.browser.new_context(viewport={"width":1280,"height":900})
+    public_page = public.new_page()
+    public_page.goto(share["url"], wait_until="networkidle")
+    expect(public_page.get_by_role("button", name="Edit", exact=True)).to_have_count(0)
+    expect(public_page.get_by_role("button", name="Delete", exact=True)).to_have_count(0)
+    input_box = public_page.locator("section").filter(has=public_page.get_by_role("heading", name="amount", exact=True))
+    input_box.get_by_label("amount input", exact=True).fill("20")
+    input_box.get_by_role("button", name="Update input", exact=True).click()
+    expect(public_page.locator("section").filter(has=public_page.get_by_role("heading", name="view", exact=True))).to_contain_text("Total: 22")
+    token = share["url"].rsplit("/", 1)[1]
+    viewed = public.request.post(app + "/api/shared-notebook", data={"token": token})
+    assert viewed.status == 200 and "do-not-publish" not in viewed.text()
+    updated = public.request.post(app + "/api/shared-notebook/input", data={"token":token,"cell":SQL("select id from graph_cells where name='amount'"),"value":20})
+    assert updated.status == 200 and "do-not-publish" not in updated.text()
+    STATE["hidden_share_node"] = False
+    assert SQL("select count(*) from graph_inputs") == before_inputs
+    expect(cell("view").locator(".nb-output")).to_contain_text("Total: 12")
+    second = context.browser.new_context()
+    second_page = second.new_page()
+    second_page.goto(share["url"], wait_until="networkidle")
+    expect(second_page.get_by_label("amount input", exact=True)).to_have_value("10")
+    denied = public.request.post(app + "/api/shared-notebook/input", data={"token":share["url"].rsplit("/",1)[1],"cell":SQL("select id from graph_cells where name='total'"),"value":5})
+    assert denied.status == 403
+    SQL(f"delete from notebook_share_calls where share_id='{share['id']}';insert into notebook_share_calls(share_id) select '{share['id']}'::uuid from generate_series(1,59)")
+    STATE["reject_share_runtime"] = True
+    failed = public.request.post(app + "/api/shared-notebook/input", data={"token":token,"cell":SQL("select id from graph_cells where name='amount'"),"value":"wrong type"})
+    STATE["reject_share_runtime"] = False
+    assert failed.status == 502, failed.text()
+    assert SQL(f"select count(*) from notebook_share_calls where share_id='{share['id']}'") == "60"
+    calls = len(STATE["log"])
+    limited = public.request.post(app + "/api/shared-notebook/input", data={"token":token,"cell":SQL("select id from graph_cells where name='amount'"),"value":20})
+    assert limited.status == 403 and len(STATE["log"]) == calls
+    SQL(f"insert into notebook_share_sessions(id_hash,share_id,inputs,nodes,expires_at) select sha256(convert_to('visitor-'||i::text,'UTF8')),'{share['id']}'::uuid,'{{}}','[]',now()+interval '30 minutes' from generate_series(1,198) i")
+    third = context.browser.new_context()
+    limited = third.request.post(app + "/api/shared-notebook", data={"token":token})
+    assert limited.status == 403, limited.text()
+    third.close()
+    passed("public snapshots and runtime replies omit hidden secret nodes; failed calls consume rate slots and visitor limits fail closed")
+    revoked = page.request.post(app + "/api/notebook/share/revoke", data={**BASE_ARGS,"share":share["id"]})
+    assert revoked.status == 200
+    public_page.reload(wait_until="networkidle")
+    expect(public_page.locator(".orgs-error")).to_contain_text("revoked")
+    public.close(); second.close()
+    passed("public links expose view/UI inputs only, isolate visitors and owner inputs, use effect-free sessions and revoke access")
     STATE["sessions"].clear()
     cell("amount").locator('input[type="number"]').fill("20")
     cell("amount").get_by_role("button", name="Feed input", exact=True).click()
@@ -375,7 +475,7 @@ def verify(page, context, app, output):
     expect(cell("total").locator(".nb-phase")).to_have_text("writing the code")
     assert SQL("select count(*) from graph_cells where writing") == "1"
     STATE["running"] = False
-    expect(page.get_by_role("button", name="Restart session", exact=True)).to_be_visible(timeout=45000)
+    ready()
     assert any("Regenerate this cell" in json.dumps(entry) for entry in STATE["log"] if entry[0] == "writer")
     passed("regenerate one marks only its cell and follows writing/build lifecycle")
     STATE["running"] = True
@@ -383,7 +483,7 @@ def verify(page, context, app, output):
     expect(page.get_by_role("button", name="Abort", exact=True)).to_be_visible()
     assert SQL("select count(*) from graph_cells where writing") == "5"
     STATE["running"] = False
-    expect(page.get_by_role("button", name="Restart session", exact=True)).to_be_visible(timeout=45000)
+    ready()
     passed("regenerate all marks every cell and returns to live session")
     cell("amount").locator('input[type="number"]').fill("20")
     cell("amount").get_by_role("button", name="Feed input", exact=True).click()
@@ -418,7 +518,7 @@ def verify(page, context, app, output):
     expect(cell("tax").locator(".nb-widget").get_by_role("button")).to_be_visible()
     choose("tax", "high")
     expect(cell("tax").locator(".orgs-error")).to_have_count(0)
-    expect(page.get_by_role("button", name="Restart session", exact=True)).to_be_visible()
+    ready()
     wait_sql("select value #>> '{}' from graph_inputs where input='tax' order by at desc limit 1", "high")
     passed("source type edit keeps the running numeric widget; rebuilt String choices feed successfully")
     page.evaluate("window.scrollTo(0, 0)")
@@ -574,7 +674,18 @@ def verify(page, context, app, output):
     page.screenshot(path=str(output / "permissions-mobile.png"), full_page=True)
     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"), "permissions overflow on mobile"
     page.set_viewport_size({"width": 1280, "height": 900})
-    go(app + "/")
+    go(app + "/orgs/notebook-fixture/settings/connections")
+    expect(page.get_by_role("button", name="Connect GitHub", exact=True)).to_have_count(0)
+    expect(page.get_by_role("button", name="Connect bucket", exact=True)).to_have_count(0)
+    choose("AI provider", "Mistral")
+    page.locator("#ai-key").fill("fixture-test-key")
+    page.get_by_role("button", name="Connect Mistral", exact=True).click()
+    wait_sql("select count(*) from connections where provider='mistral'", "1")
+    expect(page.get_by_role("button", name="Connect Mistral", exact=True)).to_have_count(0)
+    response = page.request.post(app + "/api/connections/ai", data={"slug":"notebook-fixture","provider":"Mistral","api_key":"another-fixture-key","base_url":""})
+    assert response.status == 409, response.text()
+    passed("connected provider creation forms disappear and duplicate provider creation is refused by the server")
+    go(app + "/organizations")
     assert abs(page.locator(".orgs").bounding_box()["width"] - notebook_width) < 1
     checks = []
     page.on("request", lambda request: checks.append(request.url) if "/api/orgs/check" in request.url else None)
@@ -586,6 +697,38 @@ def verify(page, context, app, output):
     expect(page.locator(".slug-check")).to_contain_text("debounced-organization-next")
     assert len(checks) == 2, checks
     passed("slug availability waits for typing idle; no per-character queries or stale verdicts")
+    limited = page.request.post(app + "/api/connections/permissions", data={"slug":"notebook-fixture","connection_id":GH,"permissions":{"scopes":[{"operation":"repositories.read","root":[],"descendants":True}],"maxRequestBytes":1048576,"maxResponseBytes":16777216}})
+    assert limited.status == 200, limited.text()
+    go(app + "/onboarding")
+    expect(page.get_by_role("button", name="Save defaults and open notebook", exact=True)).to_be_disabled()
+    refused = page.request.post(app + "/api/workspace/defaults", data={"slug":"notebook-fixture","project":"sheets","notebook":"lifecycle","finish":True})
+    assert refused.status == 400, refused.text()
+    permissions = {"scopes":[{"operation":operation,"root":[],"descendants":True} for operation in ("repositories.list","repositories.read","repositories.write")],"maxRequestBytes":1048576,"maxResponseBytes":16777216}
+    fixed = page.request.post(app + "/api/connections/permissions", data={"slug":"notebook-fixture","connection_id":GH,"permissions":permissions})
+    assert fixed.status == 200, fixed.text()
+    page.get_by_role("button", name="Refresh setup status", exact=True).click()
+    page.get_by_role("button", name="Save defaults and open notebook", exact=True).click()
+    expect(page).to_have_url(notebook)
+    page.goto(app + "/", wait_until="networkidle")
+    expect(page).to_have_url(notebook)
+    passed("setup cannot finish without required grants; saved default organization/project/notebook drives sign-in landing")
+    new_user = "00000000-0000-4000-8000-000000000011"
+    new_token = "new-user-setup-fixture"
+    SQL(f"insert into users(id,email) values('{new_user}','new-setup@example.invalid'); insert into sessions(id_hash,user_id,expires_at) values(sha256(convert_to('{new_token}','UTF8')),'{new_user}',now()+interval '1 hour');")
+    fresh = context.browser.new_context()
+    fresh.add_cookies([{"name":"tn_session","value":new_token,"url":app}])
+    fresh_page = fresh.new_page()
+    fresh_page.goto(app + "/", wait_until="networkidle")
+    expect(fresh_page).to_have_url(app + "/onboarding")
+    for name in ("New user's organization", "New user's project", "New user's notebook"):
+        fresh_page.locator("#new-name").fill(name)
+        fresh_page.get_by_role("button", name="Create", exact=True).click()
+        expect(fresh_page.locator("#new-name")).not_to_have_value(name)
+    expect(fresh_page.get_by_role("button", name="Save defaults and open notebook", exact=True)).to_be_disabled()
+    forbidden = fresh.request.post(app + "/api/workspace/defaults", data={"slug":"notebook-fixture","project":"sheets","notebook":"lifecycle","finish":False})
+    assert forbidden.status == 403
+    fresh.close()
+    passed("first login enters resumable guided setup, creates a default workspace, explains its terms and refuses foreign default targets")
     assert not errors, errors
     passed("no browser JavaScript errors")
     output.joinpath("results.json").write_text(json.dumps({"passed": results, "page_errors": errors}, indent=2))
@@ -639,7 +782,7 @@ def main():
           insert into memberships(user_id,org_id,role) values('{USER}','{ORG}','owner');
           insert into sessions(id_hash,user_id,expires_at) values(sha256(convert_to('{TOKEN}','UTF8')),'{USER}',now()+interval '1 day');
           insert into connections(id,org_id,user_id,provider,label,base_url,status,permissions) values('{GH}','{ORG}','{USER}','github','Repository fixture','https://api.github.com','active',
-            '{{"scopes":[{{"operation":"repositories.read","root":[],"descendants":true}},{{"operation":"repositories.write","root":[],"descendants":true}}],"maxRequestBytes":1048576,"maxResponseBytes":16777216}}');
+            '{{"scopes":[{{"operation":"repositories.list","root":[],"descendants":true}},{{"operation":"repositories.read","root":[],"descendants":true}},{{"operation":"repositories.write","root":[],"descendants":true}}],"maxRequestBytes":1048576,"maxResponseBytes":16777216}}');
           insert into connections(org_id,user_id,provider,label,base_url,status) values
             ('{ORG}','{USER}','anthropic','Anthropic fixture','https://api.anthropic.com/v1','active'),
             ('{ORG}','{USER}','s3','Reports fixture','https://fixture.s3.amazonaws.com','active'),

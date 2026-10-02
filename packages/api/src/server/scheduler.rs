@@ -47,6 +47,7 @@ pub fn start() {
 
 /// One pass: implementations in flight, due checks, then Signal pulls.
 pub async fn tick() {
+    super::shares::cleanup().await;
     if super::lode::configured() {
         graphs::tick_implementing().await;
     }

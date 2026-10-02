@@ -223,6 +223,16 @@ pub async fn add_slack(
 
 // ── WhatsApp and Signal: a connection and its channel in one step ──────
 
+pub async fn add_existing(org: &Org, user: &User, project_slug: &str, connection_id: &str) -> Result<Channel, ServerFnError> {
+    let (project, _) = projects::get(org, project_slug).await?;
+    let (connection, _) = connections::get(org, user, connection_id).await?;
+    if !matches!(connection.provider, Provider::Whatsapp | Provider::Signal) {
+        return Err(bad_request("choose an existing WhatsApp or Signal connection"));
+    }
+    let external_id = connection.external_id.as_deref().ok_or_else(|| bad_request("connection has no sender identity"))?;
+    insert(&project.id, &connection, external_id, None, &connection.label).await
+}
+
 /// Store `connection`, bind it to the project, and undo the connection if
 /// the address is taken — so a refused interface leaves no orphan.
 async fn connect_and_bind(

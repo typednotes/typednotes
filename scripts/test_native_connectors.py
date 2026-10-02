@@ -22,7 +22,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
 from typing import Any, cast
+from concurrent.futures import ThreadPoolExecutor
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,8 +170,10 @@ class Fixture(BaseHTTPRequestHandler):
             events = [{"type": "start"}, {"type": "text_start", "contentIndex": 0},
                 {"type": "text_end", "contentIndex": 0, "content": "hello"}, {"type": "done", "reason": "stop", "usage": {"input": 1, "output": 1}}]
             return self.reply_bytes(200, "".join("data: " + json.dumps(event) + "\n\n" for event in events).encode(), {"Content-Type": "text/event-stream"})
-        if self.path.endswith("/user/repos"):
+        if urlsplit(self.path).path.endswith("/user/repos"):
             return self.reply(200, [{"full_name": "fixture/repo", "html_url": "https://github.com/fixture/repo", "default_branch": "main", "private": True}])
+        if urlsplit(self.path).path.endswith("/repos/fixture/repo"):
+            return self.reply(200, {"full_name":"fixture/repo","html_url":"https://github.com/fixture/repo","default_branch":"main","private":True})
         return self.reply(200, {"ok": True})
 
     do_GET = do_POST = do_DELETE = do_PUT = handle_request
@@ -313,6 +317,19 @@ def main():
                 assert org_path in vault.state["documents"]
                 assert "local-provider-fixture" not in json.dumps(connection)
                 passed("connection becomes active only after credential and both live ceilings exist; no key in DTO")
+                before_documents = len(vault.state["documents"])
+                duplicate = api("/api/connections/ai", {"provider":"TypeSafe","base_url":"https://another.example.invalid/base","api_key":"different-fixture-key"}, ok=False)
+                assert "already connected" in json.dumps(duplicate)
+                assert len(vault.state["documents"]) == before_documents
+                def connect_mistral(_):
+                    return exchange(app + "/api/connections/ai", {"slug":"native-fixture","provider":"Mistral","base_url":"","api_key":"concurrent-fixture-key"}, {"Cookie":f"tn_session={cookie}"})
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    results = list(executor.map(connect_mistral, range(2)))
+                assert sorted(status for status,_ in results) == [200,409], results
+                assert sql(f"select count(*) from connections where org_id='{org}' and provider='mistral'") == "1"
+                winner = next(value for status,value in results if status == 200)
+                api("/api/connections/delete", {"id":winner["id"]})
+                passed("one provider/org is enforced before vault writes, serializes concurrent creation and frees the slot on removal")
                 result = api("/api/connections/test", {"id": connection_id})
                 assert result["ok"], result
                 passed("actual app probe uses models.list through real broker/HMAC/Postgres")
@@ -326,6 +343,16 @@ def main():
                 sql(f"insert into connections(id,org_id,user_id,provider,label,base_url,status) values('{github_id}','{org}','{user}','github','GitHub fixture','https://api.github.com','active')")
                 vault.state["documents"][f"/v1/secret/data/thirdparty/github/{user}/{github_id}"] = {"kind": "bearer", "base_url": vault.state["upstream"] + "/base", "token": "local-provider-fixture"}
                 assert api("/api/repos", {"connection": github_id})[0]["full_name"] == "fixture/repo"
+                selection_project = api("/api/projects/create", {"project":"selection-check","name":"Selection check"})
+                selected = api("/api/project/repo", {"project":"selection-check","connection":github_id,"full_name":"https://github.com/fixture/repo.git"})
+                assert selected["repo"]["full_name"] == "fixture/repo"
+                assert upstream.state["calls"][-1][1] == "/base/repos/fixture/repo"
+                api("/api/connections/permissions", {"connection_id":github_id,"permissions":{"scopes":[{"operation":"repositories.list","root":[],"descendants":True}],"maxRequestBytes":1048576,"maxResponseBytes":16777216}})
+                before_egress = len(upstream.state["calls"])
+                api("/api/project/repo", {"project":"selection-check","connection":github_id,"full_name":"fixture/repo"}, ok=False)
+                assert len(upstream.state["calls"]) == before_egress
+                api("/api/connections/permissions", {"connection_id":github_id,"permissions":{"scopes":[{"operation":op,"root":[],"descendants":True} for op in ["repositories.list","repositories.read"]],"maxRequestBytes":1048576,"maxResponseBytes":16777216}})
+                passed("direct repository entry verifies exact native metadata and cannot use inventory authority as a code-read grant")
                 original_policy = api("/api/org/settings", {})["effect_policy"]
                 blocked_policy = {**original_policy, "effects": ["SecretStore"]}
                 api("/api/org/settings/permissions", {"policy": blocked_policy})

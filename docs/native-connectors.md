@@ -1,5 +1,31 @@
 # App/native connector integration
 
+## Repository selection contract (Liaison 0.6.3)
+
+`repositories.list` uses resource `[]` and optional canonical decimal-text `page`
+1–100. Broker-owned transports use fixed 100-item pages and deterministic provider
+ordering; both broker and app reject inventories exceeding 100 entries. Namespace
+grouping derives from those repositories; no organization-directory grant is added.
+`repositories.read` metadata uses exact resource `[owner,repo]` and payload
+`{"view":"metadata"}`. The broker's private `Metadata` witness matches returned
+identity to the authorized resource; the app additionally validates the canonical
+GitHub/GitLab URL. Direct selection does not need account-wide listing authority.
+
+Operation IDs, resource scope rules, permission presets, OAuth ceilings and the
+four independent authority bounds are unchanged. The permission UI explains the
+bounded account inventory. Updated parsers, native plans, replies and denial tests
+are coordinated with the app. Older broker payload refusal has no raw IO fallback.
+
+Migration 0009 additionally guards one provider connection per organization,
+under the same transaction lock as provisioning; health requires that enabled
+guard and the 0010/0011 workspace/share tables. See [workspaces](workspaces.md).
+
+Public viewer sessions use Lun 0.3.1's private `PureShareExecution` witness with
+Trace/Error-only effects, no domains and no connector grants. Every session start
+and update consumes checked evidence; no broker warrant is minted. Effectful
+graph nodes refuse before credential/local DB/storage IO. Public snapshot filtering
+is an app responsibility, tested separately from the proved effect ceiling.
+
 ## Trusted provisioning
 
 The app sends `kind: connector`, a named operation, component-wise resource list

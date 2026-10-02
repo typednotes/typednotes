@@ -17,6 +17,8 @@
   cursor: pointer;
   font-family: inherit;
   gap: 0.25rem;
+  width: 100%;
+  min-width: 0;
   outline: none;
   transition: box-shadow 120ms ease;
 }
@@ -50,6 +52,9 @@
   top: 100%;
   left: 0;
   min-width: 100%;
+  max-height: min(24rem, 60vh);
+  max-width: min(40rem, calc(100vw - 2rem));
+  overflow-y: auto;
   box-sizing: border-box;
   padding: 0.25rem;
   border-radius: 0.5rem;
@@ -107,6 +112,7 @@
   font-size: 0.875rem;
   outline: none;
   user-select: none;
+  overflow-wrap: anywhere;
 }
 
 .dx-select-option:hover:not([data-disabled="true"]),

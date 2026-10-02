@@ -32,6 +32,10 @@ mod render;
 mod slug_form;
 mod permission_check;
 mod ai_models;
+mod onboarding;
+pub use onboarding::{OnboardingPage, WorkspaceLanding, WorkspaceGuide};
+mod shares;
+pub use shares::SharedNotebookPage;
 
 use dioxus::prelude::*;
 

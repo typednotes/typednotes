@@ -201,6 +201,9 @@ async fn connect(
     else {
         return fail("this provider is not connected through OAuth");
     };
+    if let Err(error) = connections::ensure_available(&org, provider).await {
+        return fail(&message(&error));
+    }
     let Some(client) = idp.client() else {
         return fail(&format!("{} is not configured", provider.name()));
     };

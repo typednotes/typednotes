@@ -138,6 +138,19 @@ end AppRuntime
     assert result(fed, "relay")["output"]["body"] == {"native": True}, fed
     assert sql(f'select value::text from "{schema}".notes') == '"native-write"'
     passed("compiled driver consumes app DB/vault grants and HMAC broker grant for a shared credential owner")
+    before_rows = sql(f'select count(*) from "{schema}".notes')
+    before_reads = len(vault.state["reads"])
+    safe = {"safeShare":True,"binding":{"org_id":org,"user_id":user,"graph_id":graph},"policy":{"effects":["Trace","Error"],"domains":[]},"connectors":{},"inputs":{"value":"public-must-not-write"}}
+    status, shared = runtime_api(f"/v0/builds/{build['id']}/graphs/main/sessions", safe)
+    assert status == 201, shared
+    assert any(node.get("error") for node in shared["nodes"]), shared
+    assert sql(f'select count(*) from "{schema}".notes') == before_rows
+    assert len(vault.state["reads"]) == before_reads
+    status, refused = runtime_api(f"/v0/builds/{build['id']}/graphs/main/sessions", {**safe,"policy":{"effects":["PostgreSQL"],"domains":[]}})
+    assert status == 403, refused
+    status, refused = runtime_api("/v0/sessions/"+shared["session"], {"inputs":{"value":"no-widen"},"policy":{"effects":["Trace","Error","HTTP"],"domains":[]},"connectors":{}})
+    assert status == 403, refused
+    passed("compiled public-share sessions refuse external effects before credentials/DB writes and cannot widen execution on update")
     captured = next(body for method, path, body in reversed(proxy.state["calls"]) if method == "POST" and path.startswith("/v0/sessions/") and body and "connectors" in body)
     def direct(name, body):
         status, result = runtime_api(f"/v0/builds/{build['id']}/functions/{name}", body)
