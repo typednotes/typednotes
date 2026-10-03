@@ -1,5 +1,17 @@
 # Push order and CI gates
 
+## Local v0.10.0 workflow update
+
+The next coordinated source releases are Linen v1.11.0, Lun v0.3.2, app v0.10.0,
+Lode v0.4.3 and fleet v0.6.3 (app SQL through 0013). Publish Linen first and wait for
+its exact-commit main CI/release gate. Lun already pins v1.11.0 and locks its exact
+local release commit; normal locked builds were verified before tagging. Deploy the
+new runtime and writer before the new app; older writers are refused if they do
+not acknowledge caller pins. Broker SDK pins and ledger history remain unchanged. Wait for
+service source/image publication before the fleet's reviewed manual Plan/Apply.
+Release commits and annotated tags are local. Source publication and cloud Apply
+remain the user's actions.
+
 ## Current deletion release: app v0.9.1, ledger v0.3.7, fleet v0.6.2
 
 The user can push each new service release's main branch and tag together:

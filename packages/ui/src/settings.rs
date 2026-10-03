@@ -191,8 +191,7 @@ pub fn AccountPage() -> Element {
             base: "/settings",
             sections: Vec::new(),
             active: "",
-            Card { CardHeader { CardTitle { "Default workspace" } CardDescription { "Choose the organization, project and notebook to open after sign-in." } }
-                CardContent { Link { to: "/onboarding", "Choose your default workspace" } } }
+            crate::onboarding::DefaultWorkspace {}
             Card {
                 CardHeader {
                     CardTitle { "Profile" }
@@ -534,7 +533,7 @@ fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_sa
             let policy = match parsed { Ok(policy) => policy, Err(message) => { status.set(Some(Err(message))); return; } };
             busy.set(true);
             match set_notebook_permissions(slug, policy).await {
-                Ok(_) => { status.set(Some(Ok("Notebook permissions saved.".into()))); on_saved.call(()); }
+                Ok(_) => { status.set(Some(Ok("Notebook permissions saved.".into()))); on_saved.call(());crate::onboarding::refresh_workspace(); }
                 Err(error) => status.set(Some(Err(error_message(&error)))),
             }
             busy.set(false);

@@ -129,7 +129,21 @@ groups, 9 compiled app/runtime groups, Ledger Lean tests and offline fleet check
 Requires app migration 0012 and ledger migration 0003; release refs are app
 v0.9.1 / ledger v0.3.7 / fleet v0.6.2. These changes are local until published/applied.
 
-- [ ] The 3 collapsable boxes in https://app.typednotes.com/onboarding with Organization, Project, Notebook are weird.
-- [ ] When connected to a repo, the listing of orgs/repo under a user fails: `Could not list repositories: the credential broker refused the call (502 credential_unavailable) Review notebook permissions`
-- [ ] The setup process should not be based on a new screen, it is just a state of the user telling that you should be guided through the standard UI to set things up.
-- [ ] Out of the box a default org and a default project are created when the user is created.
+- [x] The 3 collapsable boxes in https://app.typednotes.com/onboarding with Organization, Project, Notebook are weird. — legacy route redirects to normal settings; the separate wizard/boxes are removed. [Workspace guide](docs/workspaces.md).
+- [x] When connected to a repo, the listing of orgs/repo under a user fails: `Could not list repositories: the credential broker refused the call (502 credential_unavailable) Review notebook permissions` — credential-specific diagnostics and stable-ID OAuth/PAT repair preserve project links and authority. Real broker failure/repair and signed-in repository listing verified. [Native connectors](docs/native-connectors.md).
+- [x] The setup process should not be based on a new screen, it is just a state of the user telling that you should be guided through the standard UI to set things up. — persisted guidance/defaults drive compact prompts on existing pages, including after hydration/reload. [Workspace guide](docs/workspaces.md).
+- [x] Out of the box a default org and a default project are created when the user is created. — migration 0013 atomically creates owned defaults on user insertion; existing/deleted workspaces are not silently recreated. Actual SQL/browser paths verified.
+- [x] No code ie written on cell creation, I should be able to see the agent thinking, cloning the repo, writing code and pushing it. — durable actor-bound automatic generation and actual logged agent/checkout/edit/check/publish activity; real compiled writer publication/adoption verified. [Notebook workflow](docs/notebook-ui.md).
+- [x] When I hit "Generate all code" in https://app.typednotes.com/orgs/nicolas/projects/test/graphs/test I get: `Connection permissions do not allow repositories.write for this resource. Its creator or an admin can edit the connection's operations and resource boundary.` — explicit creator/admin setup grants only notebook-subtree writes, preserves byte limits, adds no deletion and respects organization ceilings. Browser and real broker checks pass.
+- [x] Lode, the coding agent, should be able to type-check the graph with a Lean 4 LSP server. In particular if implementing a node implies to change slightly the output type of the parent it can do so (unless the type is set/pinned by the user.) — real LSP parent/child checks plus private caller-pinned manifest witnesses; actual writer lun_build cannot replace a caller String pin with Nat. Unpinned parent changes remain allowed. Requires Lode v0.4.3.
+- [x] Once compiled, a lun graph should be very fast, can you check how many QPS a small graph taking 2 numeric input and outputting the result of an arithmetic operation can handle. — 1,800 validated HTTP requests per before/after run, zero errors; reproducible benchmark and source-hashed snapshots. [Measurements](docs/lun-throughput.md).
+- [x] When a graph is loaded in lun, could it be kept as in a cache to make QPS much higher? — bounded loaded workers/immutable graph templates with fresh request authority, framing/correlation proofs, deadlines and retirement without replay. Graph throughput reaches 2,339.51 QPS locally (8 clients), median 1.79 ms at one client. Actual runtime/actor/denial and abrupt-parent cleanup checks pass. [Cache and rollout](docs/lun-throughput.md).
+
+Current workflow verification: 106 API tests, 42 browser groups, 15 real app/broker/
+SQL groups, 9 compiled app/runtime groups, full compiled writer/pinned-type/attenuation
+pipeline, 68 compiled Lun runtime cases, 66 real LSP dispatcher calls, Lean suites
+and offline fleet/workflow gates. Features are verified locally; production rollout
+requires app v0.10.0 / Lode v0.4.3 / Lun v0.3.2 / fleet v0.6.3 and migration 0013.
+Publish Linen v1.11.0 first, then its dependent Lun runtime. Lun's Linen requirement
+and immutable lock reference the exact local release commit; normal locked builds
+were verified before tagging. [Release preparation](docs/release-0.10.0.md).

@@ -102,6 +102,9 @@ pub async fn health() -> Health {
         .fetch_one(pool).await.map(|row| row.get::<bool, _>("ready")).unwrap_or(false);
     let schema = schema && sqlx::query("select tenant_deletion_ready() as ready")
         .fetch_one(pool).await.map(|row| row.get::<bool, _>("ready")).unwrap_or(false);
+    let schema=schema&&table_exists(pool,"public.graph_generation_requests").await
+        && sqlx::query("select exists(select 1 from pg_trigger where tgrelid='public.users'::regclass and tgname='users_default_workspace' and tgenabled in ('O','A')) as ready")
+            .fetch_one(pool).await.map(|row|row.get::<bool,_>("ready")).unwrap_or(false);
     let ledger = database && table_exists(pool, "public.credit_ledger").await;
     // `compute_schemas` is the newest table of `0004_computations`.
     let computations = schema
@@ -270,7 +273,7 @@ pub fn welcome_key(org_id: &str) -> String {
 /// transaction: the grant is idempotent, so a failure here (for instance
 /// `ledger`'s history not applied yet) is logged and can be retried, while
 /// the org itself exists either way.
-async fn welcome_grant(org_id: &str) {
+pub(super) async fn welcome_grant(org_id: &str) {
     let amount = config::welcome_credits();
     if amount == 0 {
         return;

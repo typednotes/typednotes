@@ -14,8 +14,8 @@ Database cascades remove its memberships, connections, projects, channels,
 messages, notebooks, inputs/checks/shares and ledger usage/credits/holds.
 
 Affected default preferences lose their removed org and all descendant pointers
-and setup completion. A member with no organizations returns to `/onboarding`
-with no default org/project/notebook. Other organizations and users stay intact;
+and setup completion. A member with no organizations returns to `/organizations`
+with setup guidance and no default org/project/notebook. Other organizations and users stay intact;
 valid existing workspaces can still be selected. The broker's text-only security
 audit is intentionally retained, including denied/malformed attempts.
 

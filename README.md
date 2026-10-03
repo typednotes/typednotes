@@ -86,6 +86,12 @@ fleet source release **v0.6.2**. See
 The shared CI/release and documentation-link conventions are in
 [`docs/workflow-policy.md`](https://github.com/typednotes/typednotes/blob/main/docs/workflow-policy.md).
 
+The local **v0.10.0** implementation adds standard-page setup, automatic cell
+generation and pinned writer build contracts. It requires **Lode v0.4.3** and
+app migration **0013**, adopted by fleet **v0.6.3**; source tags remain unpublished.
+See [`docs/release-0.10.0.md`](https://github.com/typednotes/typednotes/blob/main/docs/release-0.10.0.md)
+and [`docs/lun-throughput.md`](https://github.com/typednotes/typednotes/blob/main/docs/lun-throughput.md).
+
 ```sh
 # a local Postgres, then the schema (the server never migrates itself)
 export DATABASE_URL=postgres://postgres:postgres@localhost:5432/typednotes

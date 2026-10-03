@@ -21,6 +21,11 @@ def verify_deletion(page, context, app, sql, state, passed):
         f"insert into sessions(id_hash,user_id,expires_at) values(sha256(convert_to('{token}','UTF8')),'{target}',now()+interval '1 day')")
     browser = context.browser.new_context()
     browser.add_cookies([{"name":"tn_session","value":token,"url":app}])
+    # Explicitly remove the newly provisioned personal workspace to exercise a
+    # genuinely org-less member after the separate org cascade below.
+    personal="workspace-"+target
+    removed_personal=browser.request.post(app+"/api/org/delete",data={"slug":personal,"confirm":personal})
+    assert removed_personal.status==200,removed_personal.text()
     actor_page = browser.new_page()
     actor_errors = []
     actor_page.on("pageerror", lambda error: actor_errors.append(str(error)))
@@ -109,8 +114,8 @@ def verify_deletion(page, context, app, sql, state, passed):
     assert w["org"] is None and w["project"] is None and w["notebook"] is None and w["setup_required"]
     assert sql(f"select org_id is null and project_id is null and graph_id is null and onboarded_at is null from user_workspaces where user_id='{target}'") == "t"
     actor_page.goto(app + "/", wait_until="networkidle")
-    expect(actor_page).to_have_url(app + "/onboarding")
-    expect(actor_page.get_by_role("heading", name="Your default workspace")).to_be_visible()
+    expect(actor_page).to_have_url(app + "/organizations")
+    expect(actor_page.get_by_role("complementary",name="Workspace setup guidance")).to_be_visible()
     passed("organization deletion cascades real ledger/project/connection/share rows, removes private resources and sends org-less members to empty onboarding")
 
     shared = org(browser, "surviving-org-fixture")

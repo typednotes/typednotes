@@ -55,7 +55,7 @@ pub(crate) fn ConnectionsPanel(slug: ReadSignal<String>, #[props(default = false
                                     slug: slug(),
                                     connection: connection.clone(),
                                     policy: settings().and_then(|s| s.ok()).map(|s| s.effect_policy),
-                                    on_changed: move |_| list.restart(),
+                                    on_changed: move |_| {list.restart();crate::onboarding::refresh_workspace();},
                                 }
                             }
                         }
@@ -65,7 +65,7 @@ pub(crate) fn ConnectionsPanel(slug: ReadSignal<String>, #[props(default = false
         }
         if let Some(Ok(items)) = list() {
             if Provider::ALL.iter().any(|provider| !provider.is_channel() && (!setup_only || provider.is_code() || provider.can_generate()) && !items.iter().any(|c| c.provider == *provider)) {
-                AddConnection { slug: slug(), connected: items.iter().map(|c| c.provider).collect::<Vec<_>>(), setup_only, on_added: move |_| list.restart() }
+                AddConnection { slug: slug(), connected: items.iter().map(|c| c.provider).collect::<Vec<_>>(), setup_only, on_added: move |_| {list.restart();crate::onboarding::refresh_workspace();} }
             }
         }
     }
@@ -155,6 +155,12 @@ fn ConnectionRow(slug: String, connection: Connection, policy: Option<api::Effec
                 }
             }
             div { class: "conn-actions",
+                if connection.provider.is_oauth() && connection.can_remove {
+                    Button{size:ButtonSize::Sm,variant:ButtonVariant::Outline,disabled:busy(),onclick:{
+                        let reconnect=format!("{}&reconnect={}",connect_url(connection.provider,&slug,None),connection.id);
+                        move |_|navigate_to(&reconnect)
+                    },"Reconnect {connection.provider.name()}"}
+                }
                 Button {
                     size: ButtonSize::Sm,
                     variant: ButtonVariant::Outline,
@@ -173,6 +179,7 @@ fn ConnectionRow(slug: String, connection: Connection, policy: Option<api::Effec
                 }
             }
             ConnectionPermissions { key: "{connection.permissions:?}", slug: slug.clone(), connection: connection.clone(), on_changed }
+            if connection.provider.is_code() && connection.can_remove { CodeTokenRepair{slug:slug.clone(),connection:connection.id.clone(),on_changed} }
             if connection.provider.is_ai() {
                 Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Outline,
                     onclick: move |_| show_models.set(!show_models()),
@@ -188,6 +195,20 @@ fn ConnectionRow(slug: String, connection: Connection, policy: Option<api::Effec
             }
         }
     }
+}
+
+#[component]
+fn CodeTokenRepair(slug: String, connection: String, on_changed: EventHandler<()>) -> Element {
+    let mut token=use_signal(String::new);let mut busy=use_signal(||false);let mut error=use_signal(||None::<String>);
+    rsx!{details{class:"conn-subform",summary{"Use a replacement code-host token"}
+        p{class:"conn-meta","Alternatively to OAuth, use a personal access token for this code host. The connection ID, project links and application permissions stay unchanged."}
+        Label{html_for:"repair-{connection}","Replacement token"}
+        Input{id:"repair-{connection}",r#type:"password",autocomplete:"off",value:token(),disabled:busy(),oninput:move |e:FormEvent|token.set(e.value())}
+        Button{disabled:busy()||token().trim().is_empty(),onclick:move |_|{let(slug,id,key)=(slug.clone(),connection.clone(),token());async move{
+            busy.set(true);match api::replace_code_token(slug,id,key).await{Ok(_)=>{token.set(String::new());error.set(None);on_changed.call(());},Err(e)=>error.set(Some(error_message(&e)))}busy.set(false);
+        }},"Replace connection token"}
+        if let Some(e)=error(){p{class:"orgs-error","{e}"}}
+    }}
 }
 
 /// Shared policy editor. `None` is inheritance, never an unrestricted grant.

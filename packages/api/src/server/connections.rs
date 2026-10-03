@@ -49,10 +49,18 @@ fn connection_of(row: &PgRow, org: &Org, user: &User) -> Connection {
 /// A separate non-secret vault document lets the write-only app update policy
 /// without retrieving or rewriting a connection's API key.
 pub async fn set_permissions(org: &Org, user: &User, id: &str, permissions: &crate::ConnectorPermissions) -> Result<Connection, ServerFnError> {
-    let (connection, owner) = get(org, user, id).await?;
+    let (connection, _) = get(org, user, id).await?;
     if !connection.can_remove { return Err(forbidden("only the connection's creator or an org admin can change its permissions")); }
     let permissions = permissions.validate(connection.provider).map_err(super::errors::bad_request)?;
     let mut tx = connector::lock(&org.id).await?;
+    connector::require_actor(&mut tx,&org.id,&user.id).await?;
+    let owner = sqlx::query("select c.user_id::text as owner, m.role from connections c join memberships m on m.org_id=c.org_id and m.user_id=$3::uuid \
+        where c.org_id=$1::uuid and c.id=$2::uuid for update of c")
+        .bind(&org.id).bind(id).bind(&user.id).fetch_one(&mut *tx).await.map_err(db_error)?;
+    if owner.get::<String,_>("owner") != user.id && !matches!(owner.get::<String,_>("role").as_str(),"owner"|"admin") {
+        return Err(forbidden("your current role cannot edit this connection"));
+    }
+    let owner: String=owner.get("owner");
     // Close the mandatory live gate before any distributed update. If either
     // vault or SQL fails, old warrants remain denied, never partially widened.
     connector::publish_ceiling(&org.id, connection.provider.id(), id, &crate::ConnectorPermissions::deny_all()).await?;
@@ -222,6 +230,50 @@ pub async fn remove(org: &Org, user: &User, id: &str) -> Result<(), ServerFnErro
 }
 
 /// One call through liaison on a connection's credential.
+/// Repair an existing slot without changing IDs, selected repositories, grants
+/// or byte ceilings. Credential replacement is write-only; old mints are closed
+/// before the old document is erased. A failed replacement stays pending.
+pub async fn replace_credential(org: &Org, user: &User, id: &str, provider: Provider, label: &str, credential: Value) -> Result<Connection, ServerFnError> {
+    let (connection, _) = get(org, user, id).await?;
+    if connection.provider != provider || !connection.can_remove { return Err(forbidden("only its creator or an org admin can reconnect this provider")); }
+    let mut tx = connector::lock(&org.id).await?;
+    connector::require_actor(&mut tx, &org.id, &user.id).await?;
+    let current = sqlx::query("select c.user_id::text as owner,m.role from connections c join memberships m on m.org_id=c.org_id and m.user_id=$3::uuid where c.org_id=$1::uuid and c.id=$2::uuid for update of c")
+        .bind(&org.id).bind(id).bind(&user.id).fetch_one(&mut *tx).await.map_err(db_error)?;
+    let old:String=current.get("owner");
+    if old != user.id && !matches!(current.get::<String,_>("role").as_str(), "owner"|"admin") { return Err(forbidden("connection ownership or your role changed")); }
+    connector::publish_ceiling(&org.id, provider.id(), id, &crate::ConnectorPermissions::deny_all()).await?;
+    connector::revoke(&mut tx,&org.id,Some(id)).await?;
+    let revision=sqlx::query("update connections set status='pending',last_error='Reauthorization in progress',credential_revision=gen_random_uuid() where id=$1::uuid returning credential_revision::text as revision")
+        .bind(id).fetch_one(&mut *tx).await.map_err(db_error)?.get::<String,_>("revision");
+    // Persist pending before touching the key: retries can never use a row
+    // advertised as active after a failed distributed credential replacement.
+    tx.commit().await.map_err(db_error)?;
+    let mut tx = connector::lock(&org.id).await?;
+    connector::require_actor(&mut tx,&org.id,&user.id).await?;
+    let current=sqlx::query("select c.user_id::text as owner,m.role from connections c join memberships m on m.org_id=c.org_id and m.user_id=$3::uuid \
+        where c.id=$1::uuid and c.org_id=$2::uuid and c.credential_revision=$4::uuid for update of c")
+        .bind(id).bind(&org.id).bind(&user.id).bind(&revision).fetch_optional(&mut *tx).await.map_err(db_error)?
+        .ok_or_else(||conflict("connection was removed or another reauthorization started; retry"))?;
+    if current.get::<String,_>("owner") != old || (old != user.id && !matches!(current.get::<String,_>("role").as_str(),"owner"|"admin")) {
+        return Err(forbidden("connection ownership or your administrative role changed"));
+    }
+    vault::delete(&vault::credential_path(provider,&old,id)).await.map_err(|_|bad_gateway("could not erase the previous credential"))?;
+    if old != user.id { vault::delete(&format!("{}/permissions",vault::credential_path(provider,&old,id))).await.map_err(|_|bad_gateway("could not revoke previous owner permissions"))?; }
+    vault::write(&vault::credential_path(provider,&user.id,id),&credential).await.map_err(|_|bad_gateway("could not store the replacement credential; retry reauthorization"))?;
+    let permissions = sqlx::query("select permissions::text as permissions from connections where id=$1::uuid and org_id=$2::uuid")
+        .bind(id).bind(&org.id).fetch_one(&mut *tx).await.map_err(db_error)?.get::<Option<String>,_>("permissions")
+        .map(|s|serde_json::from_str::<crate::ConnectorPermissions>(&s)).transpose().map_err(|_|forbidden("invalid stored permissions"))?
+        .unwrap_or_else(||crate::ConnectorPermissions::preset(provider,crate::PermissionPreset::ReadOnly));
+    vault::write(&format!("{}/permissions",vault::credential_path(provider,&user.id,id)),&serde_json::json!(permissions)).await.map_err(|_|bad_gateway("could not restore permission document"))?;
+    let organization=connector::ceiling(&connector::policy(&mut tx,&org.id).await?,&connection,&permissions);
+    connector::publish_ceiling(&org.id,provider.id(),id,&organization).await?;
+    sqlx::query("update connections set user_id=$2::uuid,label=$3,status='active',last_error=null,last_checked_at=null where id=$1::uuid")
+        .bind(id).bind(&user.id).bind(label).execute(&mut *tx).await.map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
+    Ok(get(org,user,id).await?.0)
+}
+
 pub struct ProviderCall {
     pub operation: String,
     pub resource: Vec<String>,
@@ -559,9 +611,9 @@ pub async fn call_ok(
             connection.provider.name(),
             snippet(&body)
         ))),
-        Outcome::Refused { status, error } => Err(bad_gateway(format!(
-            "the credential broker refused the call ({status} {error})"
-        ))),
+        Outcome::Refused { status, error } => Err(bad_gateway(if error=="credential_unavailable" {
+            format!("The broker could not read or refresh this connection's stored credential ({status} {error}). Reconnect the existing account in Connections. If all connections fail, check the broker's vault identity and availability; changing notebook permissions cannot repair a credential.")
+        } else { format!("the credential broker refused the call ({status} {error})") })),
     }
 }
 

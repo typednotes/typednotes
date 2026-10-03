@@ -28,6 +28,11 @@ is an app responsibility, tested separately from the proved effect ceiling.
 
 ## Trusted provisioning
 
+The current workspace workflow adds explicit notebook-subtree write setup and
+stable-ID reauthorization, with no new native operation/preset or org-ceiling
+widening. The app's queued generation uses a fresh writer launch and requires
+Lode 0.4.3's immutable caller-pin acknowledgement. [Workflow](workspaces.md).
+
 Tenant deletion and credential provisioning share the org transaction lock.
 Minting now carries the actual executing user separately from credential ownership
 and rechecks that user's live membership after the lock. Account deletion closes

@@ -117,7 +117,7 @@ end AppRuntime
             break
         time.sleep(.2)
     assert description["state"] == "ready", description
-    assert description["runtimeContract"] == "bounded-eff-v1"
+    assert description["runtimeContract"] == "bounded-eff-worker-v2"
     actual_structure = next(g for g in description["graphs"] if g["name"] == "main")
     sql(f"update graphs set session_build_id='{build['id']}', lun_build_id='{build['id']}', lun_session_id=null, "
         f"structure='{json.dumps(actual_structure)}', status='ready' where id='{graph}';")

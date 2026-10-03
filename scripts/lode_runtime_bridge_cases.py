@@ -239,7 +239,8 @@ end Bridge
         functions.append({"name": name, "module": "Bridge", "function": "Bridge." + name, "signature": signature, "outputType": configs[name]["output_type"]})
     manifest = {"open": ["Bridge", "Control.Monad.Effect"], "functions": functions,
         "graphs": [{"name": "main", "inputTypes": {"value": "String"}, "dependencies": {"store": ["value"]},
-            "program": 'do\n let value ← input "value" String\n store value'}]}
+            "program": 'do\n let value ← input "value" String\n' +
+                ''.join(f' let _ ← {name}\n' for name in configs if name != "store") + ' store value'}]}
     files = {"Bridge.lean": lean, "lun.json": json.dumps(manifest),
         "lakefile.toml": f'name="bridge_fixture"\ndefaultTargets=["Bridge"]\n[[require]]\nname="linen"\npath="{ROOT.parent / "linen"}"\n[[lean_lib]]\nname="Bridge"\n',
         "lean-toolchain": (ROOT.parent / "lode/lean-toolchain").read_text()}
@@ -267,10 +268,12 @@ end Bridge
     assert json.loads(calls[5]["content"])["output"] == 200
     assert json.loads(calls[6]["content"])["output"] == 42
     assert "authorized writer trace" in calls[6]["content"]
-    assert json.loads(calls[7]["content"])["nodes"][-1]["output"] == 1
+    assert next(node["output"] for node in json.loads(calls[7]["content"])["nodes"] if node.get("function") == "store") == 1
     for r in calls[8:]: assert r["isError"], r
     assert "non-public" in calls[8]["content"], calls[8]
-    assert HTTP_CALLS == ["/"], HTTP_CALLS
+    # The immutable cell-layout contract requires every declared function in
+    # the graph: the approved HTTP call runs once directly and once in the graph.
+    assert HTTP_CALLS == ["/", "/"], HTTP_CALLS
     assert "bridge-private-secret" not in json.dumps([status, log])
     assert "fixture-key" not in json.dumps([status, log])
     metadata = json.loads((scratch / "lode/sessions" / sid / "session.json").read_text())
@@ -347,6 +350,12 @@ end Bridge
     assert all(not r["isError"] for r in resumed_calls), resumed_calls
     fresh_execution = next(body["execution"] for method, path, body in reversed(writer_proxy.state["calls"])
         if method == "POST" and path.endswith("/messages") and body.get("execution", {}).get("binding", {}).get("graph_id") == graph)
+    # Pause automatic adoption while measuring isolated denial calls. Otherwise
+    # the scheduler can start this fully authorized graph (including rows) during
+    # a trial build and legitimately read the same actor's compute credential.
+    # Take the real generation lock so an in-flight adoption has drained first.
+    sql(f"begin; select pg_advisory_xact_lock(hashtextextended('{graph}',3)); "
+        f"update graphs set status='editing' where id='{graph}'; commit;")
     # Each trial starts with one independently attenuated ceiling; the tokens,
     # real app-provisioned vault projections and compiled implementation are the
     # same ones as the authorized run. No fake read/write test preset is minted.
@@ -391,7 +400,14 @@ end Bridge
     _, revoked = exchange(lode + f"/v0/sessions/{sid}", headers=headers)
     assert revoked["execution"]["execution"]["policy"]["effects"] == []
     assert send("POST", "/messages", {"text": "Attempt to restore removed authority", "execution": execution})[0] == 400
+    # Retain this specific session as an in-flight fixture, so the real app's
+    # steering path mints fresh model credentials for its actual ID while
+    # intersecting execution with its empty current ceiling. Regeneration of an
+    # edited declaration normally opens a fresh session and tests another bound.
+    sql(f"begin; select pg_advisory_xact_lock(hashtextextended('{graph}',3)); "
+        f"update graphs set status='implementing',lode_session_id='{sid}' where id='{graph}'; commit;")
     api("/api/graph/implement", {**args, "note": "Try again after policy revocation", "steer": True})
+    assert sql(f"select lode_session_id from graphs where id='{graph}'") == sid
     idle()
     _, log = exchange(lode + f"/v0/sessions/{sid}/messages", headers=headers)
     calls = [r for entry in log["entries"] if entry.get("type") == "tool_results" for r in entry["results"] if r["name"] == "lun_call"]

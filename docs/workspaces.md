@@ -25,20 +25,29 @@ type/configuration, model/cost and maintenance controls unfold on demand.
 
 ## Guided setup and defaults
 
-`/onboarding` chooses or creates an organization, project and notebook, then
-connects the required code host and generative AI provider. It reuses connected
-providers. Repository read/scoped subtree write grants, an allowed model and
-required writer tools must pass server checks before setup completes. The wizard
-never expands organization or connection ceilings automatically. Members who
-cannot edit a required ceiling are directed to their org admin.
+Setup is persisted user state, not a separate screen. `/onboarding` bookmarks
+redirect to the relevant standard page. A compact guidance strip points to code
+connections, repository settings, notebook creation/model selection or permissions.
+Saves refresh the guidance, with no query per typed character. The three
+collapsible hierarchy boxes are removed; normal titles retain definitions/tooltips.
+
+Migration 0013 atomically gives newly inserted users an owned **Personal
+workspace** organization, **My project**, user-bound unique slugs and defaults.
+Existing/deleted workspaces are not silently recreated. Invited addresses get
+defaults too; welcome credits are idempotently granted at verified sign-in, not
+on invitation. Linked IdPs share the same user/defaults.
+
+Choose defaults in Account settings. Creating an org/project/notebook selects
+it as the current default. Required repository/model/tool grants remain server
+validated; setup never widens organization/connection ceilings automatically.
 
 Preferences persist per user in `user_workspaces`. Removed/foreign pointers do
 not authorize navigation: the getter resolves current membership and parent
 relationships. Valid completed defaults continue to open their notebook if
 generation permissions are subsequently narrowed; execution checks live authority.
 Existing ready workspaces can be chosen without recreating resources.
-`/organizations` is the organization directory; account settings link to default
-workspace setup.
+`/organizations` is the organization directory; Account settings contain the
+default-workspace selectors.
 
 Optional storage, calendars, email and messaging do not block initial setup.
 Help remains keyboard accessible and hierarchy labels have native hover tooltips.
@@ -67,6 +76,39 @@ transaction lock and a database trigger rejects duplicate insertions. OAuth
 start checks availability before redirecting; callback races are still enforced
 at storage. Duplicate requests do not rewrite credentials. Historical duplicates
 are retained for deliberate cleanup. Existing IDs/grants remain scoped.
+
+## Repository recovery and code writes
+
+`credential_unavailable` means the broker could not read/refresh credential data
+or its permission document, not that a write grant is missing. Use **Reconnect**
+on the existing connection or the replacement-token disclosure for a code-host
+PAT. IDs, project links, scopes and byte bounds remain. Creator/admin authority
+is rechecked, old projections close first, failures leave the slot pending, and
+a revision fences concurrent repairs. The app remains credential-write-only.
+If all connections fail, check the broker's vault identity/availability instead
+of enlarging notebook permissions.
+
+Repository selection does not enable writes. Repository settings offers
+**Allow notebook code writes**, an explicit creator/admin action granting only
+`[owner,repo,typednotes]` descendants. It preserves existing grants/limits, adds
+no deletion and refuses a disallowing org ceiling. OAuth/PAT scopes remain an
+additional ceiling; runtime and broker still intersect all four authority bounds.
+
+## Automatic code and agent activity
+
+Saving a cell queues generation when required setup is ready. Requests are
+durable/actor-bound; checkout survives navigation and launches serialize with
+build adoption. Failed setup/generation retains the saved declaration and an
+actionable notice. New declarations start fresh bounded writer sessions rather
+than widening existing function/service ceilings. **Code activity** shows actual
+checkout, assistant/tool updates, file edits, checks and publication details,
+not invented hidden reasoning or provider token streaming.
+
+Lode 0.4.3 acknowledges immutable caller-pinned output/source/wiring contracts.
+`lun_build` consumes a private checked manifest; Lun proves actual Lean type and
+wiring equalities. Unpinned parent outputs may evolve with dependent argument
+types, checked through Lean LSP and compilation. Generated signatures/manifests
+never replace user pins. Older writers are refused before generation messages.
 
 ## Public links
 

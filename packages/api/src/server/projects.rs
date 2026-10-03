@@ -317,6 +317,24 @@ fn checked_repo(provider: Provider, expected: &str, body: &[u8]) -> Result<Repo,
     Ok(repo)
 }
 
+/// An explicit creator/admin action adds only the selected repository's
+/// notebook subtree. It cannot change the organization ceiling or add delete.
+pub async fn allow_code_writes(org: &Org, user: &User, project_slug: &str) -> Result<crate::Connection, ServerFnError> {
+    let (project,_) = get(org,project_slug).await?;
+    let repo=project.repo.ok_or_else(||bad_request("select the repository first"))?;
+    let id=repo.connection_id.ok_or_else(||bad_request("reconnect the repository account first"))?;
+    let (connection,_)=code_connection(org,user,&id).await?;
+    let mut permissions=connection.permissions.clone().unwrap_or_else(||crate::ConnectorPermissions::preset(connection.provider,crate::PermissionPreset::ReadOnly));
+    let mut root=repo.full_name.split('/').map(str::to_string).collect::<Vec<_>>();root.push("typednotes".into());
+    let policy=super::db::org_settings(org).await?.effect_policy;
+    if policy.connector_blocker(connection.provider,&crate::ConnectorPermissions::scoped("repositories.write",root.clone(),true),"repositories.write",&root).is_some() {
+        return Err(forbidden("organization notebook permissions do not allow code writing here; an owner/admin must enable that operation first"));
+    }
+    let grant=crate::ConnectorScope{operation:"repositories.write".into(),root,descendants:true};
+    if !permissions.scopes.contains(&grant) { permissions.scopes.push(grant); }
+    connections::set_permissions(org,user,&id,&permissions).await
+}
+
 pub async fn clear_repo(org: &Org, project_slug: &str) -> Result<Project, ServerFnError> {
     let (project, _) = get(org, project_slug).await?;
     sqlx::query(

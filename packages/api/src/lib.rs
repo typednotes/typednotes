@@ -554,6 +554,23 @@ pub async fn list_repo_page(slug: String, connection: String, page: u32) -> Resu
     projects::repo_page(&org, &user, &connection, page).await
 }
 
+#[post("/api/project/code-writes")]
+pub async fn allow_project_code_writes(slug: String, project: String) -> Result<Connection, ServerFnError> {
+    let (user,org)=member_org(&slug).await?;
+    projects::allow_code_writes(&org,&user,&project).await
+}
+
+/// Optional PAT repair uses the same slot/authorization as OAuth reauthorization.
+#[post("/api/connections/code-token")]
+pub async fn replace_code_token(slug: String, connection: String, token: String) -> Result<Connection, ServerFnError> {
+    let (user,org)=member_org(&slug).await?;
+    let (current,_)=server::connections::get(&org,&user,&connection).await?;
+    if !current.provider.is_code() { return Err(errors::bad_request("choose a code-host connection")); }
+    validate_api_key(&token).map_err(errors::bad_request)?;
+    server::connections::replace_credential(&org,&user,&connection,current.provider,&current.label,
+        server::vault::bearer(current.provider.fixed_base_url().expect("code host has fixed API"),token.trim())).await
+}
+
 /// Make a repository the project's primary one.
 #[post("/api/project/repo")]
 pub async fn set_project_repo(

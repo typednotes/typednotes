@@ -89,7 +89,7 @@ class Fixture(BaseHTTPRequestHandler):
                 assert isinstance(body, dict)
                 state["tools"] = body["tools"]
                 state["execution"] = public_execution(body["execution"])
-                return self.reply(201, {"id": "writer-fixture", "state": "running", "tools": state["tools"], "execution": state["execution"]})
+                return self.reply(201, {"id": "writer-fixture", "state": "running", "tools": state["tools"], "execution": state["execution"],"buildContracts":body.get("buildContracts")})
             if "/messages" in self.path and self.command == "POST":
                 assert isinstance(body, dict)
                 assert set(body.get("tools", [])) <= set(state["tools"])
@@ -134,6 +134,7 @@ class Fixture(BaseHTTPRequestHandler):
                 state["documents"].pop(self.path, None)
             else:
                 document = json.loads(raw)
+                state.setdefault("writes",[]).append((self.path,json.loads(raw)))
                 # Test gateways stay entirely local. The app itself still writes
                 # the validated HTTPS base and never reads a credential back.
                 if "base_url" in document and document.get("kind") != "postgres":
@@ -153,7 +154,7 @@ class Fixture(BaseHTTPRequestHandler):
             module.verify_sigv4(self.command, self.path, self.headers, raw)
             state["calls"].append((self.command, self.path, None))
             return self.reply(200, {"native": True})
-        assert self.headers.get("Authorization") == "Bearer local-provider-fixture"
+        assert self.headers.get("Authorization") in ("Bearer local-provider-fixture","Bearer replacement-code-fixture")
         state["calls"].append((self.command, self.path, json.loads(raw) if raw else None))
         if self.path.endswith("/models"):
             return self.reply(200, state.get("models", [{"id": "jev-latest"}]))
@@ -385,6 +386,28 @@ def main():
                 assert len(upstream.state["calls"]) == before_egress
                 api("/api/connections/permissions", {"connection_id":github_id,"permissions":{"scopes":[{"operation":op,"root":[],"descendants":True} for op in ["repositories.list","repositories.read"]],"maxRequestBytes":1048576,"maxResponseBytes":16777216}})
                 passed("direct repository entry verifies exact native metadata and cannot use inventory authority as a code-read grant")
+                path=f"/v1/secret/data/thirdparty/github/{user}/{github_id}"
+                saved_permissions=api("/api/connections",{})
+                saved_permissions=next(c["permissions"] for c in saved_permissions if c["id"]==github_id)
+                vault.state["documents"].pop(path)
+                missing=api("/api/repos",{"connection":github_id},ok=False)
+                assert "credential_unavailable" in json.dumps(missing) and "Reconnect" in json.dumps(missing)
+                repaired=api("/api/connections/code-token",{"connection":github_id,"token":"replacement-code-fixture"})
+                assert repaired["id"]==github_id and repaired["permissions"]==saved_permissions
+                assert "replacement-code-fixture" not in json.dumps(repaired)
+                assert next(doc for written,doc in reversed(vault.state["writes"]) if written==path)["base_url"]=="https://api.github.com"
+                # The production repair fixes its host; only the local vault
+                # fixture maps that stored provider host to the local HTTP peer.
+                vault.state["documents"][path]["base_url"]=vault.state["upstream"]+"/base"
+                assert api("/api/repos",{"connection":github_id})[0]["full_name"]=="fixture/repo"
+                assert api("/api/project",{"project":"selection-check"})["project"]["repo"]["connection_id"]==github_id
+                passed("missing repository credentials reproduce the broker failure and repair preserves slot, project links and authority without exposing the key")
+                granted=api("/api/project/code-writes",{"project":"selection-check"})
+                writes=[s for s in granted["permissions"]["scopes"] if s["operation"]=="repositories.write"]
+                assert writes==[{"operation":"repositories.write","root":["fixture","repo","typednotes"],"descendants":True}]
+                assert not any(s["operation"]=="repositories.delete" for s in granted["permissions"]["scopes"])
+                assert granted["permissions"]["maxRequestBytes"]==saved_permissions["maxRequestBytes"]
+                passed("explicit repository write setup adds only the notebook subtree, preserves byte bounds and grants no deletion")
                 original_policy = api("/api/org/settings", {})["effect_policy"]
                 blocked_policy = {**original_policy, "effects": ["SecretStore"]}
                 api("/api/org/settings/permissions", {"policy": blocked_policy})
@@ -498,6 +521,12 @@ def main():
                     from native_writer_pipeline import verify_pipeline
                     verify_pipeline(scratch, sql, api, exchange, lode, org, user, vault, upstream)
                     if args.runtime:
+                        # Each independent native fixture uses one provider
+                        # slot/org. Retire the previous suites' temporary keys
+                        # through the real cleanup API before the bridge suite.
+                        for connected in api("/api/connections",{}):
+                            if connected["provider"] in ("Github","Openai","S3"):
+                                api("/api/connections/delete",{"id":connected["id"]})
                         from lode_runtime_bridge_cases import verify_bridge
                         verify_bridge(scratch, sql, api, exchange, lode, runtime, pg_port, org, user, vault, upstream,
                                       writer, processes, lode_env)

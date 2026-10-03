@@ -164,6 +164,7 @@ struct ConnectQuery {
     org: String,
     /// The project page the flow starts from, to come back to.
     project: Option<String>,
+    reconnect: Option<String>,
 }
 
 async fn connect(
@@ -201,7 +202,12 @@ async fn connect(
     else {
         return fail("this provider is not connected through OAuth");
     };
-    if let Err(error) = connections::ensure_available(&org, provider).await {
+    if let Some(id) = &q.reconnect {
+        match connections::get(&org, &user, id).await {
+            Ok((connection, _)) if connection.provider == provider && connection.can_remove => {},
+            _ => return fail("only the connection's creator or an org admin can reconnect it"),
+        }
+    } else if let Err(error) = connections::ensure_available(&org, provider).await {
         return fail(&message(&error));
     }
     let Some(client) = idp.client() else {
@@ -220,7 +226,17 @@ async fn connect(
         return_to: return_to.clone(),
     };
     match oauth::start(idp, &client, purpose, &config::public_url(&headers)).await {
-        Ok(url) => Redirect::to(&url).into_response(),
+        Ok(url) => {
+            if let Some(id) = &q.reconnect {
+                let state = url::Url::parse(&url).ok().and_then(|url| url.query_pairs().find(|(k,_)| k=="state").map(|(_,v)| v.into_owned()));
+                let Some(state) = state else { return fail("could not bind reconnect flow"); };
+                if sqlx::query("update oauth_flows set connection_id=$2::uuid where state=$1")
+                    .bind(state).bind(id).execute(db::pool().expect("OAuth started with database")).await.is_err() {
+                    return fail("could not persist reconnect flow");
+                }
+            }
+            Redirect::to(&url).into_response()
+        },
         Err(e) => fail(&message(&e)),
     }
 }
@@ -320,7 +336,7 @@ async fn callback(
                 Ok(Some(user)) if user.id == user_id => user,
                 _ => return to_login("sign in as the member who started this connection"),
             };
-            match finish_connect(&org, &user, provider, &tokens, &access_token).await {
+            match finish_connect(&org, &user, provider, &tokens, &access_token, flow.connection_id.as_deref()).await {
                 Ok(()) => back(
                     &org.slug,
                     return_to.as_deref(),
@@ -347,6 +363,7 @@ async fn finish_connect(
     provider: Provider,
     tokens: &oauth::Tokens,
     access_token: &str,
+    reconnect: Option<&str>,
 ) -> Result<(), String> {
     let base_url = provider
         .fixed_base_url()
@@ -442,6 +459,10 @@ async fn finish_connect(
         }
         _ => return Err("this provider is not connected through OAuth".to_string()),
     };
+    if let Some(id) = reconnect {
+        connections::replace_credential(org, user, id, provider, &label, credential).await.map_err(|e| message(&e))?;
+        return Ok(());
+    }
     connections::store(
         org,
         user,

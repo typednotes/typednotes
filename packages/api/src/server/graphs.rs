@@ -831,6 +831,11 @@ pub async fn add_cell(
         stored["token_hash"] = json!(hash);
         endpoint_url = Some(url);
     }
+    // Declaration insertion, queueing and build adoption share a graph lock.
+    // A finishing older build must not mark a newly queued cell ready.
+    let mut guard=pool()?.begin().await.map_err(db_error)?;
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1,3))").bind(&ctx.row.graph.id).execute(&mut *guard).await.map_err(db_error)?;
+    super::connector::require_actor(&mut guard,&org.id,&user.id).await?;
     let inserted = sqlx::query(
         "insert into graph_cells (graph_id, position, name, kind, variant, description, config, next_due_at) \
          values ($1::uuid, \
@@ -845,7 +850,7 @@ pub async fn add_cell(
     .bind(&description)
     .bind(stored.to_string())
     .bind(next_due(cell_type, &config))
-    .fetch_one(pool()?)
+    .fetch_one(&mut *guard)
     .await;
     let id: String = match inserted {
         Ok(row) => row.get("id"),
@@ -856,10 +861,25 @@ pub async fn add_cell(
         }
         Err(e) => return Err(db_error(e)),
     };
-    touch(&ctx.row.graph.id).await?;
+    sqlx::query("update graphs set updated_at=now() where id=$1::uuid").bind(&ctx.row.graph.id).execute(&mut *guard).await.map_err(db_error)?;
+    let missing=super::workspace::required(&ctx.project,Some(&ctx.row.graph),&connections::list(org,user).await?,&super::db::org_settings(org).await?.effect_policy);
+    let (generation,generation_notice)=if lode::configured()&&missing.is_empty(){
+        sqlx::query("insert into graph_generation_requests(graph_id,user_id) values($1::uuid,$2::uuid) \
+            on conflict(graph_id) do update set user_id=excluded.user_id,revision=gen_random_uuid(),requested_at=now()")
+            .bind(&ctx.row.graph.id).bind(&user.id).execute(&mut *guard).await.map_err(db_error)?;
+        sqlx::query("update graphs set status='implementing',status_detail='Preparing repository checkout',updated_at=now() where id=$1::uuid")
+            .bind(&ctx.row.graph.id).execute(&mut *guard).await.map_err(db_error)?;
+        (true,None)
+    }else{
+        let notice=if !lode::configured(){"Code writing is not configured on this deployment.".into()}else{missing.join(" ")};
+        (false,Some(format!("Cell saved. Finish setup to start code generation: {notice}")))
+    };
+    guard.commit().await.map_err(db_error)?;
+    let generation=if generation{Some(graph_by_id(&ctx.row.graph.id).await?.ok_or_else(||not_found("notebook was removed"))?.graph)}else{None};
     Ok(CellSaved {
         cell: cell_by_id(&ctx.row.graph.id, &id).await?.cell,
         endpoint_url,
+        generation,generation_notice,
     })
 }
 
@@ -1125,6 +1145,7 @@ pub async fn rotate_endpoint(
     Ok(CellSaved {
         cell: cell_by_id(&ctx.row.graph.id, &cell.cell.id).await?.cell,
         endpoint_url: Some(url),
+        generation:None,generation_notice:None,
     })
 }
 
@@ -1315,6 +1336,63 @@ pub fn project_path(graph_slug: &str) -> String {
 
 // ── Implement (§2, step 1) ──────────────────────────────────────────────
 
+/// Serialized durable launches. Re-read actor/membership and all live ceilings;
+/// a newer revision remains queued, and failures leave the saved cells intact.
+async fn run_queued(graph_id:&str)->Result<bool,ServerFnError>{
+    let mut tx=pool()?.begin().await.map_err(db_error)?;
+    let locked=sqlx::query("select pg_try_advisory_xact_lock(hashtextextended($1,3)) as locked")
+        .bind(graph_id).fetch_one(&mut *tx).await.map_err(db_error)?.get::<bool,_>("locked");
+    if !locked{return Ok(true);}
+    let request=sqlx::query("select user_id::text as actor,revision::text as revision from graph_generation_requests where graph_id=$1::uuid")
+        .bind(graph_id).fetch_optional(&mut *tx).await.map_err(db_error)?;
+    let Some(request)=request else{return Ok(false);};
+    let actor:String=request.get("actor");let revision:String=request.get("revision");
+    let row=graph_by_id(graph_id).await?.ok_or_else(||not_found("notebook was removed"))?;
+    let parent=sqlx::query("select org_id::text as org from projects where id=$1::uuid").bind(&row.project_id)
+        .fetch_one(pool()?).await.map_err(db_error)?.get::<String,_>("org");
+    let user=sqlx::query("select email::text as email,display_name from users where id=$1::uuid and deleted_at is null")
+        .bind(&actor).fetch_optional(pool()?).await.map_err(db_error)?;
+    let result=async{
+        let user=user.ok_or_else(||forbidden("generation actor was removed"))?;
+        let user=User{id:actor,email:user.get("email"),display_name:user.get("display_name")};
+        let org=sqlx::query("select slug::text as slug from orgs where id=$1::uuid").bind(parent).fetch_one(pool()?).await.map_err(db_error)?.get::<String,_>("slug");
+        let org=super::db::org_for_member(&org,&user.id).await?.ok_or_else(||forbidden("generation actor no longer belongs to this organization"))?;
+        let(project,_)=super::projects::get(&org,&sqlx::query("select slug::text as slug from projects where id=$1::uuid").bind(&row.project_id).fetch_one(pool()?).await.map_err(db_error)?.get::<String,_>("slug")).await?;
+        let mut ctx=Ctx{org,project,row,user};
+        retire_writer(&mut ctx).await?;
+        let cells=cells_of(graph_id).await?.into_iter().map(|r|r.cell).collect::<Vec<_>>();
+        let text=lode_message(&ctx.row.graph.name,&cells,None);
+        launch(&ctx,&text,Writing::All,LaunchedBy::Member,"Writing notebook code").await
+    }.await;
+    let removed=sqlx::query("delete from graph_generation_requests where graph_id=$1::uuid and revision=$2::uuid")
+        .bind(graph_id).bind(revision).execute(&mut *tx).await.map_err(db_error)?.rows_affected();
+    if let Err(e)=result {if removed!=0{fail_writing(graph_id,&format!("Automatic code generation could not start: {}",err_text(&e))).await?;}}
+    tx.commit().await.map_err(db_error)?;
+    Ok(true)
+}
+
+pub async fn tick_queued(){
+    let Ok(pool)=pool() else{return;};
+    let Ok(rows)=sqlx::query("select graph_id::text as id from graph_generation_requests order by requested_at limit 8").fetch_all(pool).await else{return;};
+    for row in rows{let _=run_queued(&row.get::<String,_>("id")).await;}
+}
+
+/// New declarations need a fresh proof-bounded service ceiling. Never extend
+/// an existing session's permitted function names or connector grants in place.
+async fn retire_writer(ctx:&mut Ctx)->Result<(),ServerFnError>{
+    if let Some(id)=ctx.row.lode_session_id.clone(){
+        lode::narrow(&id,&[]).await.map_err(bad_gateway)?;
+        lode::abort(&id).await.map_err(bad_gateway)?;
+        let mut tx=super::connector::lock(&ctx.org.id).await?;
+        super::connector::require_actor(&mut tx,&ctx.org.id,&ctx.user.id).await?;
+        super::connector::revoke_graph(&mut tx,&ctx.org.id,&ctx.row.graph.id).await?;
+        sqlx::query("update graphs set lode_session_id=null where id=$1::uuid").bind(&ctx.row.graph.id).execute(&mut *tx).await.map_err(db_error)?;
+        tx.commit().await.map_err(db_error)?;
+        ctx.row.lode_session_id=None;
+    }
+    Ok(())
+}
+
 /// Which cells a lode run writes.
 pub enum Writing<'a> {
     /// Every cell (the notebook's implementation).
@@ -1348,6 +1426,9 @@ async fn launch(
             "notebooks cannot be implemented: code writing is not configured",
         ));
     }
+    let mut current=ctx.clone();
+    if !matches!(writing,Writing::Unchanged){retire_writer(&mut current).await?;}
+    let ctx=&current;
     let (credentials, model) = lode_credentials(ctx).await?;
     let mut policy = super::db::org_settings(&ctx.org).await?.effect_policy.validate().map_err(bad_request)?;
     let cells = cells_of(&ctx.row.graph.id).await?;
@@ -1423,6 +1504,7 @@ async fn launch(
                 "agent": "build",
                 "tools": policy.tools,
                 "execution": execution,
+                "buildContracts": build_contracts(&cells.iter().map(|r|r.cell.clone()).collect::<Vec<_>>()),
             });
             log_start = 0;
             // Opening the checkout precedes generation: the broker policy must
@@ -1744,10 +1826,15 @@ pub async fn abort(
     graph_slug: &str,
 ) -> Result<Graph, ServerFnError> {
     let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
+    let mut guard=pool()?.begin().await.map_err(db_error)?;
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1,3))").bind(&ctx.row.graph.id).execute(&mut *guard).await.map_err(db_error)?;
+    sqlx::query("delete from graph_generation_requests where graph_id=$1::uuid").bind(&ctx.row.graph.id).execute(&mut *guard).await.map_err(db_error)?;
+    let ctx=member_ctx(org,user,project_slug,graph_slug).await?;
     if let Some(id) = &ctx.row.lode_session_id {
         lode::abort(id).await.map_err(bad_gateway)?;
     }
     fail_writing(&ctx.row.graph.id, "aborted").await?;
+    guard.commit().await.map_err(db_error)?;
     Ok(graph_by_id(&ctx.row.graph.id)
         .await?
         .ok_or_else(|| not_found("no such notebook"))?
@@ -1766,6 +1853,16 @@ pub async fn progress(
     wait: u64,
 ) -> Result<LodeProgress, ServerFnError> {
     let mut ctx = member_ctx(org, user, project_slug, graph_slug).await?;
+    let queued=sqlx::query("select 1 from graph_generation_requests where graph_id=$1::uuid").bind(&ctx.row.graph.id)
+        .fetch_optional(pool()?).await.map_err(db_error)?.is_some();
+    if queued {
+        let id=ctx.row.graph.id.clone();
+        // Launch independently of request cancellation so navigation cannot lose
+        // checkout progress. SQL serialization prevents duplicate paid runs.
+        spawn_generation(id.clone());
+        reload(&mut ctx).await?;
+        return Ok(LodeProgress{graph:ctx.row.graph,state:"queued".into(),entries:Vec::new(),next:after});
+    }
     let mut entries = Vec::new();
     let mut next = after;
     let mut state = "none".to_string();
@@ -1818,6 +1915,8 @@ pub async fn progress(
         next,
     })
 }
+
+fn spawn_generation(graph:String){tokio::spawn(async move{let _=run_queued(&graph).await;});}
 
 /// Fresh warrants for lode's run in flight: they live 300 s, a run lasts
 /// longer (§5), and lode keeps them in memory only.
@@ -1904,6 +2003,12 @@ pub async fn tick_implementing() {
 /// One step of the implementing state: wait for lode, then submit the
 /// published commit to lun, then adopt the ready build.
 async fn advance(ctx: &mut Ctx, lode_running: bool) -> Result<(), ServerFnError> {
+    let mut guard=pool()?.begin().await.map_err(db_error)?;
+    let locked=sqlx::query("select pg_try_advisory_xact_lock(hashtextextended($1,3)) as locked").bind(&ctx.row.graph.id).fetch_one(&mut *guard).await.map_err(db_error)?.get::<bool,_>("locked");
+    if !locked{return Ok(());}
+    reload(ctx).await?;
+    if ctx.row.graph.status!="implementing"{return Ok(());}
+    if sqlx::query("select 1 from graph_generation_requests where graph_id=$1::uuid").bind(&ctx.row.graph.id).fetch_optional(pool()?).await.map_err(db_error)?.is_some(){return Ok(());}
     if lode_running {
         return Ok(());
     }
@@ -2058,6 +2163,20 @@ pub async fn rebuild(
 
 // ── Build (§2, step 2) ──────────────────────────────────────────────────
 
+/// Single trusted definition used for both writer trials and final adoption.
+/// Generated signatures do not become user pins; only configuration does.
+fn build_contracts(cells:&[Cell])->Value{
+    let outputs:Map<String,Value>=cells.iter().filter(|c|c.cell_type.has_function())
+        .filter_map(|c|c.config.output_type.as_ref().map(|t|(c.name.clone(),json!(t)))).collect();
+    let inputs:Map<String,Value>=cells.iter().filter(|c|c.cell_type.has_input())
+        .filter_map(|c|c.config.output_type.as_ref().map(|t|(c.config.input.clone().unwrap_or_else(||c.name.clone()),json!(t)))).collect();
+    let dependencies:Map<String,Value>=cells.iter().filter(|c|c.cell_type.in_graph()).filter_map(|c|c.config.dependencies.as_ref().map(|deps|{
+        let args=deps.iter().map(|name|cells.iter().find(|p|p.name==*name).filter(|p|p.cell_type.has_input()).and_then(|p|p.config.input.clone()).unwrap_or_else(||name.clone())).collect::<Vec<_>>();
+        (c.name.clone(),json!(args))
+    })).collect();
+    json!({"outputs":outputs,"inputs":inputs,"dependencies":dependencies,"graph":GRAPH_NAME})
+}
+
 /// The head commit of the repository's branch, read through its connection.
 async fn branch_head(ctx: &Ctx) -> Result<String, ServerFnError> {
     let (connection, owner, repo) = repo_connection(ctx).await?;
@@ -2174,31 +2293,20 @@ async fn build_request(ctx: &Ctx, commit: &str) -> Result<(Value, LunJson), Serv
     let read = super::connector::mint(&ctx.org, &ctx.user, &connection, &owner, "repositories.read",
         &super::connector::scoped(&connection, "repositories.read", repo.full_name.split('/').map(str::to_string).collect(), true), 0).await?.grant;
     let cells: Vec<Cell> = cells_of(&ctx.row.graph.id).await?.into_iter().map(|row| row.cell).collect();
+    let contracts=build_contracts(&cells);
     let mut functions = serde_json::to_value(&lun_json.functions).map_err(|_| bad_request("invalid function declarations"))?;
     if let Some(functions) = functions.as_array_mut() {
         for function in functions {
             if let Some(cell) = cells.iter().find(|cell| function.get("name").and_then(Value::as_str) == Some(&cell.name)) {
-                if let Some(ty) = &cell.config.output_type { function["outputType"] = json!(ty); }
+                if let Some(ty) = contracts["outputs"].get(&cell.name) { function["outputType"] = ty.clone(); }
             }
         }
     }
     let mut graphs = serde_json::to_value(&lun_json.graphs).map_err(|_| bad_request("invalid graph declarations"))?;
     if let Some(graphs) = graphs.as_array_mut() {
         for graph in graphs.iter_mut().filter(|g| g.get("name").and_then(Value::as_str) == Some(GRAPH_NAME)) {
-            let mut dependencies = Map::new();
-            for cell in cells.iter().filter(|cell| cell.cell_type.in_graph()) {
-                if let Some(deps) = &cell.config.dependencies {
-                    let args: Vec<_> = deps.iter().map(|name| cells.iter().find(|c| c.name == *name).filter(|c| c.cell_type.has_input()).and_then(|c| c.config.input.clone()).unwrap_or_else(|| name.clone())).collect();
-                    dependencies.insert(cell.name.clone(), json!(args));
-                }
-            }
-            graph["dependencies"] = json!(dependencies);
-            let input_types: Map<String, Value> = cells.iter()
-                .filter(|cell| cell.cell_type.has_input())
-                .filter_map(|cell| cell.config.output_type.as_ref().map(|ty| (
-                    cell.config.input.clone().unwrap_or_else(|| cell.name.clone()), json!(ty))))
-                .collect();
-            graph["inputTypes"] = json!(input_types);
+            graph["dependencies"] = contracts["dependencies"].clone();
+            graph["inputTypes"] = contracts["inputs"].clone();
         }
     }
     let request = json!({

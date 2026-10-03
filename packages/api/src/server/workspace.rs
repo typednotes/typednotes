@@ -16,6 +16,7 @@ pub async fn get(user: &User) -> Result<UserWorkspace, ServerFnError> {
     let mut project = None;
     let mut notebook = None;
     let mut requirements = Vec::new();
+    let mut has_ai=false;
     if let Some(org) = &org {
         let candidates = projects::list(org).await?;
         project = row.as_ref().and_then(|r| r.get::<Option<String>,_>("project"))
@@ -28,6 +29,7 @@ pub async fn get(user: &User) -> Result<UserWorkspace, ServerFnError> {
                 .or_else(|| candidates.iter().min_by_key(|g| (&g.created_at, &g.id)).cloned());
             let policy = db::org_settings(org).await?.effect_policy;
             let accounts = connections::list(org, user).await?;
+            has_ai=accounts.iter().any(|c|c.status=="active"&&c.provider.can_generate());
             requirements = required(project, notebook.as_ref(), &accounts, &policy);
         } else { requirements.push("Create or choose a project.".into()); }
     } else { requirements.push("Create or choose an organization.".into()); }
@@ -39,7 +41,38 @@ pub async fn get(user: &User) -> Result<UserWorkspace, ServerFnError> {
     let default_url = if setup_required { None } else {
         org.as_ref().zip(project.as_ref()).zip(notebook.as_ref()).map(|((o,p),g)| format!("/orgs/{}/projects/{}/graphs/{}", o.slug, p.slug, g.slug))
     };
-    Ok(UserWorkspace { org, project, notebook, requirements, setup_required, default_url })
+    let (setup_url, next_step) = guidance(org.as_ref(), project.as_ref(), notebook.as_ref(), &requirements,has_ai);
+    Ok(UserWorkspace { org, project, notebook, requirements, setup_required, default_url, setup_url, next_step })
+}
+
+fn guidance(org: Option<&crate::Org>, project: Option<&Project>, graph: Option<&Graph>, missing: &[String],has_ai:bool) -> (String, Option<String>) {
+    let Some(org) = org else { return ("/organizations".into(), Some("Create an organization to own your workspace.".into())); };
+    let Some(project) = project else { return (format!("/orgs/{}",org.slug), Some("Create a project for your notebooks.".into())); };
+    let project_url = format!("/orgs/{}/projects/{}",org.slug,project.slug);
+    if project.repo.is_none() { return (format!("{project_url}/settings/repository"), Some("Connect a code host and choose the project's repository.".into())); }
+    let Some(graph) = graph else { return (project_url, Some("Create your first notebook in this project.".into())); };
+    let notebook = format!("{project_url}/graphs/{}",graph.slug);
+    if missing.iter().any(|m| m.contains("generative AI")) {
+        let url = if !has_ai { format!("/orgs/{}/settings/connections",org.slug) } else { notebook };
+        return (url, Some("Connect an AI provider, then select the notebook's model.".into()));
+    }
+    if missing.iter().any(|m| m.contains("repository")) { return (format!("{project_url}/settings/repository"),Some("Allow code writing in this repository's notebook folder.".into())); }
+    if !missing.is_empty() { return (format!("/orgs/{}/settings/notebooks",org.slug),missing.first().cloned()); }
+    (notebook,None)
+}
+
+/// New-user default grants are idempotent and occur on verified sign-in, not
+/// when someone merely invites an address. Linking another IdP does not create
+/// another workspace or grant credits again.
+pub async fn welcome(user: &str) {
+    let Ok(pool) = db::pool() else { return; };
+    let Ok(Some(row)) = sqlx::query("select org_id::text as org from user_workspaces where user_id=$1::uuid and org_id is not null")
+        .bind(user).fetch_optional(pool).await else { return; };
+    let org: String = row.get("org");
+    if let Ok(Some(_)) = sqlx::query("select 1 from orgs where id=$1::uuid and slug=$2::citext")
+        .bind(&org).bind(format!("workspace-{user}")).fetch_optional(pool).await {
+        db::welcome_grant(&org).await;
+    }
 }
 
 fn subtree(connection: &Connection, policy: &EffectPolicy, operation: &str, root: &[String]) -> bool {
@@ -48,7 +81,7 @@ fn subtree(connection: &Connection, policy: &EffectPolicy, operation: &str, root
     policy.allows_connector(connection.provider) && effective.scopes.iter().any(|s| s.operation == operation && s.descendants && root.starts_with(&s.root))
 }
 
-fn required(project: &Project, graph: Option<&Graph>, connections: &[Connection], policy: &EffectPolicy) -> Vec<String> {
+pub(super) fn required(project: &Project, graph: Option<&Graph>, connections: &[Connection], policy: &EffectPolicy) -> Vec<String> {
     let mut missing = Vec::new();
     let active = |id: &str| connections.iter().find(|c| c.id == id && c.status == "active");
     if let Some(repo) = &project.repo {

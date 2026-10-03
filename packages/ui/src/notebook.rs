@@ -159,7 +159,7 @@ pub fn NotebookPage(
                     was_implementing = true;
                     // lode holds the request while it has nothing new; a
                     // floor all the same, and a longer one while lun builds.
-                    pause(if p.state == "running" { 1000 } else { 4000 }).await;
+                    pause(if p.state == "running" || p.state=="queued" { 1000 } else { 4000 }).await;
                 }
                 Err(_) => pause(10_000).await,
             }
@@ -216,7 +216,7 @@ pub fn NotebookPage(
                             on_started: started,
                             on_changed: move |_| detail.restart(),
                         }
-                        if !log().is_empty() {
+                        if !log().is_empty() || current.status=="implementing" {
                             LodeLog { entries: log(), running: current.status == "implementing" }
                         }
                         Cells {
@@ -369,7 +369,7 @@ fn Header(
                     ai,
                     on_changed: move |_| on_changed.call(()),
                 }
-                Link { to: "/onboarding", "Choose your default workspace" }
+                Link { to: "/settings", "Choose your default workspace" }
                 }
                 div { class: "conn-subform",
                     details { class: "nb-advanced", open: implementing,
@@ -477,6 +477,7 @@ pub(crate) fn ModelPicker(
                 Ok(_) => {
                     status.set(Some(Ok("Saved.".to_string())));
                     on_changed.call(());
+                    crate::onboarding::refresh_workspace();
                 }
                 Err(e) => status.set(Some(Err(error_message(&e)))),
             }
@@ -524,17 +525,19 @@ fn LodeLog(entries: Vec<LodeEntry>, running: bool) -> Element {
     rsx! {
         Card {
             CardHeader {
-                CardTitle { "Implementation" }
+                CardTitle { "Code activity" }
                 CardDescription {
-                    if running { "Writing the code; this follows each step." } else { "The last time the code was written." }
+                    if running { "Repository checkout, agent updates, file edits, checks and publication appear here as they happen." } else { "The last code-writing run." }
                 }
             }
             CardContent {
+                if entries.is_empty() && running {p{class:"conn-meta",role:"status","Preparing the repository. Waiting for the first agent update…"}}
                 div { class: "nb-log",
                     for e in entries.iter().rev().take(200) {
                         div { key: "{e.index}", class: "nb-log-entry nb-log-{e.kind}",
                             span { class: "nb-log-kind", "{e.kind}" }
                             span { class: "nb-log-text", "{e.text}" }
+                            if !e.detail.is_empty() && e.detail != e.text {details{class:"nb-log-detail",summary{"Step details"}pre{class:"nb-code","{e.detail}"}}}
                             if let Some(usage) = e.usage.as_ref() {
                                 span { class: "conn-meta", " · tokens: {usage.input} input, {usage.output} output, {usage.cache_read} cached read, {usage.cache_write} cached write" }
                             }
@@ -647,6 +650,7 @@ fn Cells(
                     connections: connections.clone(),
                     on_saved: move |_| on_changed.call(()),
                     on_cancel: None,
+                    on_started: Some(on_started),
                 }
                 }
             }
@@ -1614,6 +1618,7 @@ fn CellEditor(
     connections: Vec<Connection>,
     on_saved: EventHandler<()>,
     on_cancel: Option<EventHandler<()>>,
+    #[props(default)] on_started: Option<EventHandler<Graph>>,
 ) -> Element {
     let start = existing.clone();
     let mut cell_type = use_signal(|| {
@@ -1728,14 +1733,14 @@ fn CellEditor(
             let result = match existing_id {
                 Some(id) => update_cell(slug, project, graph, id, n, d, c)
                     .await
-                    .map(|_| None),
+                    .map(|_| (None,None,None)),
                 None => add_cell(slug, project, graph, t, n, d, c)
                     .await
-                    .map(|s| s.endpoint_url),
+                    .map(|s| (s.endpoint_url,s.generation,s.generation_notice)),
             };
             match result {
-                Ok(endpoint) => {
-                    error.set(None);
+                Ok((endpoint,generation,notice)) => {
+                    error.set(notice);
                     if !editing {
                         name.set(String::new());
                         description.set(String::new());
@@ -1746,6 +1751,7 @@ fn CellEditor(
                     }
                     shown_url.set(endpoint);
                     on_saved.call(());
+                    if let(Some(g),Some(start))=(generation,on_started){start.call(g);}
                 }
                 Err(e) => error.set(Some(error_message(&e))),
             }

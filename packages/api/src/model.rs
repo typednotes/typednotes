@@ -20,6 +20,8 @@ pub struct UserWorkspace {
     pub requirements: Vec<String>,
     pub setup_required: bool,
     pub default_url: Option<String>,
+    pub setup_url: String,
+    pub next_step: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

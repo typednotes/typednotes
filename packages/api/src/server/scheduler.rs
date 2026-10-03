@@ -49,6 +49,7 @@ pub fn start() {
 pub async fn tick() {
     super::shares::cleanup().await;
     if super::lode::configured() {
+        graphs::tick_queued().await;
         graphs::tick_implementing().await;
     }
     match due().await {

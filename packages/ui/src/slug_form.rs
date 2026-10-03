@@ -85,6 +85,7 @@ pub(crate) fn NewSlugForm(
                 return;
             }
             busy.set(true);
+            let saved_scope=scope.clone();
             let created = match scope {
                 Scope::Org => create_org(s, n).await.map(|o| o.slug),
                 Scope::Project { org } => create_project(org, s, n).await.map(|p| p.slug),
@@ -94,6 +95,13 @@ pub(crate) fn NewSlugForm(
             };
             match created {
                 Ok(created) => {
+                    let defaults=match saved_scope {
+                        Scope::Org=>api::set_workspace_defaults(created.clone(),None,None,false).await,
+                        Scope::Project{org}=>api::set_workspace_defaults(org,Some(created.clone()),None,false).await,
+                        Scope::Graph{org,project}=>api::set_workspace_defaults(org,Some(project),Some(created.clone()),false).await,
+                    };
+                    if let Err(e)=defaults { error.set(Some(error_message(&e)));busy.set(false);return; }
+                    crate::onboarding::refresh_workspace();
                     slug.set(String::new());
                     name.set(String::new());
                     slug_edited.set(false);

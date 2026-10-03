@@ -280,6 +280,7 @@ pub async fn start(
 pub struct Flow {
     pub purpose: Purpose,
     pub verifier: String,
+    pub connection_id: Option<String>,
 }
 
 /// Consume the flow for `state`, if it exists, is unexpired, and belongs to
@@ -288,7 +289,7 @@ pub async fn take(state: &str, idp: Idp) -> Result<Option<Flow>, ServerFnError> 
     let row = sqlx::query(
         "delete from oauth_flows where state = $1 \
          returning idp, purpose, pkce_verifier, user_id::text as user_id, \
-                   org_id::text as org_id, connection_provider, return_to, \
+                    org_id::text as org_id, connection_provider, return_to, connection_id::text as connection_id, \
                    expires_at > now() as fresh",
     )
     .bind(state)
@@ -320,6 +321,7 @@ pub async fn take(state: &str, idp: Idp) -> Result<Option<Flow>, ServerFnError> 
     Ok(Some(Flow {
         purpose,
         verifier: row.get("pkce_verifier"),
+        connection_id: row.get("connection_id"),
     }))
 }
 

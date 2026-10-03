@@ -204,7 +204,7 @@ fn describe_connection(c: &Connection) -> String {
 #[component]
 pub(crate) fn RepoPanel(slug: String, project: Project, on_changed: EventHandler<()>) -> Element {
     let org = slug.clone();
-    let connections = use_resource(move || list_connections(org.clone()));
+    let mut connections = use_resource(move || list_connections(org.clone()));
     let status = use_resource(health);
     let h = status().and_then(|r| r.ok());
     let mut picking = use_signal(|| project.repo.is_none());
@@ -282,13 +282,17 @@ pub(crate) fn RepoPanel(slug: String, project: Project, on_changed: EventHandler
                             key: "{slug}-{project.id}",
                             slug: slug.clone(),
                             project: project.slug.clone(),
-                            connections: code,
+                            connections: code.clone(),
                             on_set: move |_| {
                                 picking.set(false);
+                                crate::onboarding::refresh_workspace();
                                 on_changed.call(());
                             },
                         }
                     }
+                }
+                if let Some(repo)=project.repo.clone(){
+                    NotebookWriteGrant{slug:slug.clone(),project:project.slug.clone(),repo,connections:code.clone(),on_changed:move |_|{connections.restart();on_changed.call(());crate::onboarding::refresh_workspace();}}
                 }
                 if let Some(e) = error() {
                     p { class: "orgs-error", "{e}" }
@@ -296,6 +300,23 @@ pub(crate) fn RepoPanel(slug: String, project: Project, on_changed: EventHandler
             }
         }
     }
+}
+
+#[component]
+fn NotebookWriteGrant(slug: String, project: String, repo: api::RepoRef, connections: Vec<Connection>, on_changed: EventHandler<()>) -> Element {
+    let permissions_href=format!("/orgs/{slug}/settings/notebooks");
+    let mut busy=use_signal(||false);let mut error=use_signal(||None::<String>);
+    let connection=connections.iter().find(|c|repo.connection_id.as_ref()==Some(&c.id));
+    let root=repo.full_name.split('/').chain(["typednotes"]).map(str::to_string).collect::<Vec<_>>();
+    let allowed=connection.is_some_and(|c|c.permissions.clone().unwrap_or_else(||api::ConnectorPermissions::preset(c.provider,api::PermissionPreset::ReadOnly)).scopes.iter().any(|s|s.operation=="repositories.write"&&s.descendants&&root.starts_with(&s.root)));
+    rsx!{div{class:"conn-subform repo-code-grant",
+        p{class:"conn-meta","Notebook code is published only inside " code{"{repo.full_name}/typednotes/"} ". Repository selection grants read access, not code writing."}
+        if !allowed {Button{variant:ButtonVariant::Outline,disabled:busy()||connection.is_none_or(|c|!c.can_remove),onclick:move |_|{let(slug,project)=(slug.clone(),project.clone());async move{
+            busy.set(true);match api::allow_project_code_writes(slug,project).await{Ok(_)=>{error.set(None);on_changed.call(());},Err(e)=>error.set(Some(error_message(&e)))}busy.set(false);
+        }},"Allow notebook code writes"}}
+        else{p{class:"conn-meta",role:"status","Notebook code-writing access is enabled."}}
+        if let Some(e)=error(){p{class:"orgs-error","{e}"}Link{to:permissions_href,"Review organization notebook permissions"}}
+    }}
 }
 
 #[component]
@@ -322,6 +343,7 @@ fn RepoPicker(
     let selected_owner = use_selected(owner.into());
     let org = slug.clone();
     let permissions_href = format!("/orgs/{slug}/settings/notebooks");
+    let connections_href = format!("/orgs/{slug}/settings/connections");
     let mut pages = use_resource(move || {
         let org = org.clone();
         let id = connection();
@@ -435,7 +457,9 @@ fn RepoPicker(
             }
             if loading { p { class: "conn-meta", role: "status", "Loading repositories…" } }
             if let Some(Err(message)) = &current {
-                p { class: "orgs-error", "Could not list repositories: {message} ", Link { to: permissions_href.clone(), "Review notebook permissions" } }
+                p { class: "orgs-error", "Could not list repositories: {message} ",
+                    if message.contains("credential") {Link{to:connections_href.clone(),"Reconnect the code account"}}
+                    else{Link { to: permissions_href.clone(), "Review notebook permissions" }} }
                 Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Outline, onclick: move |_| pages.restart(), "Retry repository inventory" }
             }
             if !loading && current.as_ref().is_some_and(Result::is_ok) && choices.is_empty() {

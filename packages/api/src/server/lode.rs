@@ -46,6 +46,9 @@ pub async fn open(body: &Value) -> Result<String, String> {
     if !a.ok() {
         return Err(fail("the session", &a));
     }
+    if let Some(expected)=body.get("buildContracts") {
+        if a.body.get("buildContracts")!=Some(expected){return Err("the writer does not acknowledge caller-pinned build contracts; deploy Lode 0.4.3 or newer before generation".into());}
+    }
     a.body
         .get("id")
         .and_then(Value::as_str)
@@ -91,7 +94,7 @@ pub async fn refresh(id: &str, mut credentials: Value, desired: &[String], execu
     // Policy edits are acknowledged on the message path, serialized with actual
     // execution. PUT can then replace operation tokens without changing ceilings.
     if status.get("tools") != Some(&json!(tools)) || public_execution(&execution)? != status.get("execution").cloned().unwrap_or(Value::Null) {
-        let body = json!({"text": "Organization execution permissions narrowed. Continue within the allowed bounds.", "tools": tools, "execution": execution});
+        let body = json!({"text": "Organization execution permissions narrowed. Continue within the allowed bounds.", "tools": tools, "execution": execution,"controlOnly":true});
         let a = rpc::quick(&service()?, Method::POST, &format!("/v0/sessions/{}/messages", segment(id)), Some(&body)).await?;
         if a.status == 404 { return Ok(Reply::Gone); }
         if !a.ok() { return Err(fail("execution narrowing", &a)); }
@@ -196,7 +199,7 @@ pub fn bind_execution(execution: &Value, live: &super::connector::WriterBinding)
 pub async fn narrow(id: &str, desired: &[String]) -> Result<Reply<()>, String> {
     let status = match status(id).await? { Reply::Gone => return Ok(Reply::Gone), Reply::Ok(status) => status };
     let tools = narrowing_tools(&status, desired)?;
-    let mut body = json!({"text": "Organization writer permissions changed; outstanding effect authority is revoked. Continue within the allowed tools.", "tools": tools});
+    let mut body = json!({"text": "Organization writer permissions changed; outstanding effect authority is revoked. Continue within the allowed tools.", "tools": tools,"controlOnly":true});
     if let Some(bounds) = status.get("execution").filter(|value| !value.is_null()) {
         // This path runs under the org policy-edit transaction before commit.
         // Revoke every outstanding effect, including anonymous HTTP/files whose

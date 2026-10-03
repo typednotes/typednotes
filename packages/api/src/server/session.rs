@@ -223,6 +223,7 @@ pub async fn user_for_identity(id: &ProviderIdentity) -> Result<String, ServerFn
         .await
         .map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
+    super::workspace::welcome(&user_id).await;
     Ok(user_id)
 }
 

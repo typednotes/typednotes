@@ -403,6 +403,10 @@ pub struct GraphDetail {
 pub struct CellSaved {
     pub cell: Cell,
     pub endpoint_url: Option<String>,
+    #[serde(default)]
+    pub generation: Option<Graph>,
+    #[serde(default)]
+    pub generation_notice: Option<String>,
 }
 
 /// One entry of lode's log, summarised for the notebook.

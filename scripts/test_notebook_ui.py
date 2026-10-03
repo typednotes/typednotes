@@ -152,7 +152,7 @@ class Mock(BaseHTTPRequestHandler):
             if path == "/v0/sessions" and method == "POST":
                 STATE["writer_tools"] = body["tools"]
                 STATE["writer_execution"] = public_execution(body["execution"])
-                return self.reply(201, {"id": "L1", "state": "running"})
+                return self.reply(201, {"id": "L1", "state": "running", "buildContracts": body.get("buildContracts")})
             if path.endswith("/messages"):
                 if method == "POST":
                     assert set(body.get("tools", [])) <= set(STATE["writer_tools"])
@@ -224,7 +224,9 @@ def verify(page, context, app, output):
             actual = SQL(query)
             if actual == expected:
                 return
-            time.sleep(.1)
+            # Pump Playwright's routing callbacks while polling SQL; otherwise
+            # our localhost-only route stalls the browser's progress fetches.
+            page.wait_for_timeout(100)
         assert actual == expected, (actual, expected)
 
     def go(url):
@@ -259,6 +261,8 @@ def verify(page, context, app, output):
             editor.get_by_label("Choices (optional, comma-separated)").fill(choices)
         editor.get_by_role("button", name="Add cell", exact=True).click()
         expect(cell(name)).to_be_visible()
+        wait_sql(f"select impl is not null from graph_cells where name='{name}'", "t")
+        ready()
 
     def ready():
         expect(page.locator(".nb-maintenance button").filter(has_text="Restart session")).to_have_count(1, timeout=45000)
@@ -295,6 +299,9 @@ def verify(page, context, app, output):
     wait_sql("select model_name from graphs", "fixture-model")
     passed("live provider model menu saves exact IDs and restores selection after hydration")
     add("tax", "Source · input in the notebook")
+    assert any(entry[0]=="writer" and entry[1]=="POST" and entry[2]=="/v0/sessions" for entry in STATE["log"])
+    expect(page.get_by_text("Code activity",exact=True)).to_be_visible()
+    passed("creating a cell starts actor-bound code generation automatically and shows checkout/agent activity without Generate all")
     add("amount", "Source · input in the notebook")
     add("total", dependencies="amount, tax")
     add("view", "Sink · notebook output", dependencies="total", ty="String")
@@ -392,7 +399,7 @@ def verify(page, context, app, output):
     edit.get_by_role("button", name="Cancel", exact=True).click()
     passed("cell cannot add denied operations or raise inherited byte limits; API rejects widened grants")
     add("base", dependencies="", ty="Nat")
-    page.get_by_role("button", name="Generate all code", exact=True).click()
+    page.get_by_role("button", name="Regenerate all code", exact=True).click()
     ready()
     expect(cell("amount").locator('input[type="number"]')).to_be_visible()
     expect(cell("base").locator(".nb-output")).to_contain_text("7")
@@ -703,18 +710,15 @@ def verify(page, context, app, output):
     limited = page.request.post(app + "/api/connections/permissions", data={"slug":"notebook-fixture","connection_id":GH,"permissions":{"scopes":[{"operation":"repositories.read","root":[],"descendants":True}],"maxRequestBytes":1048576,"maxResponseBytes":16777216}})
     assert limited.status == 200, limited.text()
     go(app + "/onboarding")
-    expect(page.get_by_role("button", name="Save defaults and open notebook", exact=True)).to_be_disabled()
+    expect(page).to_have_url(app+"/orgs/notebook-fixture/projects/sheets/settings/repository")
+    expect(page.get_by_role("button",name="Allow notebook code writes",exact=True)).to_be_visible()
     refused = page.request.post(app + "/api/workspace/defaults", data={"slug":"notebook-fixture","project":"sheets","notebook":"lifecycle","finish":True})
     assert refused.status == 400, refused.text()
-    permissions = {"scopes":[{"operation":operation,"root":[],"descendants":True} for operation in ("repositories.list","repositories.read","repositories.write")],"maxRequestBytes":1048576,"maxResponseBytes":16777216}
-    fixed = page.request.post(app + "/api/connections/permissions", data={"slug":"notebook-fixture","connection_id":GH,"permissions":permissions})
-    assert fixed.status == 200, fixed.text()
-    page.get_by_role("button", name="Refresh setup status", exact=True).click()
-    page.get_by_role("button", name="Save defaults and open notebook", exact=True).click()
-    expect(page).to_have_url(notebook)
+    page.get_by_role("button",name="Allow notebook code writes",exact=True).click()
+    expect(page.get_by_text("Notebook code-writing access is enabled.",exact=True)).to_be_visible()
     page.goto(app + "/", wait_until="networkidle")
     expect(page).to_have_url(notebook)
-    passed("setup cannot finish without required grants; saved default organization/project/notebook drives sign-in landing")
+    passed("legacy onboarding redirects into repository settings; explicit folder-scoped write setup completes guidance and opens the default notebook")
     new_user = "00000000-0000-4000-8000-000000000011"
     new_token = "new-user-setup-fixture"
     SQL(f"insert into users(id,email) values('{new_user}','new-setup@example.invalid'); insert into sessions(id_hash,user_id,expires_at) values(sha256(convert_to('{new_token}','UTF8')),'{new_user}',now()+interval '1 hour');")
@@ -722,19 +726,20 @@ def verify(page, context, app, output):
     fresh.add_cookies([{"name":"tn_session","value":new_token,"url":app}])
     fresh_page = fresh.new_page()
     fresh_page.goto(app + "/", wait_until="networkidle")
-    expect(fresh_page).to_have_url(app + "/onboarding")
-    for name in ("New user's organization", "New user's project", "New user's notebook"):
-        fresh_page.locator("#new-name").fill(name)
-        fresh_page.get_by_role("button", name="Create", exact=True).click()
-        if name == "New user's notebook":
-            expect(fresh_page.get_by_role("button", name="Default notebook", exact=True)).to_contain_text(name)
-        else:
-            expect(fresh_page.locator("#new-name")).not_to_have_value(name)
-    expect(fresh_page.get_by_role("button", name="Save defaults and open notebook", exact=True)).to_be_disabled()
+    default_slug="workspace-"+new_user
+    expect(fresh_page).to_have_url(app+f"/orgs/{default_slug}/projects/my-project/settings/repository")
+    expect(fresh_page.get_by_role("complementary",name="Workspace setup guidance")).to_be_visible()
+    expect(fresh_page.locator(".workspace-terms")).to_have_count(0)
+    assert SQL(f"select count(*) from orgs o join memberships m on m.org_id=o.id join projects p on p.org_id=o.id where o.slug='{default_slug}' and m.user_id='{new_user}' and m.role='owner' and p.created_by='{new_user}'") == "1"
+    fresh_page.goto(app+f"/orgs/{default_slug}/projects/my-project",wait_until="networkidle")
+    fresh_page.locator("#new-name").fill("New user's notebook")
+    fresh_page.get_by_role("button",name="Create",exact=True).click()
+    expect(fresh_page).to_have_url(app+f"/orgs/{default_slug}/projects/my-project/graphs/new-user-s-notebook")
+    expect(fresh_page.get_by_role("link",name="Continue setup",exact=True)).to_be_visible()
     forbidden = fresh.request.post(app + "/api/workspace/defaults", data={"slug":"notebook-fixture","project":"sheets","notebook":"lifecycle","finish":False})
     assert forbidden.status == 403
     fresh.close()
-    passed("first login enters resumable guided setup, creates a default workspace, explains its terms and refuses foreign default targets")
+    passed("user creation atomically provisions owned default org/project; setup uses normal pages, no separate wizard or three boxes, and rejects foreign defaults")
     from deletion_cases import verify_deletion
     verify_deletion(page, context, app, SQL, STATE, passed)
     assert not errors, errors
@@ -807,6 +812,7 @@ def main():
             values('{PROJECT}','{ORG}','sheets','Sheets','{USER}','{GH}','github','fixture/sheets','https://github.com/fixture/sheets','main');
           insert into graphs(id,project_id,slug,name,created_by,model_connection_id,model_name)
             values('{GRAPH}','{PROJECT}','lifecycle','Notebook lifecycle','{USER}',(select id from connections where provider='anthropic'),'fixture-model');
+          update user_workspaces set org_id='{ORG}',project_id='{PROJECT}',graph_id='{GRAPH}' where user_id='{USER}';
         """)
         for offset, service in enumerate(["vault", "broker", "writer", "runtime"]):
             server = ThreadingHTTPServer(("127.0.0.1", args.mock_port + offset), type(service, (Mock,), {"service": service}))

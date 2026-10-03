@@ -82,6 +82,7 @@ fn SharedView(token: String) -> Element {
 /// which allows us to use the web-specific `Route` enum.
 #[component]
 fn WebNavbar() -> Element {
+    let current_path=use_route::<Route>().to_string();
     rsx! {
         Navbar {
             Link {
@@ -96,6 +97,6 @@ fn WebNavbar() -> Element {
             UserMenu {}
         }
 
-        main { class: "page", ui::WorkspaceGuide {} Outlet::<Route> {} }
+        main { class: "page", ui::WorkspaceGuide {current_path} Outlet::<Route> {} }
     }
 }

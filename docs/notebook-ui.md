@@ -175,9 +175,16 @@ round-trip with invalid-field refusal, explicit Connector opt-in and its denial
 diagnostics, same-document settings navigation, matching page widths, and idle
 slug validation with one request per typing burst.
 
-These 27 groups are real browser/app/API/database tests, **with local writer,
+These 42 groups are real browser/app/API/database tests, **with local writer,
 runtime, credential broker and vault mocks**. Generated Lean code and native
 upstream calls are not executed by this browser script.
+
+Current coverage also includes automatic cell generation, first-user owned
+defaults, standard-page setup guidance, explicit scoped code writes and all
+organization/account deletion, ownership-transfer and retry paths. Native
+writer integration now begins with an actual cell save, compiled Lode checkout,
+checked publication and compiled Lun adoption, including pinned-output trial
+refusal. See [the workspace workflow](workspaces.md).
 
 The independent [native integration](native-connectors.md#verification) now
 passes the real app → compiled Lode → broker → local Git → compiled Lun
