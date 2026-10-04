@@ -166,6 +166,7 @@ def verify_bridge(scratch, sql, api, exchange, lode, runtime, pg_port, org, user
         f"insert into projects(id,org_id,slug,name,created_by,repo_connection_id,repo_provider,repo_full_name,repo_web_url,repo_default_branch) values"
         f"('{project}','{org}','bridge-project','Bridge project','{user}','{repo}','github','owner/repo','https://github.com/owner/repo','main');"
         f"insert into graphs(id,project_id,slug,name,created_by) values('{graph}','{project}','bridge','Bridge graph','{user}');"
+        f"update projects set notes_graph_id='{graph}' where id='{project}';"
         f"insert into graph_cells(id,graph_id,position,name,kind,variant,description,config) values"
         f"('{source}','{graph}',0,'input','source','ui','Bridge input','{{\"input\":\"value\",\"output_type\":\"String\"}}'),"
         f"('{secret}','{graph}',1,'secret_source','source','secret','Bridge secret','{{\"name\":\"token\"}}');")
@@ -190,6 +191,10 @@ def verify_bridge(scratch, sql, api, exchange, lode, runtime, pg_port, org, user
         f"/v1/secret/data/thirdparty/s3/{shared_owner}/{remote}": {"kind": "s3", "base_url": f"http://127.0.0.1:{upstream.server_port}/bucket", "region": "us-east-1", "access_key_id": "fixture-key", "secret_access_key": "fixture-secret"},
     })
     args = {"project": "bridge-project", "graph": "bridge"}
+    api("/api/project/permissions",{"project":"bridge-project","grants":[
+        {"connection":"compute","permissions":{"scopes":[{"operation":op,"root":["notes"],"descendants":False} for op in ["rows.select","rows.insert"]],"maxRequestBytes":1048576,"maxResponseBytes":16777216}},
+        {"connection":"graph","permissions":{"scopes":[{"operation":op,"root":["token"],"descendants":False} for op in ["secrets.read","secrets.describe"]]+[{"operation":"secrets.list","root":[],"descendants":False}],"maxRequestBytes":1048576,"maxResponseBytes":16777216}},
+        {"connection":remote,"permissions":permission("objects.read",["reports"],True)}]})
     api("/api/graph/cells/secret", {**args, "cell": secret, "value": "bridge-private-secret"})
     model = api("/api/connections/ai", {"provider": "Openai", "api_key": "local-provider-fixture", "base_url": "https://fixture.example.invalid/v1"})
     api("/api/graph/model", {**args, "connection": model["id"], "model": "gpt-4o-mini"})

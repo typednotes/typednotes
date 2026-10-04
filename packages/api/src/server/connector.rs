@@ -174,14 +174,16 @@ pub async fn mint_for_cell(org: &Org, user: &User, connection: &Connection, owne
     parent.validate(connection.provider).map_err(errors::forbidden)?;
     let mut graph_id = None;
     if let Some(cell_id) = cell_id {
-        let row = sqlx::query("select c.config::text as config, g.id::text as graph from graph_cells c join graphs g on g.id = c.graph_id \
+        let row = sqlx::query("select c.config::text as config,p.note_connections::text as grants, g.id::text as graph from graph_cells c join graphs g on g.id = c.graph_id \
             join projects p on p.id = g.project_id where c.id = $1::uuid and p.org_id = $2::uuid")
             .bind(cell_id).bind(&org.id).fetch_optional(&mut *tx).await.map_err(errors::db_error)?
             .ok_or_else(|| errors::forbidden("the connector cell is gone or belongs to another organization"))?;
         graph_id = Some(row.get::<String, _>("graph"));
-        let config: crate::CellConfig = serde_json::from_str(&row.get::<String, _>("config"))
+        let mut config: crate::CellConfig = serde_json::from_str(&row.get::<String, _>("config"))
             .map_err(|_| errors::forbidden("invalid stored cell connector declaration"))?;
+        config.connectors=serde_json::from_str(&row.get::<String,_>("grants")).map_err(|_|errors::forbidden("invalid project connection permissions"))?;
         let selected = config.connectors.iter().find(|grant| grant.connection == connection.id);
+        if selected.is_none(){return Err(errors::forbidden("enable this connection and operation in project note permissions"));}
         let mut declared = match selected {
             Some(grant) => grant.permissions.clone().unwrap_or_else(|| parent.clone()),
             None if config.connection_id.as_deref() == Some(connection.id.as_str()) => {
@@ -206,7 +208,7 @@ pub async fn mint_for_cell(org: &Org, user: &User, connection: &Connection, owne
                 };
                 scoped(connection, "messages.send", resource, false)
             },
-            None => return Err(errors::forbidden("the cell no longer selects this connection")),
+            None => return Err(errors::forbidden("the project no longer selects this note's connection")),
         };
         // Legacy sink selectors remain upper bounds even when that cell also
         // selects an advanced grant for the same connection.

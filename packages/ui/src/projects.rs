@@ -13,7 +13,6 @@ use crate::components::{input::Input, label::Label};
 use crate::connections::{connect_url, oauth_ready, CONNECTIONS_CSS};
 use crate::error_message;
 use crate::navigate_to;
-use crate::notebook::GraphsPanel;
 use crate::orgs::ORGS_CSS;
 use crate::slug_form::{NewSlugForm, Scope};
 
@@ -118,7 +117,7 @@ pub fn ProjectPage(
                     rsx! {
                         Card {
                             CardHeader {
-                                CardTitle { title: "Project: a primary code repository, its notebooks and messaging interfaces.", "{d.project.name}" }
+                                CardTitle { title: "Project: its notes, repository, AI model and permissions.", "{d.project.name}" }
                                 CardDescription {
                                     "in {d.org.name} · "
                                     match &d.project.repo {
@@ -136,7 +135,7 @@ pub fn ProjectPage(
                                 if d.project.repo.is_none() {
                                     div { class: "setup-hints",
                                         p {
-                                            "Notebooks need a primary repository, where their code is written: "
+                                            "Project notes need a repository for their generated code: "
                                             Link { to: "{settings}/repository", "choose one" }
                                             "."
                                         }
@@ -150,7 +149,7 @@ pub fn ProjectPage(
                         if !error.is_empty() {
                             p { class: "orgs-error", "{error}" }
                         }
-                        GraphsPanel { slug: slug(), project: project() }
+                         crate::notebook::NotebookPage { slug: slug(), project: project(), graph:"" }
                         InboxPanel { slug: slug(), project: project() }
                     }
                 }
@@ -304,18 +303,18 @@ pub(crate) fn RepoPanel(slug: String, project: Project, on_changed: EventHandler
 
 #[component]
 fn NotebookWriteGrant(slug: String, project: String, repo: api::RepoRef, connections: Vec<Connection>, on_changed: EventHandler<()>) -> Element {
-    let permissions_href=format!("/orgs/{slug}/settings/notebooks");
+    let permissions_href=format!("/orgs/{slug}/settings/permissions");
     let mut busy=use_signal(||false);let mut error=use_signal(||None::<String>);
     let connection=connections.iter().find(|c|repo.connection_id.as_ref()==Some(&c.id));
     let root=repo.full_name.split('/').chain(["typednotes"]).map(str::to_string).collect::<Vec<_>>();
     let allowed=connection.is_some_and(|c|c.permissions.clone().unwrap_or_else(||api::ConnectorPermissions::preset(c.provider,api::PermissionPreset::ReadOnly)).scopes.iter().any(|s|s.operation=="repositories.write"&&s.descendants&&root.starts_with(&s.root)));
     rsx!{div{class:"conn-subform repo-code-grant",
-        p{class:"conn-meta","Notebook code is published only inside " code{"{repo.full_name}/typednotes/"} ". Repository selection grants read access, not code writing."}
+        p{class:"conn-meta","Project code is published only inside " code{"{repo.full_name}/typednotes/"} ". Repository selection grants read access, not code writing."}
         if !allowed {Button{variant:ButtonVariant::Outline,disabled:busy()||connection.is_none_or(|c|!c.can_remove),onclick:move |_|{let(slug,project)=(slug.clone(),project.clone());async move{
             busy.set(true);match api::allow_project_code_writes(slug,project).await{Ok(_)=>{error.set(None);on_changed.call(());},Err(e)=>error.set(Some(error_message(&e)))}busy.set(false);
-        }},"Allow notebook code writes"}}
-        else{p{class:"conn-meta",role:"status","Notebook code-writing access is enabled."}}
-        if let Some(e)=error(){p{class:"orgs-error","{e}"}Link{to:permissions_href,"Review organization notebook permissions"}}
+        }},"Allow project code writes"}}
+        else{p{class:"conn-meta",role:"status","Project code-writing access is enabled."}}
+        if let Some(e)=error(){p{class:"orgs-error","{e}"}Link{to:permissions_href,"Review organization execution policy"}}
     }}
 }
 
@@ -342,7 +341,7 @@ fn RepoPicker(
     let selected_connection = use_selected(connection.into());
     let selected_owner = use_selected(owner.into());
     let org = slug.clone();
-    let permissions_href = format!("/orgs/{slug}/settings/notebooks");
+    let permissions_href = format!("/orgs/{slug}/settings/permissions");
     let connections_href = format!("/orgs/{slug}/settings/connections");
     let mut pages = use_resource(move || {
         let org = org.clone();
@@ -459,7 +458,7 @@ fn RepoPicker(
             if let Some(Err(message)) = &current {
                 p { class: "orgs-error", "Could not list repositories: {message} ",
                     if message.contains("credential") {Link{to:connections_href.clone(),"Reconnect the code account"}}
-                    else{Link { to: permissions_href.clone(), "Review notebook permissions" }} }
+                    else{Link { to: permissions_href.clone(), "Review organization execution policy" }} }
                 Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Outline, onclick: move |_| pages.restart(), "Retry repository inventory" }
             }
             if !loading && current.as_ref().is_some_and(Result::is_ok) && choices.is_empty() {

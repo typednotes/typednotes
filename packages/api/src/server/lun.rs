@@ -1,10 +1,5 @@
-//! The app's client for `lun` (docs/services/lun.md, lun's README): submit
-//! a build of the published commit, call a function of it, register a graph
-//! as a session and update its inputs.
-//!
-//! lun's builds and sessions are reconstructible (docs/computations.md §2):
-//! the same build request is the same build, and a session lun lost (a
-//! `404`) is registered again from the app's input log.
+//! Lun 0.4.1's stateless build/function/graph client. Typednotes persists graph
+//! state, serializes steps, supplies fresh authority, and owns scheduling.
 
 use std::time::Duration;
 
@@ -17,6 +12,15 @@ use crate::{parse_nodes, GraphNode};
 
 pub fn configured() -> bool {
     config::lun().is_some()
+}
+
+pub const RUNTIME_CONTRACT: &str = "stateless-producers-v4";
+
+fn require_contract(body: &Value) -> Result<(), String> {
+    if body.get("state").and_then(Value::as_str) == Some("ready") && body.get("runtimeContract").and_then(Value::as_str) != Some(RUNTIME_CONTRACT) {
+        return Err("the ready runtime build has an incompatible execution contract; deploy Lun 0.4.1 or newer and rebuild the project".into());
+    }
+    Ok(())
 }
 
 fn service() -> Result<config::Service, String> {
@@ -142,6 +146,7 @@ pub async fn submit(request: &Value, graph: &str) -> Result<Build, String> {
     if !a.ok() {
         return Err(fail("the build", &a));
     }
+    require_contract(&a.body)?;
     Ok(parse_build(&a.body, graph))
 }
 
@@ -158,7 +163,7 @@ pub async fn build(id: &str, graph: &str) -> Result<Option<Build>, String> {
     .map_err(|e| format!("the code runtime: {e}"))?;
     match a.status {
         404 => Ok(None),
-        200 => Ok(Some(parse_build(&a.body, graph))),
+        200 => { require_contract(&a.body)?; Ok(Some(parse_build(&a.body, graph))) },
         _ => Err(fail("the build status", &a)),
     }
 }
@@ -201,19 +206,19 @@ pub async fn call_function(
         .to_string()))
 }
 
-/// A session's answer: its id, every node, and those that changed.
-pub struct SessionAnswer {
-    pub session: String,
+/// A stateless graph step. State is private data, never an authority envelope.
+pub struct GraphAnswer {
+    pub state: Value,
+    pub next_call_at: Option<u64>,
     pub nodes: Vec<GraphNode>,
     pub changed: Vec<GraphNode>,
 }
 
-/// `POST /v0/builds/{id}/graphs/{graph}/sessions`: register a session with
-/// its inputs, its binding, its secrets' names and the warrants its storage
-/// sinks write with (lun's computations contract, docs/services/lun.md §3).
-pub async fn start(build: &str, graph: &str, body: &Value) -> Result<SessionAnswer, String> {
+/// `POST /v0/builds/{id}/graphs/{graph}` with optional previous state and fresh
+/// authenticated policy, binding and warrants. Never retry failed effect calls.
+pub async fn step(build: &str, graph: &str, body: &Value) -> Result<GraphAnswer, String> {
     let path = format!(
-        "/v0/builds/{}/graphs/{}/sessions",
+        "/v0/builds/{}/graphs/{}",
         segment(build),
         segment(graph)
     );
@@ -227,50 +232,32 @@ pub async fn start(build: &str, graph: &str, body: &Value) -> Result<SessionAnsw
     .await
     .map_err(|e| format!("the code runtime: {e}"))?;
     if !a.ok() {
-        return Err(fail("the session", &a));
+        return Err(fail("the graph step", &a));
     }
-    let nodes = parse_nodes(a.body.get("nodes"));
-    Ok(SessionAnswer {
-        session: a
-            .body
-            .get("session")
-            .and_then(Value::as_str)
-            .ok_or("the code runtime's answer has no session id")?
-            .to_string(),
-        changed: nodes
-            .iter()
-            .filter(|n| n.outcome.is_some())
-            .cloned()
-            .collect(),
-        nodes,
+    parse_step(&a.body)
+}
+
+fn parse_step(body: &Value) -> Result<GraphAnswer, String> {
+    let state = body.get("state").filter(|state| state.is_object()).cloned()
+        .ok_or("the code runtime did not return caller-owned graph state; deploy a compatible stateless runtime")?;
+    let next_call_at = match body.get("nextCallAt") {
+        Some(Value::Null) => None,
+        Some(value) => Some(value.as_u64().filter(|n| *n <= 253_402_300_799_999).ok_or("the runtime returned an invalid Unix-millisecond deadline")?),
+        None => return Err("the runtime omitted nextCallAt".into()),
+    };
+    for field in ["nodes", "changed"] {
+        let nodes = body.get(field).and_then(Value::as_array).ok_or("the runtime returned an invalid graph outcome list")?;
+        if nodes.iter().any(|node| crate::parse_node(node).is_none()) { return Err("the runtime returned a malformed graph outcome".into()); }
+    }
+    Ok(GraphAnswer {
+        state, next_call_at,
+        changed: parse_nodes(body.get("changed")),
+        nodes: parse_nodes(body.get("nodes")),
     })
 }
 
-/// `POST /v0/sessions/{id}`: feed some inputs. `None` if lun lost the
-/// session (its container was recycled).
-pub async fn update(session: &str, body: &Value) -> Result<Option<SessionAnswer>, String> {
-    let path = format!("/v0/sessions/{}", segment(session));
-    let a = rpc::call(
-        &service()?,
-        Method::POST,
-        &path,
-        Some(body),
-        Duration::from_secs(120),
-    )
-    .await
-    .map_err(|e| format!("the code runtime: {e}"))?;
-    match a.status {
-        404 => Ok(None),
-        s if (200..300).contains(&s) => Ok(Some(SessionAnswer {
-            session: session.to_string(),
-            nodes: parse_nodes(a.body.get("nodes")),
-            changed: parse_nodes(a.body.get("changed")),
-        })),
-        _ => Err(fail("the update", &a)),
-    }
-}
-
-/// `DELETE /v0/sessions/{id}`, best-effort.
+/// Teardown of pre-stateless sessions retained by migration/deletion history.
+/// A new Lun returns 404: it has no remote graph-session state to retire.
 pub async fn end(session: &str) {
     let _ = end_checked(session).await;
 }
@@ -286,6 +273,20 @@ pub async fn end_checked(session: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stable_graph_contract_preserves_order_and_refuses_malformed_deadlines() {
+        let response=json!({"state":{"contract":RUNTIME_CONTRACT},"nextCallAt":1700000000123u64,"nodes":[{"id":1,"output":3}],"changed":[{"id":1,"output":1},{"id":1,"output":2},{"id":1,"output":3}]});
+        let step=parse_step(&response).unwrap();
+        assert_eq!(step.next_call_at,Some(1700000000123));
+        assert_eq!(step.changed.iter().map(|n|n.outcome.as_ref().unwrap().output.clone().unwrap()).collect::<Vec<_>>(),vec![json!(1),json!(2),json!(3)]);
+        for deadline in [json!(-1),json!(0.5),json!("soon"),json!(u64::MAX)] {
+            let mut bad=response.clone();bad["nextCallAt"]=deadline;assert!(parse_step(&bad).is_err());
+        }
+        let mut bad=response.clone();bad["changed"]=json!([{}]);assert!(parse_step(&bad).is_err());
+        assert!(require_contract(&json!({"state":"ready","runtimeContract":"bounded-eff-worker-v2"})).is_err());
+        assert!(require_contract(&json!({"state":"ready","runtimeContract":RUNTIME_CONTRACT})).is_ok());
+    }
 
     #[test]
     fn reads_a_ready_build() {

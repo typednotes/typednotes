@@ -41,7 +41,8 @@ def verify_runtime(scratch, sql, api, exchange, runtime, pg_port, org, user, vau
         f"('{conn}','{org}','{shared_owner}','s3','Shared bucket','https://s3.example.invalid/bucket','bucket','active');"
         f"insert into projects(id,org_id,slug,name,created_by) values('{project}','{org}','runtime-project','Runtime project','{user}');"
         f"insert into graphs(id,project_id,slug,name,created_by,status,lun_session_id,session_build_id,structure) values"
-        f"('{graph}','{project}','runtime-graph','Runtime graph','{user}','ready','bootstrap-session','bootstrap-build','{json.dumps(structure)}');")
+        f"('{graph}','{project}','runtime-graph','Runtime graph','{user}','ready','bootstrap-session','bootstrap-build','{json.dumps(structure)}');"
+        f"update projects set notes_graph_id='{graph}' where id='{project}';")
     impl = {"function": None, "constant": None, "module": None, "signature": None, "effects": [], "input": "value", "input_type": "String"}
     sql(f"insert into graph_cells(id,graph_id,position,name,kind,variant,description,config,impl) values "
         f"('{source}','{graph}',0,'input','source','ui','Runtime input','{{\"input\":\"value\",\"output_type\":\"String\"}}','{json.dumps(impl)}'),"
@@ -55,6 +56,10 @@ def verify_runtime(scratch, sql, api, exchange, runtime, pg_port, org, user, vau
         "kind": "s3", "base_url": f"http://127.0.0.1:{upstream.server_port}/bucket", "region": "us-east-1",
         "access_key_id": "fixture-key", "secret_access_key": "fixture-secret"}
     args = {"project": "runtime-project", "graph": "runtime-graph"}
+    grants=[{"connection":"compute","permissions":{"scopes":[{"operation":op,"root":["notes"],"descendants":False} for op in ["rows.select","rows.insert"]],"maxRequestBytes":1048576,"maxResponseBytes":16777216}},
+        {"connection":"graph","permissions":{"scopes":[{"operation":op,"root":["token"],"descendants":False} for op in ["secrets.read","secrets.describe","secrets.write"]]+[{"operation":"secrets.list","root":[],"descendants":False}],"maxRequestBytes":1048576,"maxResponseBytes":16777216}},
+        {"connection":conn,"permissions":permission("objects.read",["reports"],True)}]
+    api("/api/project/permissions",{"project":"runtime-project","grants":grants})
     api("/api/graph/cells/secret", {**args, "cell": secret_cell, "value": "graph-private-fixture"})
     api("/api/graph/cells/feed", {**args, "cell": source, "value": "bootstrap"}, ok=False)
     assert sql(f"select name from compute_schemas where org_id='{org}' and user_id='{user}'") == schema
@@ -117,7 +122,7 @@ end AppRuntime
             break
         time.sleep(.2)
     assert description["state"] == "ready", description
-    assert description["runtimeContract"] == "bounded-eff-worker-v2"
+    assert description["runtimeContract"] == "stateless-producers-v4"
     actual_structure = next(g for g in description["graphs"] if g["name"] == "main")
     sql(f"update graphs set session_build_id='{build['id']}', lun_build_id='{build['id']}', lun_session_id=null, "
         f"structure='{json.dumps(actual_structure)}', status='ready' where id='{graph}';")
@@ -140,18 +145,17 @@ end AppRuntime
     passed("compiled driver consumes app DB/vault grants and HMAC broker grant for a shared credential owner")
     before_rows = sql(f'select count(*) from "{schema}".notes')
     before_reads = len(vault.state["reads"])
-    safe = {"safeShare":True,"binding":{"org_id":org,"user_id":user,"graph_id":graph},"policy":{"effects":["Trace","Error"],"domains":[]},"connectors":{},"inputs":{"value":"public-must-not-write"}}
-    status, shared = runtime_api(f"/v0/builds/{build['id']}/graphs/main/sessions", safe)
-    assert status == 201, shared
+    safe = {"binding":{"org_id":org,"user_id":user,"graph_id":graph},"policy":{"effects":["Trace","Error"],"domains":[]},"connectors":{},"inputs":{"value":"public-must-not-write"}}
+    status, shared = runtime_api(f"/v0/builds/{build['id']}/graphs/main", safe)
+    assert status == 200, shared
     assert any(node.get("error") for node in shared["nodes"]), shared
     assert sql(f'select count(*) from "{schema}".notes') == before_rows
     assert len(vault.state["reads"]) == before_reads
-    status, refused = runtime_api(f"/v0/builds/{build['id']}/graphs/main/sessions", {**safe,"policy":{"effects":["PostgreSQL"],"domains":[]}})
-    assert status == 403, refused
-    status, refused = runtime_api("/v0/sessions/"+shared["session"], {"inputs":{"value":"no-widen"},"policy":{"effects":["Trace","Error","HTTP"],"domains":[]},"connectors":{}})
-    assert status == 403, refused
-    passed("compiled public-share sessions refuse external effects before credentials/DB writes and cannot widen execution on update")
-    captured = next(body for method, path, body in reversed(proxy.state["calls"]) if method == "POST" and path.startswith("/v0/sessions/") and body and "connectors" in body)
+    status, refused = runtime_api(f"/v0/builds/{build['id']}/graphs/main", {**safe,"state":shared["state"],"inputs":{"value":"no-widen"}})
+    assert status==200 and any(node.get("error") for node in refused["nodes"]),refused
+    assert sql(f'select count(*) from "{schema}".notes')==before_rows and len(vault.state["reads"])==before_reads
+    passed("fresh Trace/Error-only public graph requests refuse external effects before credential reads, including with previous state")
+    captured = next(body for method, path, body in reversed(proxy.state["calls"]) if method == "POST" and "/graphs/" in path and body and body.get("connectors"))
     def direct(name, body):
         status, result = runtime_api(f"/v0/builds/{build['id']}/functions/{name}", body)
         assert status == 200, result
@@ -180,21 +184,20 @@ end AppRuntime
     wrong = copy.deepcopy(context); wrong["binding"]["graph_id"] = str(uuid.uuid4())
     assert direct("token_present", wrong).get("error")
     passed("compiled app grants reject cross-schema, cross-user and cross-graph substitutions")
-    session = sql(f"select lun_session_id from graphs where id='{graph}'")
     assert vault.state["documents"][f"/v1/secret/data/graph/{org}/{graph}/token"]["value"] == "runtime-placeholder"
-    revoked = copy.deepcopy(configs["store"])
-    revoked["connectors"] = [{"connection": "compute", "permissions": {**permission("rows.insert", [schema, "notes"]), "scopes": []}}]
-    api("/api/graph/cells/update", {**args, "cell": ids["store"], "name": "store", "description": "Denied insert", "config": revoked})
+    narrowed=copy.deepcopy(grants)
+    narrowed[0]["permissions"]["scopes"]=[s for s in narrowed[0]["permissions"]["scopes"] if s["operation"]!="rows.insert"]
+    api("/api/project/permissions",{"project":"runtime-project","grants":narrowed})
     before = sql(f'select count(*) from "{schema}".notes')
     denied = api("/api/graph/cells/feed", {**args, "cell": source, "value": "must-not-insert"})
     assert result(denied, "store")["error"], denied
     assert sql(f'select count(*) from "{schema}".notes') == before
-    passed("cell permission narrowing revokes local run documents and denies actual driver writes")
-    status, wrong_actor = runtime_api("/v0/sessions/" + session, {"inputs": {"value": "foreign"},
+    passed("project permission narrowing revokes local run documents and denies actual driver writes")
+    status, wrong_actor = runtime_api(f"/v0/builds/{build['id']}/graphs/main", {"inputs": {"value": "foreign"},"state":json.loads(sql(f"select runtime_state from graphs where id='{graph}'")),
         "binding": {"org_id": org, "user_id": shared_owner, "graph_id": graph}, "policy": policy, "connectors": {}})
-    assert status == 403, wrong_actor
+    assert status==200 and any(node.get("error") for node in wrong_actor["nodes"]),wrong_actor
     assert sql(f'select count(*) from "{schema}".notes') == before
-    passed("shared credential owner cannot substitute the execution actor on a live runtime session")
+    passed("caller-owned state is not authority: an ungranted substituted actor cannot execute stored effects")
     native_paths = [path for token, path in vault.state["reads"] if token == "Bearer runtime-read-fixture"]
     assert f"/v1/secret/data/compute/{org}/{user}" in native_paths
     assert f"/v1/secret/data/thirdparty/s3/{shared_owner}/{conn}/permissions" in [path for _, path in vault.state["reads"]]

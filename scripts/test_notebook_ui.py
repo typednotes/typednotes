@@ -61,7 +61,7 @@ def manifest():
         ids[name] = len(nodes)
         nodes.append({"id": len(nodes), "function": name, "args": [ids[a] for a in args]})
     sinks = [n["id"] for n in nodes if not any(n["id"] in other.get("args", []) for other in nodes)]
-    BUILD.update({"id": "B1", "state": "ready", "diagnostics": [], "functions": functions,
+    BUILD.update({"id": "B1", "state": "ready", "runtimeContract":"stateless-producers-v4", "diagnostics": [], "functions": functions,
                   "graphs": [{"name": "main", "inputs": [n["input"] for n in nodes if "input" in n],
                               "nodes": nodes, "sources": [n["id"] for n in nodes if not n.get("args")], "sinks": sinks}]})
     return {"open": ["Sheet"], "functions": functions, "graphs": [{"name": "main", "program": "do\n" + "\n".join(program)}]}
@@ -125,6 +125,11 @@ class Mock(BaseHTTPRequestHandler):
             resource = call["resource"]
             if call["operation"] == "models.list":
                 answer = json.dumps({"data": [{"id": "fixture-model"}, {"id": "other-model"}]}).encode()
+            elif call["operation"] == "messages.send":
+                STATE.setdefault("sent_texts",[]).append(payload["text"])
+                if STATE.get("drop_delivery_response"):
+                    self.close_connection=True;self.connection.close();return
+                answer=json.dumps({"ok":True,"ts":str(len(STATE["sent_texts"])),"channel":"C-fixture"}).encode()
             elif call["operation"] == "repositories.list":
                 names = [f"other-org/repo-{n:03}" for n in range(100)] if payload.get("page", "1") == "1" else ["late-org/late-repo"]
                 answer = json.dumps([{"full_name":name,"html_url":"https://github.com/"+name,"default_branch":"main","private":True} for name in names]).encode()
@@ -152,7 +157,8 @@ class Mock(BaseHTTPRequestHandler):
             if path == "/v0/sessions" and method == "POST":
                 STATE["writer_tools"] = body["tools"]
                 STATE["writer_execution"] = public_execution(body["execution"])
-                return self.reply(201, {"id": "L1", "state": "running", "buildContracts": body.get("buildContracts")})
+                STATE["writer_key"]=body.get("requestKey")
+                return self.reply(201, {"id": "L1", "state": "running", "buildContracts": body.get("buildContracts"),"backgroundCheckout":True,"requestKey":body.get("requestKey"),"checkout":"ready"})
             if path.endswith("/messages"):
                 if method == "POST":
                     assert set(body.get("tools", [])) <= set(STATE["writer_tools"])
@@ -162,13 +168,43 @@ class Mock(BaseHTTPRequestHandler):
                 return self.reply(200, {"entries": [{"index": 0, "type": "assistant", "text": "Writing total from amount and tax"}], "next": 1, "running": STATE["running"]})
             if path.endswith("/diff"):
                 return self.reply(200, "diff --git a/Sheet.lean b/Sheet.lean\n@@ -1 +1 @@\n-def total := 0\n+def total := 7\n")
+            if path.endswith("/answer"):
+                question=STATE.get("question")
+                if not question or body.get("id")!=question["id"] or (not question["question"]["freeText"] and body.get("answer") not in question["question"]["options"]):
+                    return self.reply(409,{"error":"stale or invalid question answer"})
+                STATE["question"]=None
+                STATE["running"]=False
+                return self.reply(202,{})
             if path.endswith("/credentials"):
                 return self.reply(200, {})
-            return self.reply(200, {"id": "L1", "state": "running" if STATE["running"] else "idle", "entries": 1,
+            return self.reply(200, {"id": "L1", "state": "waiting" if STATE.get("question") else "running" if STATE["running"] else "idle", "entries": 1,
                                     "tools": STATE.get("writer_tools", []),
                                     "execution": STATE.get("writer_execution"),
-                                    "workspace": {"remoteHead": "c0ffee" * 6 + "abcd"}})
+                                    "workspace": {"remoteHead": "c0ffee" * 6 + "abcd"},"requestKey":STATE.get("writer_key"),"checkout":"ready","question":STATE.get("question")})
         if self.service == "runtime":
+            if method=="POST" and "/graphs/" in path and not path.endswith("/sessions"):
+                manifest()
+                if body.get("connectors")=={} and set(body.get("policy",{}).get("effects",[]))<={"Trace","Error"}:
+                    assert set(body["policy"]["effects"])<={"Trace","Error"} and body["connectors"]=={}
+                    if STATE.get("reject_share_runtime"):return self.reply(400,{"error":"fixture shared input failed type validation"})
+                previous=body.get("state") or {}
+                assert not any(k in previous for k in ["policy","binding","connectors","warrants"])
+                inputs={**previous.get("inputs",{}),**body.get("inputs",{})}
+                nodes=evaluate(inputs)
+                changed=[n for n in nodes if n not in previous.get("nodes",[]) and any(k in n for k in ["output","error","skipped"])]
+                if STATE.get("channel_burst") is not None:
+                    burst=STATE.pop("channel_burst")
+                    target=next(n for n in nodes if n.get("function")=="announce")
+                    changed=[n for n in changed if n.get("function")!="announce"]+[{**target,"output":str(value)} for value in burst]
+                    if burst:target["output"]=str(burst[-1])
+                if STATE.get("drop_runtime_response"):
+                    # Simulate effects completing but the response getting lost.
+                    self.close_connection=True
+                    self.connection.close()
+                    return
+                return self.reply(200,{"state":{"inputs":inputs,"nodes":nodes},"nodes":nodes,"changed":changed,"nextCallAt":None})
+            if method=="POST" and "/functions/" in path:
+                return self.reply(200,{"output":4})
             if path.startswith("/v0/builds") and not path.endswith("/sessions"):
                 manifest()
                 return self.reply(200, BUILD)
@@ -779,14 +815,23 @@ def main():
     log = output.joinpath("app.log").open("w")
     pg_tool = lambda name: str(args.pg_bin / name) if args.pg_bin else name
     try:
-        subprocess.run([pg_tool("initdb"), "-D", str(pgdata), "-U", "postgres", "-A", "trust", "--no-locale"], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run([pg_tool("initdb"), "-D", str(pgdata), "-U", "postgres", "-A", "trust", "--no-locale", "--encoding=UTF8"], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([pg_tool("pg_ctl"), "-D", str(pgdata), "-l", str(output / "postgres.log"), "-o", f"-h 127.0.0.1 -p {args.pg_port} -k ''", "-w", "start"], check=True, stdout=subprocess.DEVNULL)
         pg_started = True
         env = {**os.environ, "PGSSLMODE": "disable"}
         command = [pg_tool("psql"), "-X", "-h", "127.0.0.1", "-p", str(args.pg_port), "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-qtAc"]
         def sql(query):
-            return subprocess.run(command + [query], check=True, capture_output=True, text=True, env=env).stdout.strip()
+            result=subprocess.run(command+[query],capture_output=True,text=True,env=env)
+            if result.returncode:raise AssertionError(result.stderr)
+            return result.stdout.strip()
         SQL = sql
+        sql("create database note_merge_fixture")
+        merge_command=command.copy();merge_command[merge_command.index("-d")+1]="note_merge_fixture"
+        def merge_sql(query):return subprocess.run(merge_command+[query],check=True,capture_output=True,text=True,env=env).stdout.strip()
+        for migration in sorted(ROOT.joinpath("migrations").glob("*.sql")):
+            if migration.name<"0014":merge_sql(migration.read_text())
+        from merge_migration_cases import verify_merge
+        verify_merge(merge_sql,ROOT.joinpath("migrations/0014_project_notes.sql").read_text())
         for migration in sorted(ROOT.joinpath("migrations").glob("*.sql")):
             sql(migration.read_text())
         for migration in sorted(ROOT.parent.joinpath("ledger/sql").glob("*.sql")):
@@ -812,7 +857,8 @@ def main():
             values('{PROJECT}','{ORG}','sheets','Sheets','{USER}','{GH}','github','fixture/sheets','https://github.com/fixture/sheets','main');
           insert into graphs(id,project_id,slug,name,created_by,model_connection_id,model_name)
             values('{GRAPH}','{PROJECT}','lifecycle','Notebook lifecycle','{USER}',(select id from connections where provider='anthropic'),'fixture-model');
-          update user_workspaces set org_id='{ORG}',project_id='{PROJECT}',graph_id='{GRAPH}' where user_id='{USER}';
+          update projects set notes_graph_id='{GRAPH}' where id='{PROJECT}';
+          insert into user_workspaces(user_id,org_id,project_id,graph_id) values('{USER}','{ORG}','{PROJECT}','{GRAPH}');
         """)
         for offset, service in enumerate(["vault", "broker", "writer", "runtime"]):
             server = ThreadingHTTPServer(("127.0.0.1", args.mock_port + offset), type(service, (Mock,), {"service": service}))
@@ -822,7 +868,7 @@ def main():
                     "SECRETS_URL": f"http://127.0.0.1:{args.mock_port}", "SECRETS_PASSWORD": "fixture",
                     "LIAISON_URL": f"http://127.0.0.1:{args.mock_port + 1}", "LIAISON_ROOT_KEY": "42" * 32,
                     "LODE_URL": f"http://127.0.0.1:{args.mock_port + 2}", "LODE_TOKEN": "fixture",
-                    "LUN_URL": f"http://127.0.0.1:{args.mock_port + 3}", "LUN_TOKEN": "fixture", "TYPEDNOTES_AUTO_REPAIRS": "0"})
+                    "LUN_URL": f"http://127.0.0.1:{args.mock_port + 3}", "LUN_TOKEN": "fixture", "TYPEDNOTES_AUTO_REPAIRS": "0","TYPEDNOTES_BACKGROUND":"1"})
         # The isolated database also exercises compute-schema/role teardown.
         env["COMPUTE_DB_URL"] = env["DATABASE_URL"]
         proc = subprocess.Popen(["dx", "serve", "-p", "web", "--fullstack", "true", "--debug-symbols", "false", "--port", str(args.app_port),
@@ -848,7 +894,8 @@ def main():
             context = browser.new_context(viewport={"width": 1280, "height": 900})
             page = context.new_page()
             try:
-                verify(page, context, app, output)
+                from project_notes_cases import verify_project_notes
+                verify_project_notes(page,context,app,output,SQL,STATE,USER,TOKEN,ORG,PROJECT,GRAPH,GH)
             except Exception:
                 page.screenshot(path=str(output / "failure.png"), full_page=True)
                 output.joinpath("failure-dom.html").write_text(page.content())

@@ -20,7 +20,7 @@ pub(crate) fn MembersPanel(slug: ReadSignal<String>, role: String) -> Element {
             CardHeader {
                 CardTitle { "Members" }
                 CardDescription {
-                    "Everyone here sees the org's projects, notebooks and connections. "
+                    "Everyone here sees the org's projects, notes and connections. "
                     "Owners and admins add people by email."
                 }
             }

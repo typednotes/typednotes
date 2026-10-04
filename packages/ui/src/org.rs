@@ -73,7 +73,7 @@ pub fn OrgPage(slug: ReadSignal<String>, connected: String, error: String) -> El
                                         }
                                         if !has_ai {
                                             p {
-                                                "Connect an AI provider so notebooks can be implemented: "
+                                                "Connect an AI provider so project notes can be implemented: "
                                                 Link { to: "{settings}/connections", "connections" }
                                                 "."
                                             }

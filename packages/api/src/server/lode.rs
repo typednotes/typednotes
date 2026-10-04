@@ -49,6 +49,9 @@ pub async fn open(body: &Value) -> Result<String, String> {
     if let Some(expected)=body.get("buildContracts") {
         if a.body.get("buildContracts")!=Some(expected){return Err("the writer does not acknowledge caller-pinned build contracts; deploy Lode 0.4.3 or newer before generation".into());}
     }
+    if body.get("background") == Some(&json!(true)) && a.body.get("backgroundCheckout") != Some(&json!(true)) {
+        return Err("the writer does not support background checkout; deploy the current Lode before automatic generation".into());
+    }
     a.body
         .get("id")
         .and_then(Value::as_str)
@@ -70,11 +73,11 @@ pub fn narrowing_tools(status: &Value, desired: &[String]) -> Result<Vec<String>
     Ok(current.into_iter().filter(|tool| desired.contains(tool)).collect())
 }
 
-pub async fn message(id: &str, text: &str, credentials: Value, desired: &[String], execution: &Value) -> Result<Reply<()>, String> {
+pub async fn message_once(id: &str, text: &str, credentials: Value, desired: &[String], execution: &Value, message_key: Option<&str>) -> Result<Reply<()>, String> {
     let status = match status(id).await? { Reply::Gone => return Ok(Reply::Gone), Reply::Ok(status) => status };
     let tools = narrowing_tools(&status, desired)?;
     let execution = narrowing_execution(&status, execution)?;
-    let body = json!({ "text": text, "credentials": credentials, "tools": tools, "execution": execution });
+    let body = json!({ "text": text, "credentials": credentials, "tools": tools, "execution": execution, "messageKey":message_key });
     let path = format!("/v0/sessions/{}/messages", segment(id));
     let a = rpc::quick(&service()?, Method::POST, &path, Some(&body))
         .await
@@ -227,8 +230,14 @@ pub async fn status(id: &str) -> Result<Reply<Value>, String> {
 
 /// Whether a status says a run is going (or about to).
 pub fn running(status: &Value) -> bool {
-    status.get("state").and_then(Value::as_str) == Some("running")
+    matches!(status.get("state").and_then(Value::as_str),Some("running"|"opening"|"waiting"))
         || status.get("queued").and_then(Value::as_u64).unwrap_or(0) > 0
+}
+
+/// The commit lode last published or opened at.
+pub async fn answer(id:&str,question:&str,value:&str)->Result<(),String>{
+    let reply=rpc::quick(&service()?,Method::POST,&format!("/v0/sessions/{}/answer",segment(id)),Some(&json!({"id":question,"answer":value}))).await?;
+    if reply.ok(){Ok(())}else{Err(fail("the question answer",&reply))}
 }
 
 /// The commit lode last published or opened at.

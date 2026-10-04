@@ -98,18 +98,18 @@ impl CellType {
 
     pub fn label(self) -> &'static str {
         match self {
-            CellType::Node => "Node",
-            CellType::Scheduled => "Source · scheduled fetch",
-            CellType::Watch => "Source · watch a page",
-            CellType::UiInput => "Source · input in the notebook",
-            CellType::Secret => "Source · secret",
-            CellType::Endpoint => "Source · webhook endpoint",
-            CellType::ChannelSource => "Source · channel message",
-            CellType::DbSink => "Sink · database table",
-            CellType::HttpSink => "Sink · HTTP POST",
-            CellType::StorageSink => "Sink · storage",
-            CellType::UiSink => "Sink · notebook output",
-            CellType::ChannelSink => "Sink · channel message",
+            CellType::Node => "Note · calculation",
+            CellType::Scheduled => "Source note · scheduled fetch",
+            CellType::Watch => "Source note · watch a page",
+            CellType::UiInput => "Source note · input",
+            CellType::Secret => "Source note · secret",
+            CellType::Endpoint => "Source note · webhook endpoint",
+            CellType::ChannelSource => "Source note · channel message",
+            CellType::DbSink => "Sink note · database table",
+            CellType::HttpSink => "Sink note · HTTP POST",
+            CellType::StorageSink => "Sink note · storage",
+            CellType::UiSink => "Sink note · project output",
+            CellType::ChannelSink => "Sink note · channel message",
         }
     }
 
@@ -218,6 +218,9 @@ pub struct CellImpl {
     pub constant: Option<String>,
     pub module: Option<String>,
     pub signature: Option<String>,
+    /// A resumable graph producer; clock/cursor arguments belong to Lun.
+    #[serde(default)]
+    pub producer: bool,
     /// The effect row, e.g. `["HTTP"]`.
     pub effects: Vec<String>,
     /// The graph input the cell feeds, and its Lean type.
@@ -441,7 +444,15 @@ pub struct LodeProgress {
     pub state: String,
     pub entries: Vec<LodeEntry>,
     pub next: u64,
+    #[serde(default)]
+    pub question: Option<WriterQuestion>,
 }
+
+#[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
+pub struct WriterQuestion {pub id:String,pub question:WriterQuestionText}
+#[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
+#[serde(rename_all="camelCase")]
+pub struct WriterQuestionText {pub text:String,pub options:Vec<String>,pub free_text:bool}
 
 /// The answer to feeding an input: the nodes that changed.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -899,6 +910,10 @@ pub struct LunFunction {
     pub module: String,
     pub function: String,
     pub signature: String,
+    #[serde(default)]
+    pub producer: bool,
+    #[serde(default, rename = "outputType", skip_serializing_if = "Option::is_none")]
+    pub output_type: Option<String>,
 }
 
 /// A graph of `lun.json`.
@@ -1009,6 +1024,7 @@ pub fn cell_impl(cell_type: CellType, name: &str, config: &CellConfig, lun: &Lun
         constant: function.map(|f| f.function.clone()),
         module: function.map(|f| f.module.clone()),
         signature: function.map(|f| f.signature.clone()),
+        producer: function.is_some_and(|f| f.producer),
         effects: function
             .map(|f| signature_effects(&f.signature))
             .unwrap_or_default(),
@@ -1212,7 +1228,7 @@ fn cell_instruction(cell: &Cell) -> String {
     let input = cell.config.input.clone().unwrap_or_else(|| n.clone());
     let instruction = match cell.cell_type {
         CellType::Node => format!(
-            "a function `{n}` with effect row `[]`, applied in the graph to the values it needs"
+            "a calculation function `{n}` with only the required authorized effects (default row `[]`), applied in the graph to its named inputs; for graph-internal waits or multiple emissions, declare `producer:true` and use graph arguments followed by `Nat → Option S → Eff effs (List B × S × Option Nat)`, with clock/cursor supplied by the app/runtime"
         ),
         CellType::Scheduled | CellType::Watch => format!(
             "a function `{n}` of signature `String → Eff [HTTP] T`: it receives the page URL, \
@@ -1226,7 +1242,7 @@ fn cell_instruction(cell: &Cell) -> String {
             }
         ),
         CellType::UiInput => format!(
-            "no function: a graph input `input \"{input}\" T`, set by the user in the notebook{}",
+            "no function: a graph input `input \"{input}\" T`, set by the user in the project{}",
             if cell.config.choices.is_empty() {
                 String::new()
             } else {
@@ -1278,24 +1294,24 @@ fn cell_instruction(cell: &Cell) -> String {
         ),
         CellType::ChannelSink => format!(
             "a function `{n}` with effect row `[]` returning the message text as a String (the \
-             app sends it when it changes)"
+             app persists and sends every changed emission in order)"
         ),
     };
     let deps = cell.config.dependencies.clone().unwrap_or_else(|| crate::cell_references(&cell.description));
     let named = if cell.config.dependencies.is_some() || !deps.is_empty() {
         if deps.is_empty() {
-            " This cell takes no cell arguments (a zero-dependency function is a source).".into()
+            " This note takes no note arguments (a zero-dependency function is a source). Runtime producer clock/cursor parameters are not note arguments.".into()
         } else {
-            format!(" Its arguments are exactly [{}], in that order; infer each argument type from the named cell's output. No undeclared cell dependencies.", deps.join(", "))
+            format!(" Its graph arguments are exactly [{}], in that order; infer each argument type from the named note's output. No undeclared note dependencies; producer clock/cursor parameters are runtime-owned.", deps.join(", "))
         }
     } else { String::new() };
     let output = cell.config.output_type.as_ref().map(|ty|
-        format!(" The output type is constrained to `{ty}`; declare that exact result type, inside `Eff effs ({ty})` for functions. It will be checked by the runtime.")
+        format!(" The output type is constrained to `{ty}`; ordinary functions return `Eff effs ({ty})`, while producers emit `{ty}` values inside the typed step envelope. Preserve outputType in lun.json; Lun checks the caller-owned emission/result type.")
     ).unwrap_or_default();
     let external: Vec<_> = cell.config.connectors.iter().filter(|grant| crate::LocalService::from_selection(&grant.connection).is_none()).collect();
     let local: Vec<_> = cell.config.connectors.iter().filter(|grant| crate::LocalService::from_selection(&grant.connection).is_some()).collect();
     let connectors = if external.is_empty() { String::new() } else {
-        format!(" This cell may use only the following connected-service grants through `Control.Monad.Effect.Connector`, in its `Eff` row: {}. Use named operations and structured resource components; never raw HTTP or IO to bypass a connector grant.", serde_json::to_string(&external).unwrap_or_default())
+        format!(" This note may use only the following project connected-service grants through `Control.Monad.Effect.Connector`, in its `Eff` row: {}. Use named operations and structured resource components; never raw HTTP or IO to bypass a connector grant.", serde_json::to_string(&external).unwrap_or_default())
     };
     let locals = if local.is_empty() { String::new() } else {
         format!(" Bound local-service requests: {}. Use the PostgreSQL or SecretStore effect and the trusted actor/graph bindings; these are not external Connector credentials. No raw SQL or raw vault HTTP.", serde_json::to_string(&local).unwrap_or_default())
@@ -1308,14 +1324,14 @@ fn cell_instruction(cell: &Cell) -> String {
 /// the user's steering note if any.
 pub fn lode_message(graph_name: &str, cells: &[Cell], note: Option<&str>) -> String {
     let mut out = format!(
-        "Implement the typednotes notebook \"{graph_name}\" in this directory.\n\n\
-         It is a lun project. Each cell below is a natural-language description of one node. Implement every cell as \
+        "Implement the typednotes project \"{graph_name}\" in this directory.\n\n\
+         It is a lun project. Each note below describes one typed graph computation. Implement every note as \
          instructed, write `lun.json` declaring every function under its exact name and one graph \
          named `{GRAPH_NAME}` wiring them (inputs with `input \"name\" Type`, then the functions \
          applied to what they need), publish one commit, `lun_build` it, and fix what lun reports \
          until the build is ready and the functions answer as described. Every argument and result \
-         is a JSON value (FromJson/ToJson). Keep existing functions whose cells did not change.\n\n\
-         Cells, in order:\n"
+         is a JSON value (FromJson/ToJson). Keep existing functions whose notes did not change.\n\n\
+         Notes, in order:\n"
     );
     for (i, cell) in cells.iter().enumerate() {
         out.push_str(&format!(
@@ -1374,11 +1390,11 @@ pub fn repair_message(graph_name: &str, cell: &Cell, issue: &str) -> String {
         _ => String::new(),
     };
     format!(
-        "In the typednotes notebook \"{graph_name}\", the cell `{name}` ({label}) needs its code \
+        "In the typednotes project \"{graph_name}\", the note `{name}` ({label}) needs its code \
          rewritten.\n\nDescription: {description}\nImplement: {instruction}.{current}\n\n\
          What is wrong: {issue}\n\nFix it, and whatever depends on it; keep every other \
          function's name and signature and the graph named `{GRAPH_NAME}`. Publish one commit, \
-         `lun_build` it, and check with `lun_call` that the cell now does what its description \
+         `lun_build` it, and check with `lun_call` that the note now does what its description \
          says.\n",
         name = cell.name,
         label = cell.cell_type.label(),
@@ -1391,9 +1407,9 @@ pub fn repair_message(graph_name: &str, cell: &Cell, issue: &str) -> String {
 /// lun's diagnostics point at.
 pub fn build_repair_message(graph_name: &str, cells: &[&Cell], diagnostics: &str) -> String {
     let mut out = format!(
-        "The published commit of the typednotes notebook \"{graph_name}\" did not build.\n\n\
+        "The published commit of the typednotes project \"{graph_name}\" did not build.\n\n\
          lun's diagnostics:\n\n{diagnostics}\n\nFix the code, publish one commit, `lun_build` it until it is ready, and \
-         check the functions with `lun_call`. The cells concerned:\n"
+         check the functions with `lun_call`. The notes concerned:\n"
     );
     for cell in cells {
         out.push_str(&format!(
@@ -1545,6 +1561,15 @@ pub fn diff_hunks_mentioning(diff: &str, name: &str) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn producer_manifests_preserve_emission_contracts_through_app_serialization() {
+        let function=json!({"name":"paced","module":"Sheet","function":"Sheet.paced","signature":"Nat → Nat → Option Bool → Eff [] (List Nat × Bool × Option Nat)","producer":true,"outputType":"Nat"});
+        let manifest:LunJson=serde_json::from_value(json!({"functions":[function.clone()]})).unwrap();
+        assert_eq!(serde_json::to_value(&manifest.functions[0]).unwrap(),function);
+        assert!(cell_impl(CellType::Node,"paced",&CellConfig::default(),&manifest).producer);
+        assert!(serde_json::from_value::<LunFunction>(json!({"name":"x","module":"X","function":"X.x","signature":"Unit → Eff [] Nat","producer":"yes"})).is_err());
+    }
 
     #[test]
     fn cell_types_round_trip_through_the_database() {
@@ -1931,11 +1956,11 @@ mod tests {
             ..Default::default()
         });
         let m = repair_message("Invoices", &c, "it forgets the shipping");
-        assert!(m.contains("the cell `total` (Node)"));
+        assert!(m.contains("the note `total` (Note · calculation)"));
         assert!(m.contains("Currently: `total : List Nat → Eff [] Nat` in `Sheet`."));
         assert!(m.contains("What is wrong: it forgets the shipping"));
         let b = build_repair_message("Invoices", &[&c], "function total: type mismatch");
-        assert!(b.contains("function total: type mismatch") && b.contains("- `total` (Node)"));
+        assert!(b.contains("function total: type mismatch") && b.contains("- `total` (Note · calculation)"));
     }
 
     #[test]

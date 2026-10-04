@@ -6,7 +6,7 @@ use crate::error_message;
 /// Provider inventory is loaded through the existing models.list broker grant.
 /// Key this component by connection ID so late results cannot cross accounts.
 #[component]
-pub(crate) fn ModelPicker(slug: String, connection_id: String, mut value: Signal<String>, #[props(default = false)] disabled: bool) -> Element {
+pub(crate) fn ModelPicker(slug: String, connection_id: String, mut value: Signal<String>, #[props(default = false)] disabled: bool, #[props(default = "provider-model".to_string())] id: String) -> Element {
     let mut models = use_resource(move || {
         let (slug, id) = (slug.clone(), connection_id.clone());
         async move { list_ai_models(slug, id).await.map_err(|e| error_message(&e)) }
@@ -18,11 +18,16 @@ pub(crate) fn ModelPicker(slug: String, connection_id: String, mut value: Signal
         div { class: "conn-subform model-picker",
             match models() {
                 None => rsx! { p { class: "conn-meta", role: "status", "Loading provider models…" } },
-                Some(Err(message)) => rsx! { p { class: "orgs-error", role: "alert", "Could not load models: {message}" } },
+                Some(Err(message)) => rsx! {
+                    p { class: "orgs-error", role: "alert", "Could not load models: {message}" }
+                    Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Ghost,
+                        disabled, onclick: move |_| models.restart(), "Retry model catalog" }
+                },
                 Some(Ok(ids)) if ids.is_empty() => rsx! { p { class: "conn-meta", "This provider returned no models for this account." } },
                 Some(Ok(ids)) => rsx! {
                     div { class: "conn-select",
                         Select::<String> {
+                            id: id.clone(),
                             value: Some(selected.into()),
                             aria_label: "Provider model", disabled,
                             on_value_change: move |id: Option<String>| { if let Some(id) = id { value.set(id); } },
@@ -36,9 +41,6 @@ pub(crate) fn ModelPicker(slug: String, connection_id: String, mut value: Signal
                     }
                 },
             }
-            Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Ghost,
-                disabled: disabled || models.state()() == UseResourceState::Pending,
-                onclick: move |_| models.restart(), "Refresh models" }
         }
     }
 }

@@ -1,5 +1,14 @@
 # Computations
 
+> **Current application contract (0.11.0):** the product is
+> Org → Project → Notes, with project model/operation-resource permissions and
+> Lun 0.4.1's caller-owned state/producer API. Typednotes owns durable scheduling
+> and delivery. See [project workflow](workspaces.md),
+> [scheduling ownership](scheduling-ownership.md), [runtime](services/lun.md), and
+> [0.11.0 migration/rollout](release-0.11.0.md). The detailed historical 0.6.0
+> specification below retains legacy table/API vocabulary; its notebook/session
+> UI, per-note permission and runtime-session descriptions are superseded.
+
 **Status:** native app/writer/runtime contract implemented and locally verified · **Last updated:** 2026-09-30
 
 **Coordinated release target:** Typednotes 0.6.0, Lode/Lun 0.3.0,

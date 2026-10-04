@@ -1,5 +1,17 @@
 # Push order and CI gates
 
+## Local project-notes/stateless release
+
+The current local release set is app 0.11.0, Lode 0.5.0 and fleet 0.7.0 with
+app SQL through 0015, Lun 0.4.1 and Linen 1.12.0. Commits and annotated tags are
+local and unpublished. Publish Linen before its dependent services and wait
+for successful exact-commit main CI/image publication before fleet adoption.
+The removed Lun session API requires a coordinated maintenance-window transition:
+drain old effects and pause old dispatch/inputs before applying the schema and
+rolling the matching caller/runtime. See [the complete rollout](release-0.11.0.md).
+
+Existing release refs below describe prior batches, not the new schema contract.
+
 ## Local v0.10.0 workflow update
 
 The next coordinated source releases are Linen v1.11.0, Lun v0.3.2, app v0.10.0,

@@ -151,7 +151,7 @@ fn ConnectionRow(slug: String, connection: Connection, policy: Option<api::Effec
             }
             if let Some(message) = blocked.as_ref() {
                 p { class: "conn-result err", "{message} ",
-                    Link { to: "/orgs/{slug}/settings/notebooks", "Review notebook permissions" }
+                    Link { to: "/orgs/{slug}/settings/permissions", "Review organization execution policy" }
                 }
             }
             div { class: "conn-actions",
@@ -212,20 +212,37 @@ fn CodeTokenRepair(slug: String, connection: String, on_changed: EventHandler<()
 }
 
 /// Shared policy editor. `None` is inheritance, never an unrestricted grant.
-/// A cell's presets intersect its ceiling; execution still validates authority.
+/// A project's presets intersect its ceiling; execution still validates authority.
 #[component]
 pub(crate) fn PermissionEditor(
     id: String,
-    provider: Provider,
+    #[props(default, into)] provider: Option<Provider>,
+    #[props(default)] local_service: Option<api::LocalService>,
     value: Option<ConnectorPermissions>,
     ceiling: Option<ConnectorPermissions>,
     on_change: EventHandler<Option<ConnectorPermissions>>,
     #[props(default = true)] allow_inherit: bool,
     #[props(default = false)] disabled: bool,
 ) -> Element {
-    let displayed = value.clone().or_else(|| ceiling.clone()).unwrap_or_else(|| ConnectorPermissions::preset(provider, PermissionPreset::ReadOnly));
+    let policy_preset = |preset| match (provider, local_service) {
+        (Some(provider), None) => ConnectorPermissions::preset(provider, preset),
+        (None, Some(service)) => ConnectorPermissions::local_preset(service, preset, Vec::new()),
+        _ => ConnectorPermissions::deny_all(),
+    };
+    let operations = match (provider, local_service) {
+        (Some(provider), None) => connector_operations(provider),
+        (None, Some(service)) => service.operations(),
+        _ => &[],
+    };
+    let scope_label = match (provider, local_service) {
+        (Some(provider), None) => connector_scope_label(provider),
+        (None, Some(api::LocalService::Postgres)) => "Table names within the executing user's database schema",
+        (None, Some(api::LocalService::Vault)) => "Project secret names",
+        _ => "Resources",
+    };
+    let displayed = value.clone().or_else(|| ceiling.clone()).unwrap_or_else(|| policy_preset(PermissionPreset::ReadOnly));
     let preset = |preset| {
-        let requested = ConnectorPermissions::preset(provider, preset);
+        let requested = policy_preset(preset);
         ceiling.as_ref().map_or(requested.clone(), |limit| limit.intersect(&requested))
     };
     let read = preset(PermissionPreset::ReadOnly);
@@ -257,6 +274,9 @@ pub(crate) fn PermissionEditor(
                 Input { id: "{id}-boundary", disabled: disabled || mixed_resources,
                     value: common_root.unwrap_or_default().join("/"),
                     placeholder: match provider {
+                        None if local_service == Some(api::LocalService::Postgres) => "notes",
+                        None => "token",
+                        Some(provider) => match provider {
                         Provider::S3 | Provider::Azure => "reports/2026",
                         Provider::Github | Provider::Gitlab => "owner/repository",
                         Provider::GoogleCalendar | Provider::MicrosoftCalendar | Provider::Caldav => "primary",
@@ -265,6 +285,7 @@ pub(crate) fn PermissionEditor(
                         Provider::Slack | Provider::Whatsapp | Provider::Signal => "channel or recipient ID",
                         Provider::Notion => "page or database ID",
                         _ => "model ID",
+                        },
                     },
                     oninput: { let displayed = displayed.clone(); move |event: FormEvent| {
                         let mut next = displayed.clone();
@@ -275,7 +296,9 @@ pub(crate) fn PermissionEditor(
                 }
                 p { class: "conn-meta",
                     if mixed_resources { "Several resource boundaries are set. Edit them separately in Advanced." }
-                    else { "Applies to all selected operations. Leave empty to use the connection's base resource; it never grants access beyond that credential. Advanced can give each operation different resources." }
+                     else if local_service == Some(api::LocalService::Postgres) { "Table names only. The runtime binds the current user's schema; a project cannot select another user's schema. Advanced can scope each operation separately." }
+                     else if local_service == Some(api::LocalService::Vault) { "Secret names in this project. Preserved secret namespaces are resolved by protected runtime authority, never by generated code." }
+                     else { "Applies to all selected operations. Leave empty to use the connection's base resource; it never grants access beyond that credential. Advanced can give each operation different resources." }
                 }
             }
             if let Some(limit) = &ceiling {
@@ -287,7 +310,7 @@ pub(crate) fn PermissionEditor(
                 summary { "Advanced operations and resources" }
                 p { class: "conn-meta", "Requested policy grants; the broker checks operation support, scopes and credentials when a call runs." }
                 div { class: "permission-options",
-                    for operation in connector_operations(provider) {
+                    for operation in operations {
                         PermissionCheck { id: "{id}-{operation.id}", label: operation.label,
                             disabled: disabled || (ceiling.as_ref().is_some_and(|c| !c.scopes.iter().any(|s| s.operation == operation.id)) && !displayed.scopes.iter().any(|s| s.operation == operation.id)),
                             checked: displayed.scopes.iter().any(|s| s.operation == operation.id),
@@ -304,7 +327,7 @@ pub(crate) fn PermissionEditor(
                             } }
                     }
                 }
-                p { class: "conn-meta", "{connector_scope_label(provider)}. Separate resource levels with /; an empty root means the credential's base resource. Scopes match whole components, not text prefixes." }
+                p { class: "conn-meta", "{scope_label}. Separate resource levels with /; scopes match whole components, not text prefixes." }
                 for (index, grant) in displayed.scopes.iter().enumerate() {
                     div { class: "permission-grant", key: "{index}-{grant.operation}",
                         div { class: "orgs-field",
@@ -1072,7 +1095,7 @@ fn AiForm(slug: String, options: ReadSignal<Vec<Provider>>, disabled: bool, on_a
             if provider() == Provider::TypeSafe {
                 p { class: "conn-meta", "Typed classifier models use /systemone. This connection evaluates questions; it is not a code-writing model." }
             }
-            p { class: "conn-meta", "After connecting, open Models and pricing to select from this provider's live catalog. Notebooks use the same model menu." }
+            p { class: "conn-meta", "After connecting, open Models and pricing to select from this provider's live catalog. Projects use the same model menu." }
             Button { r#type: "submit", disabled: disabled || busy(), "Connect {provider().name()}" }
             if let Some(message) = error() {
                 p { class: "orgs-error", "{message}" }

@@ -49,8 +49,9 @@ async fn quiesce(tx: &mut Tx, org: &str) -> Result<(), ServerFnError> {
     connector::revoke(tx, org, None).await?;
     // The parent locks also prevent new graph/share session insertions while
     // teardown collects the final ids of any already-running visitor updates.
-    sqlx::query("select id from projects where org_id=$1::uuid for update")
+    let projects = sqlx::query("select id::text as id from projects where org_id=$1::uuid for update")
         .bind(org).fetch_all(&mut **tx).await.map_err(errors::db_error)?;
+    for project in projects { graphs::retire_project_runs_locked(tx,org,&project.get::<String,_>("id")).await?; }
     let rows = sqlx::query("select g.id::text as id, g.lode_session_id, g.lun_session_id from graphs g \
         join projects p on p.id=g.project_id where p.org_id=$1::uuid for update of g")
         .bind(org).fetch_all(&mut **tx).await.map_err(errors::db_error)?;
@@ -63,7 +64,7 @@ async fn quiesce(tx: &mut Tx, org: &str) -> Result<(), ServerFnError> {
             lun::end_checked(&id).await.map_err(errors::bad_gateway)?;
         }
     }
-    sqlx::query("update graphs g set lode_session_id=null, lun_session_id=null, session_user_id=null, \
+    sqlx::query("update graphs g set lode_session_id=null, lun_session_id=null, runtime_state=null, runtime_due_at=null, session_user_id=null, \
         status=case when g.status='implementing' then 'editing' else g.status end, updated_at=now() \
         from projects p where g.project_id=p.id and p.org_id=$1::uuid")
         .bind(org).execute(&mut **tx).await.map_err(errors::db_error)?;
@@ -90,7 +91,8 @@ async fn project_resources(tx: &mut Tx, org: &str, owner: Option<&str>) -> Resul
         sqlx::query("delete from notebook_shares where id=$1::uuid").bind(id)
             .execute(&mut **tx).await.map_err(errors::db_error)?;
     }
-    let secrets = sqlx::query("select g.id::text as graph, c.config->>'name' as name from graph_cells c \
+    let secrets = sqlx::query("select coalesce(o.graph_id,g.id)::text as graph, coalesce(o.original_config->>'name',c.config->>'name') as name from graph_cells c \
+        left join note_origins o on o.note_id=c.id \
         join graphs g on g.id=c.graph_id join projects p on p.id=g.project_id \
         where p.org_id=$1::uuid and ($2::text is null or p.created_by::text=$2) \
         and c.variant='secret' and c.config ? 'set_at'")

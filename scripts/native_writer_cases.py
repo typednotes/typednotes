@@ -15,6 +15,7 @@ def verify_writer(sql, api, writer, vault, org, user):
         f"insert into projects(id,org_id,slug,name,created_by,repo_connection_id,repo_provider,repo_full_name,repo_web_url,repo_default_branch) values"
         f"('{project}','{org}','writer-project','Writer project','{user}','{repo}','github','fixture/repo','https://github.com/fixture/repo','main');"
         f"insert into graphs(id,project_id,slug,name,created_by) values('{graph}','{project}','writer-graph','Writer graph','{user}');"
+        f"update projects set notes_graph_id='{graph}' where id='{project}';"
         f"insert into graph_cells(id,graph_id,position,name,kind,description,config) values"
         f"('{cell}','{graph}',0,'compute','node','Return a fixture value','{{\"output_type\":\"String\"}}');")
     model = api("/api/connections/ai", {"provider": "Openai", "api_key": "local-provider-fixture", "base_url": "https://fixture.example.invalid/v1"})

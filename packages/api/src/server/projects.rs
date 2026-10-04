@@ -21,7 +21,7 @@ macro_rules! project_columns {
         "p.id::text as id, p.slug::text as slug, p.name, \
          to_char(p.created_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI \"UTC\"') as created_at, \
          p.repo_connection_id::text as repo_connection_id, p.repo_provider, p.repo_full_name, \
-         p.repo_web_url, p.repo_default_branch, p.created_by::text as created_by"
+          p.repo_web_url, p.repo_default_branch, p.created_by::text as created_by, p.note_connections::text as note_connections"
     };
 }
 
@@ -43,6 +43,7 @@ fn project_of(row: &PgRow) -> Project {
         name: row.get("name"),
         created_at: row.get("created_at"),
         repo,
+        note_connections: serde_json::from_str(&row.get::<String,_>("note_connections")).unwrap_or_default(),
     }
 }
 
@@ -163,6 +164,45 @@ pub async fn rename(
     Ok(get(org, slug).await?.0)
 }
 
+/// Project-wide operation/resource scopes. Changing them closes the existing
+/// writer and runtime grants; generated notes cannot restore removed authority.
+pub async fn set_note_connections(org:&Org,user:&User,slug:&str,grants:Vec<crate::CellConnector>)->Result<Project,ServerFnError>{
+    let(project,creator)=get(org,slug).await?;
+    if creator.as_deref()!=Some(&user.id)&&!matches!(org.role.as_str(),"owner"|"admin"){return Err(forbidden("only the project's creator or an org admin can edit project permissions"));}
+    super::graphs::retire_project_runs(&org.id,&project.id).await?;
+    let mut seen=std::collections::BTreeSet::new();
+    if grants.len()>64{return Err(bad_request("at most 64 project connections"));}
+    for grant in &grants{
+        if !seen.insert(&grant.connection){return Err(bad_request("duplicate project connection"));}
+        if let Some(service)=crate::LocalService::from_selection(&grant.connection){
+            if let Some(p)=&grant.permissions{
+                p.validate_local(service).map_err(bad_request)?;
+                if service==crate::LocalService::Postgres&&p.scopes.iter().any(|s|s.root.len()>1){return Err(bad_request("project database scopes use table names; actor schemas are bound by the runtime"));}
+            }
+        }else{
+            let(c,_)=connections::get(org,user,&grant.connection).await?;
+            if let Some(p)=&grant.permissions{
+                let p=p.validate(c.provider).map_err(bad_request)?;
+                c.permissions.clone().unwrap_or_else(||crate::ConnectorPermissions::preset(c.provider,crate::PermissionPreset::ReadOnly)).narrow(&p).map_err(forbidden)?;
+            }
+        }
+    }
+    let mut tx=super::connector::lock(&org.id).await?;
+    super::connector::require_actor(&mut tx,&org.id,&user.id).await?;
+    let live=sqlx::query("select p.created_by::text as creator,m.role from projects p join memberships m on m.org_id=p.org_id and m.user_id=$3::uuid where p.id=$1::uuid and p.org_id=$2::uuid for update of p")
+        .bind(&project.id).bind(&org.id).bind(&user.id).fetch_one(&mut *tx).await.map_err(db_error)?;
+    if live.get::<Option<String>,_>("creator").as_deref()!=Some(&user.id)&&!matches!(live.get::<String,_>("role").as_str(),"owner"|"admin"){return Err(forbidden("your project management role changed"));}
+    let roots=sqlx::query("select id::text as id,lode_session_id from graphs where project_id=$1::uuid").bind(&project.id).fetch_all(&mut *tx).await.map_err(db_error)?;
+    for root in roots{
+        let id:String=root.get("id");
+        if let Some(writer)=root.get::<Option<String>,_>("lode_session_id"){super::lode::narrow(&writer,&[]).await.map_err(bad_gateway)?;}
+        super::connector::revoke_graph(&mut tx,&org.id,&id).await?;
+    }
+    sqlx::query("update projects set note_connections=$2::jsonb where id=$1::uuid").bind(&project.id).bind(serde_json::to_string(&grants).map_err(|_|bad_request("invalid project permissions"))?).execute(&mut *tx).await.map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
+    Ok(get(org,slug).await?.0)
+}
+
 // ── Repositories ────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -275,6 +315,14 @@ pub async fn repo_page(org: &Org, user: &User, connection_id: &str, page: u32) -
 }
 
 /// Make `full_name` the project's primary repository, after reading it
+pub async fn verify_selection(org:&Org,user:&User,connection_id:&str,full_name:&str)->Result<Repo,ServerFnError>{
+    let(connection,owner)=code_connection(org,user,connection_id).await?;
+    let full_name=crate::repository_name(connection.provider,full_name).map_err(bad_request)?;
+    let body=connections::call_ok(org,user,&connection,&owner,ProviderCall::new("repositories.read",full_name.split('/').map(str::to_string).collect(),serde_json::json!({"view":"metadata"}))).await?;
+    checked_repo(connection.provider,&full_name,&body).map_err(bad_gateway)
+}
+
+/// Make `full_name` the project's primary repository, after reading it
 /// through the connection — so it exists, the connection can see it, and
 /// its URL and default branch are the host's, not the client's.
 pub async fn set_repo(
@@ -328,7 +376,7 @@ pub async fn allow_code_writes(org: &Org, user: &User, project_slug: &str) -> Re
     let mut root=repo.full_name.split('/').map(str::to_string).collect::<Vec<_>>();root.push("typednotes".into());
     let policy=super::db::org_settings(org).await?.effect_policy;
     if policy.connector_blocker(connection.provider,&crate::ConnectorPermissions::scoped("repositories.write",root.clone(),true),"repositories.write",&root).is_some() {
-        return Err(forbidden("organization notebook permissions do not allow code writing here; an owner/admin must enable that operation first"));
+        return Err(forbidden("organization execution policy does not allow code writing here; an owner/admin must enable that operation first"));
     }
     let grant=crate::ConnectorScope{operation:"repositories.write".into(),root,descendants:true};
     if !permissions.scopes.contains(&grant) { permissions.scopes.push(grant); }

@@ -87,7 +87,7 @@ pub fn UserMenu() -> Element {
                 span { class: "user-menu-avatar", aria_hidden: "true", "{initial}" }
                 span { class: "user-menu-name", "{who}" }
             }
-            Link { class: "user-menu-name", to: "/organizations", title: "Organizations own billing, membership, connections and notebook permission ceilings.", "Organizations" }
+            Link { class: "user-menu-name", to: "/organizations", title: "Organizations own billing, membership, connections and execution ceilings.", "Organizations" }
             Button {
                 variant: ButtonVariant::Outline,
                 size: ButtonSize::Sm,

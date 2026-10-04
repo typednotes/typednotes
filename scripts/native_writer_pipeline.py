@@ -42,6 +42,7 @@ class Pipeline:
             bad_manifest=json.loads(self.files["lun.json"])
             bad_manifest["functions"][0]["signature"]="String → Eff [] Nat"
             bad_manifest["functions"][0]["outputType"]="Nat"
+            bad_manifest["functions"][0]["producer"]=False
             calls=[("write",{"path":"Sheet.lean","content":'import Linen.Control.Monad.Effect\nnamespace Sheet\nopen Control.Monad.Effect\ndef compute (value : String) : Eff [] Nat := pure value.length\nend Sheet\n'}),
                 ("write",{"path":"lun.json","content":json.dumps(bad_manifest)}),
                 ("publish",{"message":"Attempt to override caller String pin"})]
@@ -66,10 +67,10 @@ def verify_pipeline(scratch, sql, api, exchange, lode, org, user, vault, upstrea
     repo_dir = scratch / "full-writer-repository"
     repo_dir.mkdir()
     repository = broker_fixture.Repository(repo_dir, "github")
-    manifest = {"open": ["Sheet"], "functions": [{"name": "compute", "module": "Sheet", "function": "Sheet.compute", "signature": "String → Eff [] String"}],
+    manifest = {"open": ["Sheet"], "functions": [{"name": "compute", "module": "Sheet", "function": "Sheet.compute", "signature": "String → Nat → Option Bool → Eff [] (List String × Bool × Option Nat)","producer":True}],
                 "graphs": [{"name": "main", "program": 'do\n let value ← input "value" String\n compute value'}]}
     files = {
-        "Sheet.lean": 'import Linen.Control.Monad.Effect\nnamespace Sheet\nopen Control.Monad.Effect\ndef compute (value : String) : Eff [] String := pure ("done:" ++ value)\nend Sheet\n',
+        "Sheet.lean": 'import Linen.Control.Monad.Effect\nnamespace Sheet\nopen Control.Monad.Effect\ndef compute (value : String) (now : Nat) (cursor : Option Bool) : Eff [] (List String × Bool × Option Nat) :=\n  if cursor.isSome then pure (["done:" ++ value], true, none)\n  else pure (["first:" ++ value, "done:" ++ value], true, some (now + 35000))\nend Sheet\n',
         "lakefile.toml": f'name="writer_generated_fixture"\ndefaultTargets=["Sheet"]\n[[require]]\nname="linen"\npath="{ROOT.parent / "linen"}"\n[[lean_lib]]\nname="Sheet"\n',
         "lean-toolchain": (ROOT.parent / "lode/lean-toolchain").read_text(),
         "lun.json": json.dumps(manifest),
@@ -83,6 +84,7 @@ def verify_pipeline(scratch, sql, api, exchange, lode, org, user, vault, upstrea
         f"insert into projects(id,org_id,slug,name,created_by,repo_connection_id,repo_provider,repo_full_name,repo_web_url,repo_default_branch) values"
         f"('{project}','{org}','pipeline-project','Pipeline project','{user}','{repo}','github','owner/repo','https://github.com/owner/repo','main');"
         f"insert into graphs(id,project_id,slug,name,created_by,auto_repairs) values('{graph}','{project}','graph','Pipeline graph','{user}',0);"
+        f"update projects set notes_graph_id='{graph}' where id='{project}';"
         f"insert into graph_cells(id,graph_id,position,name,kind,variant,description,config) values"
         f"('{source}','{graph}',0,'input','source','ui','Editable string source','{{\"input\":\"value\",\"output_type\":\"String\"}}');")
     vault.state["documents"][f"/v1/secret/data/thirdparty/github/{user}/{repo}"] = {
@@ -105,11 +107,12 @@ def verify_pipeline(scratch, sql, api, exchange, lode, org, user, vault, upstrea
         for _ in range(400):
             status, result = exchange(lode + f"/v0/sessions/{sid}", headers={"Authorization": "Bearer fixture-writer"})
             assert status == 200, result
-            if result["state"] != "running": return result
+            if result["state"] not in ["running","opening"]: return result
             time.sleep(.2)
         raise AssertionError("actual writer did not become idle")
     initial = idle()
     assert initial["state"] == "idle", initial
+    assert not initial.get("error"),initial
     assert repository.published == 0
     assert repository.head() == repository.initial
     status, log = exchange(lode + f"/v0/sessions/{sid}/messages?wait=0", headers={"Authorization": "Bearer fixture-writer"})
@@ -138,6 +141,10 @@ def verify_pipeline(scratch, sql, api, exchange, lode, org, user, vault, upstrea
     fed = api("/api/graph/cells/feed", {**args, "cell": source, "value": "edited"})
     result = next(n for n in fed["nodes"] if n.get("function") == "compute")["outcome"]
     assert result["output"] == "done:edited", fed
+    emissions=[n["outcome"]["output"] for n in fed["changed"] if n.get("function")=="compute"]
+    assert emissions==["first:edited","done:edited"],fed
+    assert sql(f"select runtime_due_at is not null from graphs where id='{graph}'")=="t"
+    assert sql(f"select impl->>'producer' from graph_cells where name='compute' and graph_id='{graph}'")=="true"
     api("/api/graph/cells/feed", {**args, "cell": source, "value": 17}, ok=False)
     assert "local-provider-fixture" not in json.dumps([initial, final, progress, fed])
     print("PASS full writer pipeline: independent scoped delete, atomic publication, actual Lun adoption/source contracts and editable typed input", flush=True)

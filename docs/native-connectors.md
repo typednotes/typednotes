@@ -20,18 +20,27 @@ Migration 0009 additionally guards one provider connection per organization,
 under the same transaction lock as provisioning; health requires that enabled
 guard and the 0010/0011 workspace/share tables. See [workspaces](workspaces.md).
 
-Public viewer sessions use Lun 0.3.1's private `PureShareExecution` witness with
-Trace/Error-only effects, no domains and no connector grants. Every session start
-and update consumes checked evidence; no broker warrant is minted. Effectful
-graph nodes refuse before credential/local DB/storage IO. Public snapshot filtering
+Public viewer records persist isolated state in the app. Every Lun 0.4.1 graph
+call receives fresh Trace/Error-only effects, no domains and no connector grants;
+there is no inherited public mode or stored authority in Lun. No broker warrant is
+minted for public calls. Runtime `EffectPermission` witnesses deny effectful
+graph nodes before credential/local DB/storage IO. Public snapshot filtering
 is an app responsibility, tested separately from the proved effect ceiling.
 
 ## Trusted provisioning
 
-The current workspace workflow adds explicit notebook-subtree write setup and
+The current project workflow adds explicit code-subtree write setup and
 stable-ID reauthorization, with no new native operation/preset or org-ceiling
 widening. The app's queued generation uses a fresh writer launch and requires
 Lode 0.4.3's immutable caller-pin acknowledgement. [Workflow](workspaces.md).
+
+Project-note calls additionally require the current writer's background-checkout
+acknowledgement. Project permissions replace individual-note grants in live minting:
+operations, resource roots and byte limits are selected once per project, then
+intersected with organization/connection/static capability/warrant ceilings. Missing
+local-service or provider selection denies access. Table roots are actor-relative;
+merged secret names route through protected same-project origin records. All native
+operation IDs, presets and broker transports remain unchanged.
 
 Tenant deletion and credential provisioning share the org transaction lock.
 Minting now carries the actual executing user separately from credential ownership

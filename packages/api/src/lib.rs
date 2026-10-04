@@ -560,6 +560,33 @@ pub async fn allow_project_code_writes(slug: String, project: String) -> Result<
     projects::allow_code_writes(&org,&user,&project).await
 }
 
+#[get("/api/project/notes")]
+pub async fn get_project_notes(slug:String,project:String)->Result<GraphDetail,ServerFnError>{
+    let(user,org)=member_org(&slug).await?;
+    server::graphs::detail(&org,&user,&project,"").await
+}
+
+#[post("/api/project/permissions")]
+pub async fn set_project_note_connections(slug:String,project:String,grants:Vec<CellConnector>)->Result<Project,ServerFnError>{
+    let(user,org)=member_org(&slug).await?;
+    server::projects::set_note_connections(&org,&user,&project,grants).await
+}
+
+#[post("/api/project/answer")]
+pub async fn answer_project_question(slug:String,project:String,question:String,answer:String)->Result<Graph,ServerFnError>{
+    let(user,org)=member_org(&slug).await?;
+    server::graphs::answer_question(&org,&user,&project,&question,&answer).await
+}
+
+#[post("/api/setup/begin")]
+pub async fn begin_repository_setup()->Result<Org,ServerFnError>{let user=session::require_user().await?;server::workspace::begin_setup(&user).await}
+#[post("/api/setup/skip")]
+pub async fn skip_repository_setup()->Result<(),ServerFnError>{let user=session::require_user().await?;server::workspace::skip_setup(&user).await}
+#[post("/api/setup/repository")]
+pub async fn create_project_from_repository(slug:String,connection:String,repository:String)->Result<ProjectDetail,ServerFnError>{
+    let user=session::require_user().await?;let(org,project)=server::workspace::project_from_repo(&user,&slug,&connection,&repository).await?;Ok(ProjectDetail{org,project})
+}
+
 /// Optional PAT repair uses the same slot/authorization as OAuth reauthorization.
 #[post("/api/connections/code-token")]
 pub async fn replace_code_token(slug: String, connection: String, token: String) -> Result<Connection, ServerFnError> {

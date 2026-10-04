@@ -40,20 +40,23 @@ pub const ORG_SECTIONS: [(&str, &str); 5] = [
     ("general", "General"),
     ("members", "Members"),
     ("connections", "Connections"),
-    ("notebooks", "Notebooks"),
+    ("permissions", "Execution policy"),
     ("danger", "Danger zone"),
 ];
 
 /// A project's settings sections.
-pub const PROJECT_SECTIONS: [(&str, &str); 4] = [
+pub const PROJECT_SECTIONS: [(&str, &str); 6] = [
     ("general", "General"),
     ("repository", "Repository"),
+    ("model", "AI model"),
+    ("permissions", "Note permissions"),
     ("interfaces", "Interfaces"),
     ("danger", "Danger zone"),
 ];
 
 /// A known section, else the first.
 fn section_of(sections: &[(&'static str, &'static str)], id: &str) -> &'static str {
+    let id = if id == "notebooks" { "permissions" } else { id };
     sections
         .iter()
         .find(|(s, _)| *s == id)
@@ -307,7 +310,7 @@ fn DeleteAccount(email: String) -> Element {
             CardHeader {
                 CardTitle { "Delete your account" }
                 CardDescription {
-                    "Permanently delete your sign-ins, sessions, connections and owned projects with their notebooks. Organizations with no remaining members are deleted too. Transfer ownership first if other members remain and you are their only owner."
+                    "Permanently delete your sign-ins, sessions, connections and owned projects with their notes. Organizations with no remaining members are deleted too. Transfer ownership first if other members remain and you are their only owner."
                 }
             }
             CardContent {
@@ -414,8 +417,8 @@ pub fn OrgSettingsPage(
             Flash { connected, error }
             match active {
                 "members" => rsx! { MembersPanel { slug: org.slug.clone(), role: org.role.clone() } },
-                "connections" => rsx! { ConnectionsPanel { key: "{org.id}", slug: org.slug.clone() } },
-                "notebooks" => rsx! { OrgNotebooks { key: "{org.id}", slug: org.slug.clone() } },
+                "connections" => rsx! { ConnectionsPanel { key: "{org.id}", slug: org.slug.clone() } crate::onboarding::RepositoryProjectSetup{slug:org.slug.clone()} },
+                "permissions" => rsx! { OrgNotebooks { key: "{org.id}", slug: org.slug.clone() } },
                 "danger" => rsx! { OrgDanger { org: org.clone(), me: me().and_then(|u| u.ok()).flatten().map(|u| u.id).unwrap_or_default() } },
                 _ => rsx! {
                     OrgGeneral { org: org.clone(), credits: d.credits, admin, on_saved: move |_| detail.restart() }
@@ -533,7 +536,7 @@ fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_sa
             let policy = match parsed { Ok(policy) => policy, Err(message) => { status.set(Some(Err(message))); return; } };
             busy.set(true);
             match set_notebook_permissions(slug, policy).await {
-                Ok(_) => { status.set(Some(Ok("Notebook permissions saved.".into()))); on_saved.call(());crate::onboarding::refresh_workspace(); }
+                Ok(_) => { status.set(Some(Ok("Execution policy saved.".into()))); on_saved.call(());crate::onboarding::refresh_workspace(); }
                 Err(error) => status.set(Some(Err(error_message(&error)))),
             }
             busy.set(false);
@@ -542,8 +545,8 @@ fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_sa
     rsx! {
         Card {
             CardHeader {
-                CardTitle { "Notebook permissions" }
-                CardDescription { "Organization-owned upper bounds for generated code. Cells cannot grant themselves additional access." }
+                CardTitle { "Organization execution policy" }
+                CardDescription { "Organization-owned upper bounds for generated code. Projects and notes cannot grant themselves additional access." }
             }
             CardContent {
                 form { class: "conn-subform", onsubmit: save,
@@ -552,7 +555,7 @@ fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_sa
                     }
                     if toml_mode() {
                         div { class: "orgs-field conn-wide",
-                            Label { html_for: "notebook-policy-toml", "Notebook permission policy (TOML)" }
+                            Label { html_for: "notebook-policy-toml", "Execution policy (TOML)" }
                             Textarea { id: "notebook-policy-toml", class: "permission-toml", rows: 18,
                                 disabled: !can_edit || busy(), value: toml_text(), oninput: move |event: FormEvent| toml_text.set(event.value()) }
                             p { class: "conn-meta", "Uses the same operation/resource schema as the visual editor. Unknown fields or operations are rejected. Changes apply only after Save permissions." }
@@ -569,11 +572,11 @@ fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_sa
                     if !effects().iter().any(|effect| effect == "Connector") {
                         p { class: "conn-result err", "Connector is unchecked: AI, repository, calendar, email and messaging calls are denied, including connection tests. Enable it and save to allow the selected providers within their connection grants." }
                     }
-                    p { class: "conn-meta", "Trace: logs · Error: failures · HTTP: public web requests · FileSystem: temporary files · PostgreSQL: notebook database · SecretStore: vault secrets · ObjectStore: S3/Azure · Connector: connected providers." }
+                    p { class: "conn-meta", "Trace: logs · Error: failures · HTTP: public web requests · FileSystem: temporary files · PostgreSQL: actor database · SecretStore: vault secrets · ObjectStore: S3/Azure · Connector: connected providers." }
                     div { class: "orgs-field",
                         fieldset { class: "permission-domain-mode",
                             legend { "HTTP domain policy" }
-                            for (configured, label) in [(true, "Use each cell's configured URL"), (false, "Use an organization allowlist")] {
+                            for (configured, label) in [(true, "Use each note's configured URL"), (false, "Use an organization allowlist")] {
                                 div { class: "permission-check",
                                     Input { id: "domain-mode-{configured}", name: "domain-mode", r#type: "radio", checked: configured_domains() == configured,
                                         disabled: !can_edit || busy(), oninput: move |_: FormEvent| configured_domains.set(configured) }
@@ -588,7 +591,7 @@ fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_sa
                     }
                     p { class: "conn-meta", "Database access is restricted to the running user's schema. Files are restricted to that organization and user's temporary folder. These boundaries cannot be widened here." }
                     if tools().is_empty() {
-                        p { class: "conn-result err", "No code-writing tools are enabled. Select the tools you intend to allow below and save before generating notebook code." }
+                        p { class: "conn-result err", "No code-writing tools are enabled. Select the tools you intend to allow below and save before generating project code." }
                     }
                     details {
                         summary { "Code-writing tools" }
@@ -674,7 +677,7 @@ fn AutoRepairs(slug: String, settings: OrgSettings, on_saved: EventHandler<()>) 
             CardHeader {
                 CardTitle { "Automatic rewrites" }
                 CardDescription {
-                    "When a cell's code does not build, or fails when it runs, Typednotes rewrites it "
+                    "When a note's code does not build, or fails when it runs, Typednotes rewrites it "
                     "by itself — each rewrite spends the org's credits on AI model calls. This caps how "
                     "many rewrites it starts on its own before one of you asks for one again."
                 }
@@ -712,7 +715,7 @@ fn AutoRepairs(slug: String, settings: OrgSettings, on_saved: EventHandler<()>) 
                 }
                 p { class: "conn-meta",
                     match (current, settings.auto_repairs.is_some()) {
-                        (0, _) => "Off: a failing cell waits for one of you to ask for a fix.".to_string(),
+                        (0, _) => "Off: a failing note waits for one of you to ask for a fix.".to_string(),
                         (n, true) => format!("Up to {n} automatic rewrite{} in a row.", if n == 1 { "" } else { "s" }),
                         (n, false) => format!("Up to {n} automatic rewrite{} in a row (the default).", if n == 1 { "" } else { "s" }),
                     }
@@ -739,7 +742,7 @@ fn OrgDanger(org: Org, me: String) -> Element {
         Card {
             CardHeader {
                 CardTitle { "Leave the organisation" }
-                CardDescription { "You lose access to its projects, notebooks and connections. An org keeps at least one owner." }
+                CardDescription { "You lose access to its projects, notes and connections. An org keeps at least one owner." }
             }
             CardContent {
                 Button {
@@ -772,8 +775,8 @@ fn OrgDanger(org: Org, me: String) -> Element {
                 CardHeader {
                     CardTitle { "Delete the organisation" }
                     CardDescription {
-                        "Deletes its projects, notebooks and messages, removes every connection's credential and "
-                        "notebook secret, and drops its members' notebook databases. This cannot be undone."
+                        "Deletes its projects, notes and messages, removes every connection's credential and "
+                        "project secret, and drops its members' actor databases. This cannot be undone."
                     }
                 }
                 CardContent {
@@ -848,12 +851,14 @@ pub fn ProjectSettingsPage(
                 "repository" => rsx! {
                     RepoPanel { slug: o.clone(), project: d.project.clone(), on_changed: move |_| detail.restart() }
                 },
+                "model" => rsx! { ProjectModel {slug:o.clone(),project:p.clone()} },
+                "permissions" => rsx! { ProjectPermissions {slug:o.clone(),project:d.project.clone(),on_saved:move |_|detail.restart()} },
                 "interfaces" => rsx! { InterfacesPanel { key: "{o}-{p}", slug: o.clone(), project: p.clone() } },
                 "danger" => rsx! {
                     Card {
                         CardHeader {
                             CardTitle { "Delete the project" }
-                            CardDescription { "Deletes its notebooks, interfaces and messages. Its repository is not touched." }
+                            CardDescription { "Deletes its notes, interfaces and messages. Its repository is not touched." }
                         }
                         CardContent { DeleteProject { slug: o.clone(), project: p.clone() } }
                     }
@@ -864,6 +869,47 @@ pub fn ProjectSettingsPage(
             }
         }
     }
+}
+
+#[component]
+fn ProjectModel(slug:ReadSignal<String>,project:ReadSignal<String>)->Element{
+    let mut detail=use_server_future(move ||api::get_project_notes(slug(),project()))?;
+    let connections=use_server_future(move ||api::list_connections(slug()))?;
+    rsx!{Card{CardHeader{CardTitle{"Project AI model"}CardDescription{"One connection and model generate code for all project notes."}}
+        CardContent{if let (Some(Ok(d)),Some(Ok(ai)))=(detail(),connections()){
+            crate::notebook::ModelPicker{slug:slug(),project:project(),graph:d.graph,ai,on_changed:move |_|detail.restart()}
+        }}}}
+}
+
+#[component]
+fn ProjectPermissions(slug:String,project:api::Project,on_saved:EventHandler<()>)->Element{
+    let org=slug.clone();let connections=use_resource(move ||api::list_connections(org.clone()));
+    let org=slug.clone();let policy=use_resource(move ||api::get_org_settings(org.clone()));
+    let mut grants=use_signal(||project.note_connections.clone());let mut status=use_signal(||None::<Result<String,String>>);let mut busy=use_signal(||false);
+    rsx!{Card{CardHeader{CardTitle{"Project note permissions"}CardDescription{"These operations and resource boundaries apply to every note. Generated code and answers cannot expand them."}}
+        CardContent{
+            crate::notebook::CellConnections{connections:connections().and_then(Result::ok).unwrap_or_default(),value:grants(),id:"project-grants",disabled:busy(),policy:policy().and_then(Result::ok).map(|s|s.effect_policy),storage_scope:None,on_change:move |value|grants.set(value)}
+            for service in [api::LocalService::Postgres,api::LocalService::Vault]{
+                div{class:"permission-grant",
+                     strong{"{service.effect()}"}
+                     Button{id:"project-local-{service.selection()}",variant:ButtonVariant::Outline,disabled:busy(),onclick:move |_|{
+                        let mut value=grants();let id=service.selection();
+                        if value.iter().any(|g|g.connection==id){value.retain(|g|g.connection!=id);}else{value.push(api::CellConnector{connection:id.into(),permissions:Some(api::ConnectorPermissions::local_preset(service,api::PermissionPreset::ReadOnly,Vec::new()))});}grants.set(value);
+                     },if grants().iter().any(|g|g.connection==service.selection()){"Disable"}else{"Enable read access"}}
+                     if let Some(grant)=grants().into_iter().find(|g|g.connection==service.selection()) {
+                         PermissionEditor {
+                             id:"project-local-policy-{service.selection()}",local_service:Some(service),
+                             value:grant.permissions,ceiling:None,allow_inherit:false,disabled:busy(),
+                             on_change:move |permissions|grants.with_mut(|value| {
+                                 if let Some(grant)=value.iter_mut().find(|g|g.connection==service.selection()){grant.permissions=permissions;}
+                             }),
+                         }
+                     }
+                }
+            }
+            Button{disabled:busy(),onclick:move |_|{let(slug,project)=(slug.clone(),project.slug.clone());async move{busy.set(true);match api::set_project_note_connections(slug,project,grants()).await{Ok(_)=>{status.set(Some(Ok("Project permissions saved.".into())));on_saved.call(());},Err(e)=>status.set(Some(Err(error_message(&e))))}busy.set(false);}},"Save project permissions"}
+            Outcome{status:status()}
+        }}}
 }
 
 #[component]

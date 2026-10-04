@@ -86,7 +86,16 @@ fleet source release **v0.6.2**. See
 The shared CI/release and documentation-link conventions are in
 [`docs/workflow-policy.md`](https://github.com/typednotes/typednotes/blob/main/docs/workflow-policy.md).
 
-The local **v0.10.0** implementation adds standard-page setup, automatic cell
+The local **v0.11.0** release uses **Org → Project → Notes**, project-level
+models/permissions and **Lun v0.4.1**'s stateless producer API. Typednotes persists
+execution state and owns durable schedules, uncertain outcomes and ordered delivery
+outboxes. It needs app migrations **0014/0015**, the current background-checkout/
+question-capable writer (**Lode 0.5.0**) and **Linen 1.12.0**. Fleet **0.7.0** adopts
+SQL through 0015; release commits/tags remain local and require publication before
+deployment. See [`docs/release-0.11.0.md`](https://github.com/typednotes/typednotes/blob/main/docs/release-0.11.0.md)
+and [`docs/scheduling-ownership.md`](https://github.com/typednotes/typednotes/blob/main/docs/scheduling-ownership.md).
+
+The earlier local **v0.10.0** implementation adds standard-page setup, automatic cell
 generation and pinned writer build contracts. It requires **Lode v0.4.3** and
 app migration **0013**, adopted by fleet **v0.6.3**; source tags remain unpublished.
 See [`docs/release-0.10.0.md`](https://github.com/typednotes/typednotes/blob/main/docs/release-0.10.0.md)

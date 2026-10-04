@@ -103,7 +103,11 @@ pub async fn health() -> Health {
     let schema = schema && sqlx::query("select tenant_deletion_ready() as ready")
         .fetch_one(pool).await.map(|row| row.get::<bool, _>("ready")).unwrap_or(false);
     let schema=schema&&table_exists(pool,"public.graph_generation_requests").await
-        && sqlx::query("select exists(select 1 from pg_trigger where tgrelid='public.users'::regclass and tgname='users_default_workspace' and tgenabled in ('O','A')) as ready")
+         &&table_exists(pool,"public.note_origins").await
+         &&table_exists(pool,"public.project_note_retirements").await
+         &&table_exists(pool,"public.scheduled_runs").await
+         &&table_exists(pool,"public.graph_delivery_outbox").await
+        && sqlx::query("select exists(select 1 from pg_trigger where tgrelid='public.projects'::regclass and tgname='projects_notes' and tgenabled in ('O','A')) as ready")
             .fetch_one(pool).await.map(|row|row.get::<bool,_>("ready")).unwrap_or(false);
     let ledger = database && table_exists(pool, "public.credit_ledger").await;
     // `compute_schemas` is the newest table of `0004_computations`.
@@ -310,7 +314,7 @@ pub async fn org_settings(org: &Org) -> Result<crate::OrgSettings, ServerFnError
 
 pub async fn set_effect_policy(org: &Org, policy: &crate::EffectPolicy) -> Result<crate::OrgSettings, ServerFnError> {
     if !matches!(org.role.as_str(), "owner" | "admin") {
-        return Err(super::errors::forbidden("only owners and admins can change notebook permissions"));
+        return Err(super::errors::forbidden("only owners and admins can change organization execution policy"));
     }
     let policy = policy.validate().map_err(super::errors::bad_request)?;
     let mut tx = super::connector::lock(&org.id).await?;

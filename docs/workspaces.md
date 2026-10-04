@@ -1,24 +1,26 @@
-# Organizations, projects and notebooks
+# Organizations, projects and notes
 
 ## Organization
 
 The billing/credits and access unit. It owns members/roles, connections and
-notebook permission ceilings. Ledger credits are accounted here; provider charges
+execution permission ceilings. Ledger credits are accounted here; provider charges
 still belong to the provider account. An invoicing/payment interface is not yet
 implemented. Selected default targets always recheck the user's membership.
 
 ## Project
 
-A workspace inside one organization. It groups notebooks, a primary GitHub/GitLab
-repository and project-specific messaging interfaces. Generated Lean projects
-live beneath `typednotes/{notebook_slug}` on the selected repository branch.
+A work unit inside one organization. It owns notes, one AI model, operation/resource
+permissions, a primary GitHub/GitLab repository and messaging interfaces. Notes are
+displayed and created directly on the project page. Generated Lean code lives beneath
+`typednotes/{project_slug}` on the selected branch; migrated projects retain their
+canonical internal graph's older folder slug to preserve repository paths.
 An inbound messaging address routes to one project. Selecting a connection does
 not automatically grant message send/write permissions.
 
-## Notebook
+## Note
 
-The basic work unit: named natural-language cells form a reactive graph. Sources
-bring values in, nodes compute, sinks publish results. Lode implements Lean code,
+Named natural-language notes form the project's typed graph. Source notes bring
+values in, calculation notes transform them, sink notes publish results. Lode implements Lean code,
 Lun checks/builds/runs it, and the app records private input/outcome history.
 Descriptions, inputs and results form the primary view. Implementation, wiring,
 type/configuration, model/cost and maintenance controls unfold on demand.
@@ -27,27 +29,28 @@ type/configuration, model/cost and maintenance controls unfold on demand.
 
 Setup is persisted user state, not a separate screen. `/onboarding` bookmarks
 redirect to the relevant standard page. A compact guidance strip points to code
-connections, repository settings, notebook creation/model selection or permissions.
+connections, repository settings, project model selection or permissions.
 Saves refresh the guidance, with no query per typed character. The three
 collapsible hierarchy boxes are removed; normal titles retain definitions/tooltips.
 
-Migration 0013 atomically gives newly inserted users an owned **Personal
-workspace** organization, **My project**, user-bound unique slugs and defaults.
-Existing/deleted workspaces are not silently recreated. Invited addresses get
-defaults too; welcome credits are idempotently granted at verified sign-in, not
-on invitation. Linked IdPs share the same user/defaults.
+Migration 0014 supersedes 0013's automatic personal workspace. First sign-in asks
+for a GitHub/GitLab repository and a generative AI account, with a persistent skip
+option for manual organization/project creation. A provisional owned organization
+holds the chosen connections; verified repository metadata supplies its final owner
+name and the first project's repository name. Setup creation is serialized and
+retryable without duplicate organizations/projects. Existing defaults and IDs remain.
 
-Choose defaults in Account settings. Creating an org/project/notebook selects
+Choose defaults in Account settings. Creating an organization/project selects
 it as the current default. Required repository/model/tool grants remain server
 validated; setup never widens organization/connection ceilings automatically.
 
 Preferences persist per user in `user_workspaces`. Removed/foreign pointers do
 not authorize navigation: the getter resolves current membership and parent
-relationships. Valid completed defaults continue to open their notebook if
+relationships. Valid completed defaults continue to open their project if
 generation permissions are subsequently narrowed; execution checks live authority.
 Existing ready workspaces can be chosen without recreating resources.
 `/organizations` is the organization directory; Account settings contain the
-default-workspace selectors.
+default-project selectors.
 
 Optional storage, calendars, email and messaging do not block initial setup.
 Help remains keyboard accessible and hierarchy labels have native hover tooltips.
@@ -86,17 +89,17 @@ PAT. IDs, project links, scopes and byte bounds remain. Creator/admin authority
 is rechecked, old projections close first, failures leave the slot pending, and
 a revision fences concurrent repairs. The app remains credential-write-only.
 If all connections fail, check the broker's vault identity/availability instead
-of enlarging notebook permissions.
+of enlarging project permissions.
 
 Repository selection does not enable writes. Repository settings offers
-**Allow notebook code writes**, an explicit creator/admin action granting only
+**Allow project code writes**, an explicit creator/admin action granting only
 `[owner,repo,typednotes]` descendants. It preserves existing grants/limits, adds
 no deletion and refuses a disallowing org ceiling. OAuth/PAT scopes remain an
 additional ceiling; runtime and broker still intersect all four authority bounds.
 
 ## Automatic code and agent activity
 
-Saving a cell queues generation when required setup is ready. Requests are
+Saving a note queues generation when required setup is ready. Requests are
 durable/actor-bound; checkout survives navigation and launches serialize with
 build adoption. Failed setup/generation retains the saved declaration and an
 actionable notice. New declarations start fresh bounded writer sessions rather
@@ -110,6 +113,38 @@ wiring equalities. Unpinned parent outputs may evolve with dependent argument
 types, checked through Lean LSP and compilation. Generated signatures/manifests
 never replace user pins. Older writers are refused before generation messages.
 
+The current writer must also acknowledge background checkout. It returns a durable
+session before repository preparation, which may exceed the app's 30-second RPC
+deadline. Revision and message keys deduplicate retries; startup retries are bounded.
+An idle-looking checkout with queued intent remains active. `ask_user` pauses the
+bounded run; only its initiating actor may answer through the app, after a checked
+live warrant/policy refresh. Answers are conversation data, never permission grants.
+Cancellation invalidates the question and prevents following tools from running.
+
+## Project permissions and runtime state
+
+Project settings contain the AI model and note permissions. Selected connections
+have operation/resource scopes and byte bounds. Unselected connections/local services
+grant nothing; an enabled local service starts read-only, with read/write and advanced
+grants available. Database table scopes are relative to the executing user's schema.
+Organization policy, connection scope, compiled `Eff` capability and fresh warrant
+remain independent ceilings. Generated code and individual-note edits cannot widen
+the project's grants. Permission edits retire existing writer/native authority.
+
+Lun 0.4.1 uses `stateless-producers-v4`; it stores compiled code, not executions.
+Typednotes persists private state and deadlines, serializes each graph, and supplies
+fresh authority on every input/timer call. `producer:true` survives manifest forwarding;
+caller output pins constrain emitted values, not the continuation envelope.
+See [scheduling ownership](scheduling-ownership.md) for durable occurrences, ordered
+delivery outboxes, coalesced UTC source cadence and uncertain outcomes.
+
+Migration 0014 merges prior notebooks into one project graph, preserving note IDs,
+type pins, history and original code/config records. Conflicting note/input names
+are qualified and references rewritten. Secret values keep their original physical
+vault names/namespaces through protected routes. Old graphs are archived; code must
+be regenerated, public links are revoked, and project grants require explicit review.
+Legacy writer/runtime handles are retained for acknowledged authority retirement.
+
 ## Public links
 
 See [public sharing](release-0.9.0.md#public-read-only-sharing) for snapshot
@@ -117,7 +152,7 @@ contents, visitor isolation, pure execution, revocation, expiry and limits.
 Only UI source inputs are editable. Definition/configuration/secret mutation APIs
 remain membership-authenticated; a public token is not an organization session.
 
-## Deleting a workspace or account
+## Deleting an organization, project or account
 
 [Deletion](deletion.md) explains organization cascades, automatic default resets,
 owned-project cleanup, last-owner transfer and retry behavior. Account settings

@@ -92,12 +92,12 @@ pub fn validate_dependencies(cells: &[Cell]) -> Result<(), String> {
         let mut set = BTreeSet::new();
         for dep in &deps {
             let target = cells.iter().find(|c| c.name == *dep)
-                .ok_or_else(|| format!("{}: no cell named @{dep}", cell.name))?;
+                .ok_or_else(|| format!("{}: no note named @{dep}", cell.name))?;
             if target.id == cell.id {
-                return Err(format!("{}: a cell cannot depend on itself", cell.name));
+                return Err(format!("{}: a note cannot depend on itself", cell.name));
             }
             if target.cell_type == CellType::Secret {
-                return Err(format!("@{dep} is a secret capability, not a cell value"));
+                return Err(format!("@{dep} is a secret capability, not a note value"));
             }
             if !set.insert(target.name.as_str()) {
                 return Err(format!("{}: @{dep} is listed twice", cell.name));
@@ -148,7 +148,7 @@ pub fn ordered_cells(cells: &[Cell], nodes: &[GraphNode], order: CellOrder) -> V
 }
 
 pub const NOTEBOOK_EFFECTS: &[&str] = &["Trace", "Error", "HTTP", "FileSystem", "PostgreSQL", "SecretStore", "ObjectStore", "Connector"];
-pub const WRITER_TOOLS: &[&str] = &["read", "ls", "grep", "write", "edit", "bash", "todo", "check", "lsp", "publish", "lun_build", "lun_call"];
+pub const WRITER_TOOLS: &[&str] = &["read", "ls", "grep", "write", "edit", "bash", "todo", "check", "lsp", "publish", "lun_build", "lun_call", "ask_user"];
 
 /// Admin-owned upper bounds. Empty lists grant nothing; permissions are never
 /// widened by a cell's generated code or by a session update.
@@ -204,16 +204,16 @@ impl EffectPolicy {
     /// User-facing explanation of a denied call, without suggesting a bypass.
     pub fn connector_blocker(&self, provider: Provider, parent: &crate::ConnectorPermissions, operation: &str, resource: &[String]) -> Option<String> {
         if !self.allows_provider(provider) {
-            return Some(format!("{} is disabled in Organization settings → Notebooks → Connector providers.", provider.name()));
+            return Some(format!("{} is disabled in Organization settings → Execution policy → Connector providers.", provider.name()));
         }
         if !self.allows_connector(provider) {
-            return Some("Connector access is disabled in Organization settings → Notebooks → Effects. An owner or admin must enable Connector and save permissions.".into());
+            return Some("Connector access is disabled in Organization settings → Execution policy → Effects. An owner or admin must enable Connector and save permissions.".into());
         }
         if !parent.permits(operation, resource) {
             return Some(format!("Connection permissions do not allow {operation} for this resource. Its creator or an admin can edit the connection's operations and resource boundary."));
         }
         if self.connector_ceilings.get(provider.id()).is_some_and(|p| !p.permits(operation, resource)) {
-            return Some(format!("The organization ceiling for {} does not allow {operation} for this resource. An admin can edit it in Organization settings → Notebooks → Advanced connector ceilings.", provider.name()));
+            return Some(format!("The organization ceiling for {} does not allow {operation} for this resource. An admin can edit it in Organization settings → Execution policy → Advanced connector ceilings.", provider.name()));
         }
         None
     }
@@ -303,7 +303,7 @@ mod tests {
         cells[2].config.dependencies = Some(vec!["total".into()]);
         assert!(validate_dependencies(&cells).unwrap_err().contains("cycle"));
         cells[2].config.dependencies = Some(vec!["missing".into()]);
-        assert!(validate_dependencies(&cells).unwrap_err().contains("no cell"));
+        assert!(validate_dependencies(&cells).unwrap_err().contains("no note"));
         cells[2].config.dependencies = Some(vec!["price".into()]);
         assert!(validate_dependencies(&cells).unwrap_err().contains("itself"));
     }

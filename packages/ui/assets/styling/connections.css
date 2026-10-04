@@ -67,10 +67,18 @@
 
 .conn-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
   gap: 0.75rem;
   width: 100%;
 }
+
+.conn-grid > *, .conn-picker > * { min-width: 0; max-width: 100%; }
+.repo-picker .conn-grid > .orgs-field { width: 100%; min-width: 0; }
+.repo-picker .conn-select, .repo-picker .conn-select-wide { width: 100%; min-width: 0; }
+.project-model-picker { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: start; }
+.project-model-picker > .orgs-field { width: 100%; min-width: 0; }
+.project-model-picker > button { align-self: end; }
+.project-model-picker .model-picker { min-width: 0; }
 
 .org-credits { font-size: 1.1rem; margin: 0; }
 
@@ -154,6 +162,7 @@
 .permission-editor button:focus-visible, .permission-editor summary:focus-visible, .cell-connections summary:focus-visible, .connection-permissions summary:focus-visible { outline: 2px solid var(--app-accent); outline-offset: 3px; }
 
 @media (max-width: 640px) {
+  .project-model-picker { grid-template-columns: minmax(0, 1fr); }
   .conn-select,
   .conn-select-wide {
     min-width: 0;

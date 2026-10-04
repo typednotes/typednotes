@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use ui::{AccountPage, NotebookPage, OrgPage, OrgSettingsPage, ProjectPage, ProjectSettingsPage};
+use ui::{AccountPage, OrgPage, OrgSettingsPage, ProjectPage, ProjectSettingsPage};
 
 /// `/orgs/:slug`, with the OAuth callback's `?connected=` / `?error=`.
 #[component]
@@ -17,7 +17,10 @@ pub fn ProjectView(slug: String, project: String, connected: String, error: Stri
 /// `/orgs/:slug/projects/:project/graphs/:graph`: a notebook.
 #[component]
 pub fn GraphView(slug: String, project: String, graph: String) -> Element {
-    rsx! { NotebookPage { slug, project, graph } }
+    let nav=use_navigator();
+    use_effect(move ||{nav.replace(format!("/orgs/{slug}/projects/{project}"));});
+    let _=graph;
+    rsx!{p{role:"status","Opening project notes…"}}
 }
 
 /// `/settings`: your account.

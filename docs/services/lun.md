@@ -2,16 +2,18 @@
 
 **Language:** Lean 4 + `linen` · **Repository:** [`typednotes/lun`](https://github.com/typednotes/lun)
 
-**Coordinated release target:** Lun 0.3.0, Lode 0.3.0, Typednotes 0.6.0,
-Linen 1.10.0, Liaison 0.6.0. Release files/pins/publication are parent-owned.
+**Current integration target:** Lun 0.4.1, Linen 1.12.0, Liaison's pure 0.6.0 SDK,
+and the project-notes app with migrations 0014/0015. Publication/deployment remain
+operator-owned. The sibling [Lun user guide](https://github.com/typednotes/lun/blob/main/docs/user-guide.md)
+and [runtime guarantees](https://github.com/typednotes/lun/blob/main/docs/runtime-guarantees.md) are the wire/type references.
 
 ## 1. Purpose
 
 Turn a Lean project pinned at a commit into **typed services**: named functions
-under declared signatures, and **reactive graphs** wiring them — registered once,
-updated input by input, recomputing only what depends on them and answering with
-what changed. This is the engine a typednotes notebook *is* once
-[`lode`](lode.md) has implemented its cells ([`../computations.md`](../computations.md)).
+under declared signatures, and typed graphs executed in bounded stateless steps.
+The caller supplies previous state and input changes, receives every ordered changed
+outcome, final nodes, new state and `nextCallAt`. Typednotes owns persistence,
+serialization, scheduling and delivery; [`lode`](lode.md) implements the project notes.
 
 **Not responsible for:** writing code (lode's, or the user's), credentials (a
 private repository arrives through `liaison`, a sink's database credential is
@@ -30,20 +32,21 @@ complete immutable tree and per-file views, never archives or signed downloads.
 ## 3. Interface
 
 An HTTP service the app and lode call: `POST /v0/builds` (same request, same
-build id — a restarted lun re-derives it from the repository), functions,
-graphs-once, and **sessions** — a graph registered with its inputs, updated by
-name, state stored between calls. Its README is the wire reference.
+build id), `POST /v0/builds/{id}/functions/{name}`, and
+`POST /v0/builds/{id}/graphs/{name}`. There are no session routes. Graph calls take
+`state`, `inputs`, fresh `binding`/`policy`/`connectors`, and optional millisecond
+`now`; the app uses the runtime clock. `nextCallAt:null` waits for new input.
 
 For computations, the contract additions ([`../computations.md`](../computations.md) §3–§4):
 
-- registration, input feeds and scheduled calls carry an authenticated **user
+- initialization, input feeds and scheduled calls carry an authenticated **user
   binding** `(org_id, user_id)` and **graph binding** (`graph_id`), organization
   policy and fresh function-name operation/resource grants;
 - a build request may declare functions whose rows include `PostgreSQL`; the
   handler is bound **per operation** to the user binding's credential (vault path
   `secret/data/compute/{org_id}/{user_id}`, read as lun's own vault identity)
   — the compiled capability contains non-secret host/port/database/role intent,
-  which must match this resolved credential exactly. The session's graph writes
+  which must match this resolved credential exactly. The graph's writes
   land in exactly that user's schema, as that user's role, or not at all;
 - functions may declare `SecretStore`: the handler binds each operation to
   the graph binding's prefix (`secret/data/graph/{org_id}/{graph_id}/`) and
@@ -57,18 +60,19 @@ For computations, the contract additions ([`../computations.md`](../computations
 
 The app's `server/local.rs` now provisions actor-bound compute and graph-vault
 grants with independent connection/org/run documents and live declaration checks.
-Bindings remain immutable, and session updates consume narrowing evidence rather
-than widening stored ceilings. The app sends `recoverInputs:true` on registration
+Execution bindings come from the authenticated app. Project grants and compiled
+capabilities intersect fresh live ceilings on every request; state carries no authority.
+The app sends `recoverInputs:true` on initialization
 after adoption: historic incompatible JSON becomes an editable source error,
 not a successful value supplied to functions.
 
 ## 4. State
 
-`{workdir}/builds/{id}/` and `sessions/`. All reconstructible: builds re-derive
-from the repository (same request, same id, once `LUN_ID_SALT` is set), session
-state re-derives from the app's input log ([`../computations.md`](../computations.md)
-§2 — this is why the app records every input it feeds). No credential is ever
-written to disk.
+`{workdir}/builds/{id}/` contains compiled artifacts. Warm workers retain code and
+actor/entry-point affinity, not execution state or tokens. Typednotes stores state,
+deadlines, revisions, input/outcome history and durable occurrences in PostgreSQL.
+Lost responses can follow successful effects: retain an uncertain occurrence and
+reconcile before an explicit restart; never automatically replay the previous state.
 
 ## 5. Core types
 
@@ -99,6 +103,12 @@ all linen's capability-restricted effects:
 - **`Connector cap`** — provider/connection, named operation and component-wise
   resource scopes; no caller-selected URL, authentication or raw HTTP fallback.
   Organization, connection, cell and warrant authority/byte ceilings intersect.
+
+A **producer** declares `producer:true` and graph arguments followed by
+`Nat → Option S → Eff effs (List B × S × Option Nat)`. `outputType` constrains B.
+Linen's pure sequential helper supplies yield/yieldAll/wait scripts; effectful
+producers use explicit typed steps. Typed continuations and pending bursts are
+validated before execution. New argument events replace old continuations.
 
 A **graph** is a program in `Reactive`: named `input`s and applications of the
 declared functions, nothing else — linen's other operators are refused, every
@@ -149,37 +159,37 @@ The list that matters, none of it a proof:
   syscalls consume org/user-relative path witnesses and refuse unsafe symlink/
   hard-link reads. Socket/TLS/Python correspondence is a trusted boundary, not
   permission to reach arbitrary URLs or container files.
-- **A session id is its capability** (32 random bytes) — nothing binds a
-  session to a user beyond the app being the only one with the token. The user
+- **Authenticated caller trust.** The user
   binding (§3) is data lun is told, not a fact lun verifies; the database role
   is an additional enforcement layer. Private credentials resolve from the binding
   server-side. Local PostgreSQL/SecretStore authority trusts the authenticated
   app's minting and vault-protected projections; Lun does not independently verify
   their HMAC tags. Outbound Connector/ObjectStore warrants are HMAC-verified at
-  Liaison. Session binding equality/narrowing is enforced at the actual update path.
-- **One process per call** — no long-lived workers, so a graph request is one
-  instant, not a stream; costs and latency scale with rebuilds, tier 6.
+  Liaison. The app serializes state and chooses the actor; state cannot supply grants.
+- **Warm-code cache:** bounded 1–16 workers with fresh context/Trace per request,
+  actor-keyed leases and no failed-effect replay. Processes/pipes/mutexes remain
+  trusted boundaries. The caller owns deadlines and external-effect idempotency.
 
-**Tier 5 · Test:** the full Lun e2e suite and **69 compiled-runtime cases** pass,
+**Tier 5 · Test:** Lun's unit suite and **70 compiled-runtime cases** pass locally,
 including SCRAM queries, secrets, actual HMAC/SigV4 dispatch, local/live ceiling
-denials, target substitution, source recovery and session revocation. The app's
+denials, target substitution, source recovery and authority revocation. The app's
 whole compiled writer/broker/local-Git/runtime positive/denial pipeline also passes;
-supporting suites pass **99 API tests**, **24 browser groups** and **655 real broker
-HTTP cases**. Provider responses are controlled peers; paid-provider/OAuth
+supporting suites pass **108 API tests**, real project-note/browser/SQL scheduling
+and outbox cases, and 15 app/broker groups plus 9 compiled app/runtime groups.
+Provider responses are controlled peers; paid-provider/OAuth
 conformance, real-model quality and Linux/container execution remain unmeasured
 by these local checks.
 
 Historical vault versions, binary object writes/custom write metadata and caller
 pagination cursors remain explicit unsupported shapes. No raw IO/HTTP fallback
-or additional Time/LSP/live-worker feature is implied by this release.
+or unrestricted IO/HTTP fallback is implied by this release.
 
 ## 8. Open questions
 
 - **`Time`** — a node that needs "now" (every source description that says
   "today's rate") has no vetted way to ask. Adding a `Time` effect means
   deciding what "now" means for a node that re-runs on every update.
-- **Live pushes** — sessions are pulled today (the app's scheduler feeds
-  inputs); a session that subscribes would need lun to keep workers alive, the
-  thing one-process-per-call deliberately avoids.
+- **Live pushes** — notification/subscription orchestration belongs to Typednotes;
+  Lun emits bounded changes and deadlines without retaining executions.
 - **Per-org instances** if build load or trust domains demand it; today one
   fleet-wide lun with a token the app holds.

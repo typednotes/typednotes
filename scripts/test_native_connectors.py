@@ -89,7 +89,8 @@ class Fixture(BaseHTTPRequestHandler):
                 assert isinstance(body, dict)
                 state["tools"] = body["tools"]
                 state["execution"] = public_execution(body["execution"])
-                return self.reply(201, {"id": "writer-fixture", "state": "running", "tools": state["tools"], "execution": state["execution"],"buildContracts":body.get("buildContracts")})
+                state["requestKey"]=body.get("requestKey")
+                return self.reply(201, {"id": "writer-fixture", "state": "running", "tools": state["tools"], "execution": state["execution"],"buildContracts":body.get("buildContracts"),"backgroundCheckout":True,"requestKey":body.get("requestKey"),"checkout":"ready"})
             if "/messages" in self.path and self.command == "POST":
                 assert isinstance(body, dict)
                 assert set(body.get("tools", [])) <= set(state["tools"])
@@ -102,7 +103,7 @@ class Fixture(BaseHTTPRequestHandler):
                 return self.reply(200, {})
             if "/messages" in self.path:
                 return self.reply(200, {"entries": [], "next": 0, "running": True})
-            return self.reply(200, {"state": "running", "entries": 0, "tools": state.get("tools", []), "execution": state.get("execution")})
+            return self.reply(200, {"state": "running", "entries": 0, "tools": state.get("tools", []), "execution": state.get("execution"),"requestKey":state.get("requestKey"),"checkout":"ready"})
         if state["service"] in ["runtime-proxy", "writer-proxy"]:
             token = "fixture-lun" if state["service"] == "runtime-proxy" else "fixture-writer"
             assert self.headers.get("Authorization") == "Bearer " + token
@@ -224,7 +225,7 @@ def main():
         def sql(statement):
             return command(str(args.pg_bin / "psql"), database, "-X", "-v", "ON_ERROR_STOP=1", "-At", "-c", statement)
 
-        command(str(args.pg_bin / "initdb"), "-D", str(scratch / "pg"), "-A", "trust", "--no-locale", "-U", "fixture")
+        command(str(args.pg_bin / "initdb"), "-D", str(scratch / "pg"), "-A", "trust", "--no-locale", "--encoding=UTF8", "-U", "fixture")
         if args.runtime:
             hba = scratch / "pg/pg_hba.conf"
             hba.write_text("host all fixture 127.0.0.1/32 trust\nhost all all 127.0.0.1/32 scram-sha-256\n" + hba.read_text())
@@ -459,21 +460,22 @@ def main():
                     f"values('{graph}','{project}','native-graph','Native graph','{user}','ready','unconfigured-session','fixture-build','{json.dumps(structure)}');"
                     f"insert into graph_cells(id,graph_id,position,name,kind,variant,description,config,impl) "
                     f"values('{source}','{graph}',0,'input','source','ui','Native input','{{\"input\":\"x\"}}','{{\"input_type\":\"Nat\"}}'),"
-                    f"('{cell}','{graph}',1,'compute','node',null,'Native computation','{json.dumps(cell_config)}','{{\"function\":\"compute\"}}');")
+                    f"('{cell}','{graph}',1,'compute','node',null,'Native computation','{json.dumps(cell_config)}','{{\"function\":\"compute\"}}');"
+                    f"update projects set notes_graph_id='{graph}' where id='{project}';")
+                api("/api/project/permissions",{"project":"native-project","grants":cell_config["connectors"]})
                 api("/api/graph/cells/feed", {"project": "native-project", "graph": "native-graph", "cell": source, "value": 1}, ok=False)
                 cell_row = json.loads(sql(f"select row_to_json(c) from connector_authorities c where cell_id='{cell}' order by expires_at desc limit 1"))
                 assert cell_row["graph_id"] == graph
                 cell_path = f"/v1/secret/data/connector-authority/{org}/{cell_row['run_id']}/{cell_row['warrant_id']}"
                 assert vault.state["documents"][cell_path]["cell"]["scopes"] == declared["scopes"]
                 narrowed = {**cell_config, "connectors": [{"connection": connection_id, "permissions": {**declared, "scopes": []}}]}
-                api("/api/graph/cells/update", {"project": "native-project", "graph": "native-graph", "cell": cell,
-                    "name": "compute", "description": "Native computation narrowed", "config": narrowed})
+                api("/api/project/permissions", {"project":"native-project","grants":narrowed["connectors"]})
                 assert cell_path not in vault.state["documents"]
                 assert sql(f"select count(*) from connector_authorities where cell_id='{cell}'") == "0"
                 api("/api/graph/cells/feed", {"project": "native-project", "graph": "native-graph", "cell": source, "value": 2}, ok=False)
                 assert sql(f"select count(*) from connector_authorities where cell_id='{cell}'") == "0"
                 assert len(upstream.state["calls"]) == before
-                passed("actual app cell mint is declaration-bound; permission edits revoke old documents and cannot remint removed grants")
+                passed("actual app note mint is project-bound; project permission edits revoke old documents and cannot remint removed grants")
                 sql(f"insert into credit_ledger(org_id,run_id,delta,reason) select '{org}','{uuid.uuid4()}',-sum(delta),'fixture-drain' from credit_ledger where org_id='{org}'")
                 api("/api/ai/classify", classify, ok=False)
                 assert len(upstream.state["calls"]) == before

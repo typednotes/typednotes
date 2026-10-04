@@ -525,6 +525,8 @@ pub struct Project {
     pub name: String,
     pub created_at: String,
     pub repo: Option<RepoRef>,
+    #[serde(default)]
+    pub note_connections: Vec<crate::CellConnector>,
 }
 
 /// A project's primary repository, as recorded when it was chosen.

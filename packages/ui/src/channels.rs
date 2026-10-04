@@ -37,7 +37,7 @@ pub(crate) fn InterfacesPanel(slug: ReadSignal<String>, project: ReadSignal<Stri
                 CardTitle { "Interfaces" }
                 CardDescription {
                     "Where people reach this project: a Slack channel, a WhatsApp or a Signal number. "
-                    "Their messages land in the project's inbox, and notebooks can listen and reply."
+                    "Their messages land in the project's inbox, and notes can listen and reply."
                 }
             }
             CardContent {

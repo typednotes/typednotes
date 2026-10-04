@@ -15,10 +15,10 @@ fn public_nodes(cells: &[SharedCell], nodes: Vec<crate::GraphNode>) -> Vec<crate
 
 async fn authorize(org: &crate::Org, user: &crate::User, project: &str, graph: &str) -> Result<crate::GraphDetail, ServerFnError> {
     let detail = graphs::detail(org, user, project, graph).await?;
-    let creator = sqlx::query("select created_by::text as creator from graphs where id=$1::uuid")
+    let creator = sqlx::query("select p.created_by::text as creator from graphs g join projects p on p.id=g.project_id where g.id=$1::uuid")
         .bind(&detail.graph.id).fetch_one(db::pool()?).await.map_err(errors::db_error)?.get::<Option<String>,_>("creator");
     if !matches!(org.role.as_str(), "owner" | "admin") && creator.as_deref() != Some(&user.id) {
-        return Err(errors::forbidden("only the notebook creator or an organization admin can publish or revoke public shares"));
+        return Err(errors::forbidden("only the project creator or an organization admin can publish or revoke public shares"));
     }
     Ok(detail)
 }
@@ -26,11 +26,11 @@ async fn authorize(org: &crate::Org, user: &crate::User, project: &str, graph: &
 pub async fn create(org: &crate::Org, user: &crate::User, project: &str, graph: &str) -> Result<ShareCreated, ServerFnError> {
     let d = authorize(org, user, project, graph).await?;
     if d.graph.status != "ready" || d.cells.iter().any(|c| c.stale) {
-        return Err(errors::conflict("build the current notebook before creating an immutable public share"));
+        return Err(errors::conflict("build the current project notes before creating an immutable public share"));
     }
     let build = sqlx::query("select session_build_id from graphs where id=$1::uuid").bind(&d.graph.id)
         .fetch_one(db::pool()?).await.map_err(errors::db_error)?.get::<Option<String>,_>("session_build_id")
-        .ok_or_else(|| errors::conflict("notebook has no ready runtime build"))?;
+        .ok_or_else(|| errors::conflict("the project has no ready runtime build"))?;
     let mut inputs = std::collections::BTreeMap::new();
     let cells: Vec<SharedCell> = d.cells.iter().filter(|c| c.cell_type != CellType::Secret).map(|c| {
         let input = (c.cell_type == CellType::UiInput).then(|| c.config.input.clone().unwrap_or_else(|| c.name.clone()));
@@ -78,11 +78,11 @@ struct Share {
 }
 
 async fn lookup(token: &str) -> Result<Share, ServerFnError> {
-    if token.len() != 43 || !token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') { return Err(errors::not_found("no such public notebook")); }
+    if token.len() != 43 || !token.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') { return Err(errors::not_found("no such public project snapshot")); }
     let row = sqlx::query("select sh.id::text as id, sh.owner_id::text as owner, sh.graph_id::text as graph, p.org_id::text as org, sh.build_id, sh.snapshot::text as snapshot, o.effect_policy::text as policy \
         from notebook_shares sh join graphs g on g.id=sh.graph_id join projects p on p.id=g.project_id join orgs o on o.id=p.org_id \
-        join memberships m on m.org_id=p.org_id and m.user_id=sh.owner_id join users u on u.id=sh.owner_id where sh.token_hash=$1 and u.deleted_at is null")
-        .bind(session::hash(token)).fetch_optional(db::pool()?).await.map_err(errors::db_error)?.ok_or_else(|| errors::not_found("public notebook was revoked or its owner no longer belongs to the organization"))?;
+         join memberships m on m.org_id=p.org_id and m.user_id=sh.owner_id join users u on u.id=sh.owner_id where sh.token_hash=$1 and u.deleted_at is null and sh.revoked_at is null")
+        .bind(session::hash(token)).fetch_optional(db::pool()?).await.map_err(errors::db_error)?.ok_or_else(|| errors::not_found("public project snapshot was revoked or its owner no longer belongs to the organization"))?;
     let policy = row.get::<Option<String>,_>("policy").map(|p| serde_json::from_str::<crate::EffectPolicy>(&p)).transpose()
         .map_err(|_| errors::forbidden("invalid organization policy"))?.unwrap_or_default();
     let effects = policy.validate().map_err(errors::forbidden)?.effects.into_iter().filter(|e| matches!(e.as_str(), "Trace" | "Error")).collect();
@@ -106,7 +106,7 @@ async fn viewer(share: &Share) -> Result<Vec<u8>, ServerFnError> {
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 1))").bind(&share.id).execute(&mut *tx).await.map_err(errors::db_error)?;
     let count: i64 = sqlx::query("select count(*) as n from notebook_share_sessions where share_id=$1::uuid and expires_at>now()")
         .bind(&share.id).fetch_one(&mut *tx).await.map_err(errors::db_error)?.get("n");
-    if count >= 200 { return Err(errors::forbidden("public notebook visitor limit reached; try again after a session expires")); }
+    if count >= 200 { return Err(errors::forbidden("public snapshot visitor limit reached; try again after a session expires")); }
     sqlx::query("insert into notebook_share_sessions(id_hash,share_id,inputs,nodes,expires_at) values($1,$2::uuid,$3::jsonb,$4::jsonb,now()+interval '30 minutes')")
         .bind(&hash).bind(&share.id).bind(serde_json::to_string(&share.snapshot.inputs).unwrap()).bind(serde_json::to_string(&share.snapshot.nodes).unwrap())
         .execute(&mut *tx).await.map_err(errors::db_error)?;
@@ -139,30 +139,27 @@ pub async fn feed(token: &str, cell: &str, value: Value) -> Result<SharedNoteboo
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 1))").bind(&share.id).execute(&mut *tx).await.map_err(errors::db_error)?;
     let count: i64 = sqlx::query("select count(*) as n from notebook_share_calls where share_id=$1::uuid and at>now()-interval '1 minute'")
         .bind(&share.id).fetch_one(&mut *tx).await.map_err(errors::db_error)?.get("n");
-    if count >= 60 { return Err(errors::forbidden("public notebook input rate limit reached")); }
+    if count >= 60 { return Err(errors::forbidden("public snapshot input rate limit reached")); }
     sqlx::query("insert into notebook_share_calls(share_id) values($1::uuid)").bind(&share.id).execute(&mut *tx).await.map_err(errors::db_error)?;
     // Charge the attempt independently: a malformed input or unavailable
     // runtime must not roll back its rate-limit slot. Other viewers need not
     // wait under the share-wide lock while a runtime computation executes.
     tx.commit().await.map_err(errors::db_error)?;
     let mut tx = db::pool()?.begin().await.map_err(errors::db_error)?;
-    let row = sqlx::query("select inputs::text as inputs,lun_session_id from notebook_share_sessions where id_hash=$1 and share_id=$2::uuid and expires_at>now() for update")
+    let row = sqlx::query("select inputs::text as inputs,runtime_state::text as runtime_state from notebook_share_sessions where id_hash=$1 and share_id=$2::uuid and expires_at>now() for update")
         .bind(&viewer).bind(&share.id).fetch_one(&mut *tx).await.map_err(errors::db_error)?;
     let mut inputs: serde_json::Map<String,Value> = serde_json::from_str(&row.get::<String,_>("inputs")).map_err(|_| errors::bad_gateway("invalid viewer inputs"))?;
     inputs.insert(input.clone(), value.clone());
-    let execution = json!({"safeShare":true,"binding":{"org_id":share.org,"user_id":share.user,"graph_id":share.graph},
+    let mut execution = json!({"binding":{"org_id":share.org,"user_id":share.user,"graph_id":share.graph},
         "policy":{"effects":share.effects,"domains":[]},"connectors":{}});
-    let update = json!({"inputs":{input:value},"policy":execution["policy"],"binding":execution["binding"],"connectors":{}});
-    let answer = match row.get::<Option<String>,_>("lun_session_id") {
-        Some(id) => match lun::update(&id, &update).await.map_err(errors::bad_gateway)? { Some(answer) => answer, None => {
-            let mut body = execution.clone(); body["inputs"] = json!(inputs);
-            lun::start(&share.build, "main", &body).await.map_err(errors::bad_gateway)?
-        } },
-        None => { let mut body = execution; body["inputs"] = json!(inputs); lun::start(&share.build, "main", &body).await.map_err(errors::bad_gateway)? },
-    };
+    if let Some(state) = row.get::<Option<String>,_>("runtime_state") {
+        execution["state"] = serde_json::from_str(&state).map_err(|_| errors::bad_gateway("invalid viewer runtime state"))?;
+        execution["inputs"] = json!({input:value});
+    } else { execution["inputs"] = json!(inputs); }
+    let answer = lun::step(&share.build, "main", &execution).await.map_err(errors::bad_gateway)?;
     let nodes = public_nodes(&share.snapshot.cells, answer.nodes);
-    sqlx::query("update notebook_share_sessions set inputs=$2::jsonb,nodes=$3::jsonb,lun_session_id=$4 where id_hash=$1")
-        .bind(viewer).bind(serde_json::to_string(&inputs).unwrap()).bind(serde_json::to_string(&nodes).unwrap()).bind(answer.session)
+    sqlx::query("update notebook_share_sessions set inputs=$2::jsonb,nodes=$3::jsonb,runtime_state=$4::jsonb,lun_session_id=null where id_hash=$1")
+        .bind(viewer).bind(serde_json::to_string(&inputs).unwrap()).bind(serde_json::to_string(&nodes).unwrap()).bind(answer.state.to_string())
         .execute(&mut *tx).await.map_err(errors::db_error)?;
     tx.commit().await.map_err(errors::db_error)?;
     let mut snapshot = share.snapshot; snapshot.inputs = inputs.into_iter().collect(); snapshot.nodes = nodes;

@@ -14,8 +14,8 @@ pub(crate) fn ShareControls(slug: String, project: String, graph: String, ready:
     let (o,p,g) = (slug.clone(), project.clone(), graph.clone());
     rsx! {
         details { class: "nb-advanced share-controls",
-            summary { "Share read-only notebook" }
-            p { class: "conn-meta", "Anyone with the link can view this snapshot's descriptions, input values and results. Only UI inputs are editable, in isolated visitor sessions. External effects, credentials, secret cells, code and configuration are unavailable to viewers. Results may contain data from private sources: review them before publishing." }
+            summary { "Share read-only project notes" }
+            p { class: "conn-meta", "Anyone with the link can view this snapshot's descriptions, input values and results. Only UI inputs are editable, in isolated visitor sessions. External effects, credentials, secret notes, code and configuration are unavailable to viewers. Results may contain data from private sources: review them before publishing." }
             Button { disabled: busy() || !ready, onclick: move |_| { let (o,p,g) = (o.clone(),p.clone(),g.clone()); async move {
                 busy.set(true); match create_notebook_share(o,p,g).await { Ok(created) => { url.set(Some(created.url)); error.set(None); shares.restart(); }, Err(e) => error.set(Some(error_message(&e))) } busy.set(false);
             } }, "Create read-only link" }
@@ -48,7 +48,7 @@ pub fn SharedNotebookPage(token: ReadSignal<String>) -> Element {
         document::Meta { name: "robots", content: "noindex,nofollow" }
         div { class: "orgs nb shared-notebook",
             match snapshot() {
-                None => rsx! { p { "Loading public notebook…" } },
+                None => rsx! { p { "Loading public project notes…" } },
                 Some(Err(error)) => rsx! { p { class: "orgs-error", "Could not open this link: {error_message(&error)}" } },
                 Some(Ok(notebook)) => rsx! {
                     header { h2 { "{notebook.name}" } p { class: "conn-meta", "Public read-only snapshot. UI inputs affect only this browser's isolated session. External effects are disabled." } }

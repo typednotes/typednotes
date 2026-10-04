@@ -49,7 +49,7 @@ macro_rules! graph_columns {
          g.model_connection_id::text as model_connection_id, g.model_name, \
          g.session_user_id::text as session_user_id, g.created_by::text as created_by, \
          g.project_id::text as project_id, g.last_nodes::text as last_nodes, \
-         g.structure::text as structure, g.lode_log_start, g.auto_repairs, \
+          g.structure::text as structure, g.runtime_state::text as runtime_state, g.runtime_revision, g.lode_log_start, g.auto_repairs, \
          to_char(g.created_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI \"UTC\"') as created_at, \
           to_char(g.updated_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS.US \"UTC\"') as updated_at"
     };
@@ -62,6 +62,8 @@ pub struct GraphRow {
     pub project_id: String,
     pub lode_session_id: Option<String>,
     pub lun_session_id: Option<String>,
+    pub runtime_state: Option<Value>,
+    pub runtime_revision: i64,
     pub session_user_id: Option<String>,
     pub created_by: Option<String>,
     pub last_nodes: Vec<GraphNode>,
@@ -86,7 +88,7 @@ fn graph_of(row: &PgRow) -> GraphRow {
             detail: row.get("status_detail"),
             commit: row.get("commit_sha"),
             build_id: row.get("lun_build_id"),
-            session: lun_session_id.is_some(),
+            session: row.get::<Option<String>, _>("runtime_state").is_some(),
             model_connection_id: row.get("model_connection_id"),
             model_name: row.get("model_name"),
             created_at: row.get("created_at"),
@@ -98,6 +100,8 @@ fn graph_of(row: &PgRow) -> GraphRow {
         project_id: row.get("project_id"),
         lode_session_id: row.get("lode_session_id"),
         lun_session_id,
+        runtime_state: row.get::<Option<String>, _>("runtime_state").map(|state| serde_json::from_str(&state).unwrap_or_else(|_| Value::String("invalid stored runtime state".into()))),
+        runtime_revision: row.get("runtime_revision"),
         session_user_id: row.get("session_user_id"),
         created_by: row.get("created_by"),
         last_nodes: last_nodes
@@ -109,18 +113,17 @@ fn graph_of(row: &PgRow) -> GraphRow {
     }
 }
 
-async fn graph_by_slug(project_id: &str, slug: &str) -> Result<GraphRow, ServerFnError> {
+async fn graph_by_slug(project_id: &str, _slug: &str) -> Result<GraphRow, ServerFnError> {
     let row = sqlx::query(concat!(
         "select ",
         graph_columns!(),
-        " from graphs g where g.project_id = $1::uuid and g.slug = $2::citext"
+        " from graphs g join projects p on p.id=g.project_id where p.id = $1::uuid and g.id=p.notes_graph_id"
     ))
     .bind(project_id)
-    .bind(slug.trim())
     .fetch_optional(pool()?)
     .await
     .map_err(db_error)?
-    .ok_or_else(|| not_found("no such notebook"))?;
+    .ok_or_else(|| not_found("project notes are unavailable"))?;
     Ok(graph_of(&row))
 }
 
@@ -197,7 +200,10 @@ pub async fn cells_of(graph_id: &str) -> Result<Vec<CellRow>, ServerFnError> {
     .fetch_all(pool()?)
     .await
     .map_err(db_error)?;
-    Ok(rows.iter().filter_map(cell_of).collect())
+    let project_grants=sqlx::query("select p.note_connections::text as grants from projects p join graphs g on g.project_id=p.id where g.id=$1::uuid")
+        .bind(graph_id).fetch_one(pool()?).await.map_err(db_error)?.get::<String,_>("grants");
+    let grants:Vec<crate::CellConnector>=serde_json::from_str(&project_grants).map_err(|_|forbidden("invalid project connection permissions"))?;
+    Ok(rows.iter().filter_map(cell_of).map(|mut row|{row.cell.config.connectors=grants.clone();row}).collect())
 }
 
 async fn cell_by_id(graph_id: &str, cell_id: &str) -> Result<CellRow, ServerFnError> {
@@ -213,7 +219,7 @@ async fn cell_by_id(graph_id: &str, cell_id: &str) -> Result<CellRow, ServerFnEr
     .map_err(db_error)?;
     row.as_ref()
         .and_then(cell_of)
-        .ok_or_else(|| not_found("no such cell"))
+        .ok_or_else(|| not_found("no such note"))
 }
 
 /// The latest value fed to each input of a graph.
@@ -272,12 +278,12 @@ pub async fn background_ctx(graph_id: &str) -> Result<Ctx, String> {
     let row = graph_by_id(graph_id)
         .await
         .map_err(text)?
-        .ok_or("the notebook is gone")?;
+        .ok_or("the project notes are gone")?;
     let user_id = row
         .session_user_id
         .clone()
         .or_else(|| row.created_by.clone())
-        .ok_or("the notebook has no user to act as")?;
+        .ok_or("the project has no execution actor")?;
     let found = sqlx::query(
         "select o.id::text as org_id, o.slug::text as org_slug, o.name as org_name, \
          to_char(o.created_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI \"UTC\"') as org_created_at, \
@@ -293,7 +299,7 @@ pub async fn background_ctx(graph_id: &str) -> Result<Ctx, String> {
     .fetch_optional(pool().map_err(text)?)
     .await
     .map_err(|e| format!("database error: {e}"))?
-    .ok_or("the notebook's user is no longer a member of its org")?;
+    .ok_or("the execution actor is no longer a member of this organization")?;
     let org = Org {
         id: found.get("org_id"),
         slug: found.get("org_slug"),
@@ -318,7 +324,7 @@ pub async fn background_ctx(graph_id: &str) -> Result<Ctx, String> {
 async fn reload(ctx: &mut Ctx) -> Result<(), ServerFnError> {
     ctx.row = graph_by_id(&ctx.row.graph.id)
         .await?
-        .ok_or_else(|| not_found("no such notebook"))?;
+        .ok_or_else(|| not_found("no such project notes"))?;
     Ok(())
 }
 
@@ -346,7 +352,7 @@ pub async fn list(org: &Org, project_slug: &str) -> Result<Vec<Graph>, ServerFnE
     let rows = sqlx::query(concat!(
         "select ",
         graph_columns!(),
-        " from graphs g where g.project_id = $1::uuid order by g.created_at desc"
+        " from graphs g join projects p on p.id=g.project_id where p.id = $1::uuid and p.notes_graph_id=g.id order by g.created_at desc"
     ))
     .bind(&project.id)
     .fetch_all(pool()?)
@@ -380,55 +386,17 @@ pub async fn check_slug(
 
 pub async fn create(
     org: &Org,
-    user: &User,
+    _user: &User,
     project_slug: &str,
     slug: &str,
     name: &str,
 ) -> Result<Graph, ServerFnError> {
     validate_org(slug, name).map_err(bad_request)?;
     let (project, _) = projects::get(org, project_slug).await?;
-    // The org's first AI connection, as a starting point.
-    let ai_providers: Vec<String> = Provider::AI
-        .iter()
-        .copied()
-        .filter(|p| p.can_generate())
-        .map(|p| p.id().to_string())
-        .collect();
-    let model = sqlx::query(
-        "select id::text as id, provider from connections where org_id = $1::uuid \
-         and provider = any($2::text[]) \
-         order by created_at limit 1",
-    )
-    .bind(&org.id)
-    .bind(ai_providers)
-    .fetch_optional(pool()?)
-    .await
-    .map_err(db_error)?;
-    let model_id: Option<String> = model.as_ref().map(|r| r.get("id"));
-    let model_name = model
-        .as_ref()
-        .and_then(|r| Provider::from_id(&r.get::<String, _>("provider")))
-        .and_then(default_model);
-    let inserted = sqlx::query(concat!(
-        "insert into graphs as g (project_id, slug, name, created_by, model_connection_id, model_name) \
-         values ($1::uuid, $2, $3, $4::uuid, $5::uuid, $6) returning ",
-        graph_columns!()
-    ))
-    .bind(&project.id)
-    .bind(slug)
-    .bind(name.trim())
-    .bind(&user.id)
-    .bind(model_id)
-    .bind(model_name)
-    .fetch_one(pool()?)
-    .await;
-    match inserted {
-        Ok(row) => Ok(graph_of(&row).graph),
-        Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("23505") => Err(conflict(
-            format!("this project already has a notebook '{slug}'"),
-        )),
-        Err(e) => Err(db_error(e)),
-    }
+    // Compatibility for older clients: the runtime container already belongs
+    // to the project. Creating another user-facing notebook is no longer valid.
+    let existing=graph_by_slug(&project.id,"").await?;
+    Ok(existing.graph)
 }
 
 /// The model a provider's connection defaults to.
@@ -444,30 +412,8 @@ pub async fn delete(
     project_slug: &str,
     graph_slug: &str,
 ) -> Result<(), ServerFnError> {
-    let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
-    let admin = org.role == "owner" || org.role == "admin";
-    if !admin && ctx.row.created_by.as_deref() != Some(user.id.as_str()) {
-        return Err(forbidden(
-            "only its creator or an org admin can delete this notebook",
-        ));
-    }
-    for c in cells_of(&ctx.row.graph.id).await? {
-        if c.cell.cell_type == CellType::Secret && c.cell.secret_set {
-            delete_secret_value(&ctx, &c.cell).await?;
-        }
-    }
-    if let Some(session) = &ctx.row.lun_session_id {
-        lun::end(session).await;
-    }
-    let mut tx = super::connector::lock(&ctx.org.id).await?;
-    super::connector::revoke_graph(&mut tx, &ctx.org.id, &ctx.row.graph.id).await?;
-    sqlx::query("delete from graphs where id = $1::uuid")
-        .bind(&ctx.row.graph.id)
-        .execute(&mut *tx)
-        .await
-        .map_err(db_error)?;
-    tx.commit().await.map_err(db_error)?;
-    Ok(())
+    let _ctx = member_ctx(org, user, project_slug, graph_slug).await?;
+    Err(conflict("Notes belong directly to the project. Delete individual notes or delete the project in project settings."))
 }
 
 pub async fn set_model(
@@ -514,7 +460,7 @@ pub async fn set_model(
     .map_err(db_error)?;
     Ok(graph_by_id(&ctx.row.graph.id)
         .await?
-        .ok_or_else(|| not_found("no such notebook"))?
+        .ok_or_else(|| not_found("no such project notes"))?
         .graph)
 }
 
@@ -600,7 +546,9 @@ async fn activity(graph_id: &str) -> Result<Vec<Activity>, ServerFnError> {
     {
         let (at, fed_by, n): (String, String, i32) = (r.get("at"), r.get("fed_by"), r.get("n"));
         let what = if fed_by == "register" {
-            "session registered".to_string()
+            "project runtime initialized".to_string()
+        } else if fed_by == "producer" {
+            "scheduled producer resumed".to_string()
         } else {
             format!("fed by {fed_by}")
         };
@@ -611,9 +559,21 @@ async fn activity(graph_id: &str) -> Result<Vec<Activity>, ServerFnError> {
                 kind: "update".to_string(),
                 cell: r.get("cell"),
                 ok: true,
-                text: format!("{what}: {n} node{} changed", if n == 1 { "" } else { "s" }),
+                text: format!("{what}: {n} note{} changed", if n == 1 { "" } else { "s" }),
             },
         ));
+    }
+    for r in sqlx::query("select r.id::text as id,r.kind,r.state,r.detail,c.name as cell,to_char(r.due_at at time zone 'UTC','YYYY-MM-DD HH24:MI:SS \"UTC\"') as due,to_char(coalesce(r.finished_at,r.started_at,r.created_at) at time zone 'UTC','YYYY-MM-DD HH24:MI:SS \"UTC\"') as at from scheduled_runs r left join graph_cells c on c.id=r.cell_id where r.graph_id=$1::uuid order by r.created_at desc limit 15")
+        .bind(graph_id).fetch_all(pool).await.map_err(db_error)? {
+        let at:String=r.get("at");let state:String=r.get("state");
+        let detail=r.get::<Option<String>,_>("detail").unwrap_or_default();
+        out.push((at.clone(),Activity{at,kind:"schedule".into(),cell:r.get("cell"),ok:!matches!(state.as_str(),"failed"|"uncertain"),
+            text:format!("{} occurrence {} · due {} · {state}: {detail}",r.get::<String,_>("kind"),r.get::<String,_>("id"),r.get::<String,_>("due"))}));
+    }
+    for r in sqlx::query("select r.id::text as id,r.state,r.detail,c.name as cell,to_char(coalesce(r.finished_at,r.started_at,r.created_at) at time zone 'UTC','YYYY-MM-DD HH24:MI:SS \"UTC\"') as at from graph_delivery_outbox r join graph_cells c on c.id=r.cell_id where r.graph_id=$1::uuid order by r.runtime_revision desc,r.emission_index desc limit 15")
+        .bind(graph_id).fetch_all(pool).await.map_err(db_error)? {
+        let at:String=r.get("at");let state:String=r.get("state");
+        out.push((at.clone(),Activity{at,kind:"delivery".into(),cell:r.get("cell"),ok:!matches!(state.as_str(),"failed"|"uncertain"),text:format!("Delivery {} · {state}: {}",r.get::<String,_>("id"),r.get::<Option<String>,_>("detail").unwrap_or_default())}));
     }
     for r in sqlx::query(
         "select to_char(s.started_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI:SS \"UTC\"') as at, \
@@ -707,7 +667,8 @@ async fn check_cell_refs(
             }
             if let Some(permissions) = &grant.permissions {
                 let schema = compute::role_name(&ctx.org.slug, &ctx.org.id, &ctx.user.id);
-                let permissions = permissions.validate_local(service).map_err(bad_request)?;
+                let mut permissions = permissions.validate_local(service).map_err(bad_request)?;
+                if service==crate::LocalService::Postgres{for scope in &mut permissions.scopes{scope.root.insert(0,schema.clone());}}
                 super::local::parent(service, &schema).narrow(&permissions).map_err(bad_request)?;
                 if let Some(organization) = policy.connector_ceilings.get(service.id()) {
                     organization.narrow(&permissions).map_err(bad_request)?;
@@ -731,7 +692,7 @@ async fn check_cell_refs(
     if let Some(url) = &config.url {
         let host = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_ascii_lowercase)).unwrap_or_default();
         if !policy.effects.iter().any(|e| e == "HTTP") || (!policy.configured_domains && !policy.domains.contains(&host)) {
-            return Err(bad_request(format!("the organization has not allowed HTTP access to {host}; update its notebook permissions")));
+            return Err(bad_request(format!("the organization has not allowed HTTP access to {host}; update its execution policy")));
         }
     }
     if let Some(channel_id) = &config.channel_id {
@@ -749,7 +710,7 @@ async fn check_cell_refs(
 async fn check_declaration(ctx: &Ctx, name: &str, description: &str, config: &mut CellConfig, existing: Option<&str>, cell_type: CellType) -> Result<Vec<Cell>, ServerFnError> {
     let mut cells: Vec<Cell> = cells_of(&ctx.row.graph.id).await?.into_iter().map(|row| row.cell).collect();
     if cells.iter().any(|cell| cell.name == name && Some(cell.id.as_str()) != existing) {
-        return Err(conflict(format!("this notebook already has a cell '{name}'")));
+        return Err(conflict(format!("this project already has a note '{name}'")));
     }
     let renamed = cells.iter().find(|cell| Some(cell.id.as_str()) == existing).filter(|cell| cell.name != name)
         .map(|cell| crate::renamed_dependents(&cells, &cell.name, name)).unwrap_or_default();
@@ -822,6 +783,8 @@ pub async fn add_cell(
     let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
     let (name, description, mut config) =
         validate_cell(cell_type, form.name, form.description, form.config).map_err(bad_request)?;
+    if !config.connectors.is_empty()&&config.connectors!=ctx.project.note_connections{return Err(bad_request("Edit permissions in project settings, not on an individual note"));}
+    config.connectors=ctx.project.note_connections.clone();
     check_declaration(&ctx, &name, &description, &mut config, None, cell_type).await?;
     check_cell_refs(&ctx, cell_type, &config).await?;
     let mut stored = stored_config(&config, None);
@@ -856,7 +819,7 @@ pub async fn add_cell(
         Ok(row) => row.get("id"),
         Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("23505") => {
             return Err(conflict(format!(
-                "this notebook already has a cell '{name}'"
+                "this project already has a note '{name}'"
             )))
         }
         Err(e) => return Err(db_error(e)),
@@ -865,7 +828,7 @@ pub async fn add_cell(
     let missing=super::workspace::required(&ctx.project,Some(&ctx.row.graph),&connections::list(org,user).await?,&super::db::org_settings(org).await?.effect_policy);
     let (generation,generation_notice)=if lode::configured()&&missing.is_empty(){
         sqlx::query("insert into graph_generation_requests(graph_id,user_id) values($1::uuid,$2::uuid) \
-            on conflict(graph_id) do update set user_id=excluded.user_id,revision=gen_random_uuid(),requested_at=now()")
+            on conflict(graph_id) do update set user_id=excluded.user_id,revision=gen_random_uuid(),requested_at=now(),startup_attempts=0,retry_at=now()")
             .bind(&ctx.row.graph.id).bind(&user.id).execute(&mut *guard).await.map_err(db_error)?;
         sqlx::query("update graphs set status='implementing',status_detail='Preparing repository checkout',updated_at=now() where id=$1::uuid")
             .bind(&ctx.row.graph.id).execute(&mut *guard).await.map_err(db_error)?;
@@ -875,7 +838,7 @@ pub async fn add_cell(
         (false,Some(format!("Cell saved. Finish setup to start code generation: {notice}")))
     };
     guard.commit().await.map_err(db_error)?;
-    let generation=if generation{Some(graph_by_id(&ctx.row.graph.id).await?.ok_or_else(||not_found("notebook was removed"))?.graph)}else{None};
+    let generation=if generation{Some(graph_by_id(&ctx.row.graph.id).await?.ok_or_else(||not_found("project notes were removed"))?.graph)}else{None};
     Ok(CellSaved {
         cell: cell_by_id(&ctx.row.graph.id, &id).await?.cell,
         endpoint_url,
@@ -907,6 +870,8 @@ pub async fn update_cell(
     let cell_type = old.cell.cell_type;
     let (name, description, mut config) =
         validate_cell(cell_type, form.name, form.description, form.config).map_err(bad_request)?;
+    if !config.connectors.is_empty()&&config.connectors!=ctx.project.note_connections{return Err(bad_request("Edit permissions in project settings, not on an individual note"));}
+    config.connectors=ctx.project.note_connections.clone();
     let renamed = check_declaration(&ctx, &name, &description, &mut config, Some(&old.cell.id), cell_type).await?;
     check_cell_refs(&ctx, cell_type, &config).await?;
     let mut keep = old.raw_config.clone();
@@ -942,7 +907,7 @@ pub async fn update_cell(
         Ok(_) => {}
         Err(sqlx::Error::Database(e)) if e.code().as_deref() == Some("23505") => {
             return Err(conflict(format!(
-                "this notebook already has a cell '{name}'"
+                "this project already has a note '{name}'"
             )))
         }
         Err(e) => return Err(db_error(e)),
@@ -968,7 +933,7 @@ pub async fn delete_cell(
     let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
     let old = cell_by_id(&ctx.row.graph.id, cell_id).await?;
     let remaining: Vec<Cell> = cells_of(&ctx.row.graph.id).await?.into_iter().map(|row| row.cell).filter(|c| c.id != old.cell.id).collect();
-    crate::validate_dependencies(&remaining).map_err(|_| conflict("remove this cell's named references from its dependents before deleting it"))?;
+    crate::validate_dependencies(&remaining).map_err(|_| conflict("remove this note's named references from its dependents before deleting it"))?;
     if old.cell.cell_type == CellType::Secret && old.cell.secret_set {
         delete_secret_value(&ctx, &old.cell).await?;
     }
@@ -996,7 +961,7 @@ pub async fn move_cell(
     let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
     let cells = cells_of(&ctx.row.graph.id).await?;
     let Some(i) = cells.iter().position(|c| c.cell.id == cell_id.trim()) else {
-        return Err(not_found("no such cell"));
+        return Err(not_found("no such note"));
     };
     let j = i as i64 + delta.signum() as i64;
     if j < 0 || j as usize >= cells.len() {
@@ -1026,16 +991,26 @@ pub fn secret_path(org_id: &str, graph_id: &str, name: &str) -> String {
     format!("graph/{org_id}/{graph_id}/{name}")
 }
 
+async fn secret_target(ctx:&Ctx,cell:&Cell)->Result<(String,String),ServerFnError>{
+    let row=sqlx::query("select coalesce(o.graph_id,c.graph_id)::text as namespace,coalesce(o.original_config->>'name',c.config->>'name') as name from graph_cells c \
+        left join note_origins o on o.note_id=c.id join graphs current on current.id=c.graph_id join graphs original on original.id=coalesce(o.graph_id,c.graph_id) \
+        join projects p on p.id=current.project_id where c.id=$1::uuid and current.id=$2::uuid and p.org_id=$3::uuid and original.project_id=current.project_id")
+        .bind(&cell.id).bind(&ctx.row.graph.id).bind(&ctx.org.id).fetch_optional(pool()?).await.map_err(db_error)?.ok_or_else(||forbidden("secret namespace leaves this project"))?;
+    let name=row.get::<Option<String>,_>("name").ok_or_else(||bad_request("this source note has no secret name"))?;
+    Ok((row.get("namespace"),name))
+}
+
 /// Delete the vault values of every secret cell of a project's notebooks,
 /// before the project goes (its rows cascade; the vault does not).
 pub async fn delete_project_secrets(org_id: &str, project_id: &str) -> Result<(), ServerFnError> {
+    retire_project_runs(org_id, project_id).await?;
     let mut tx = super::connector::lock(org_id).await?;
     let graphs = sqlx::query("select id::text as id from graphs where project_id=$1::uuid")
         .bind(project_id).fetch_all(&mut *tx).await.map_err(db_error)?;
     for graph in graphs { super::connector::revoke_graph(&mut tx, org_id, &graph.get::<String,_>("id")).await?; }
     tx.commit().await.map_err(db_error)?;
     let rows = sqlx::query(
-        "select g.id::text as graph_id, c.config ->> 'name' as name from graph_cells c \
+        "select coalesce(o.graph_id,g.id)::text as graph_id,coalesce(o.original_config->>'name',c.config->>'name') as name from graph_cells c left join note_origins o on o.note_id=c.id \
          join graphs g on g.id = c.graph_id \
          where g.project_id = $1::uuid and c.variant = 'secret' and c.config ? 'set_at'",
     )
@@ -1057,10 +1032,11 @@ pub async fn delete_project_secrets(org_id: &str, project_id: &str) -> Result<()
 }
 
 async fn delete_secret_value(ctx: &Ctx, cell: &Cell) -> Result<(), ServerFnError> {
-    let Some(name) = &cell.config.name else {
+    let Some(_name) = &cell.config.name else {
         return Ok(());
     };
-    vault::delete(&secret_path(&ctx.org.id, &ctx.row.graph.id, name))
+    let(namespace,name)=secret_target(ctx,cell).await?;
+    vault::delete(&secret_path(&ctx.org.id, &namespace, &name))
         .await
         .map_err(|e| {
             eprintln!(
@@ -1092,14 +1068,14 @@ pub async fn set_secret(
             "secrets are disabled: the vault is not configured",
         ));
     }
-    let name = cell
+    let _name = cell
         .cell
         .config
         .name
         .clone()
         .ok_or_else(|| bad_request("the secret has no name"))?;
     vault::write(
-        &secret_path(&org.id, &ctx.row.graph.id, &name),
+        &{let(namespace,physical)=secret_target(&ctx,&cell.cell).await?;secret_path(&org.id,&namespace,&physical)},
         &json!({ "kind": "secret", "value": value }),
     )
     .await
@@ -1269,7 +1245,7 @@ pub async fn endpoint_delivery(token: &str, body: &[u8]) -> (u16, Value) {
 async fn repo_connection(ctx: &Ctx) -> Result<(Connection, String, crate::RepoRef), ServerFnError> {
     let repo = ctx.project.repo.clone().ok_or_else(|| {
         bad_request(
-            "set the project's primary repository first: the notebook's code is written there",
+            "set the project's primary repository first: generated note code is written there",
         )
     })?;
     let id = repo.connection_id.clone().ok_or_else(|| {
@@ -1298,7 +1274,7 @@ async fn lode_credentials(ctx: &Ctx) -> Result<(Value, Connection), ServerFnErro
     }
     let name = ctx.row.graph.model_name.as_deref().or_else(|| default_model(model.provider)).unwrap_or("");
     if !model.provider.can_generate() || model.provider.ai_api(name) == Some(crate::AiApi::Classifier) {
-        return Err(bad_request("choose a generative model before implementing this notebook"));
+        return Err(bad_request("choose a generative model before implementing this project"));
     }
     let cost = config::model_call_cost();
     let repo_root: Vec<String> = source.full_name.split('/').map(str::to_string).collect();
@@ -1343,11 +1319,12 @@ async fn run_queued(graph_id:&str)->Result<bool,ServerFnError>{
     let locked=sqlx::query("select pg_try_advisory_xact_lock(hashtextextended($1,3)) as locked")
         .bind(graph_id).fetch_one(&mut *tx).await.map_err(db_error)?.get::<bool,_>("locked");
     if !locked{return Ok(true);}
-    let request=sqlx::query("select user_id::text as actor,revision::text as revision from graph_generation_requests where graph_id=$1::uuid")
+    let request=sqlx::query("select user_id::text as actor,revision::text as revision,startup_attempts from graph_generation_requests where graph_id=$1::uuid and retry_at<=now()")
         .bind(graph_id).fetch_optional(&mut *tx).await.map_err(db_error)?;
     let Some(request)=request else{return Ok(false);};
     let actor:String=request.get("actor");let revision:String=request.get("revision");
-    let row=graph_by_id(graph_id).await?.ok_or_else(||not_found("notebook was removed"))?;
+    let startup_attempts:i32=request.get("startup_attempts");
+    let row=graph_by_id(graph_id).await?.ok_or_else(||not_found("project notes were removed"))?;
     let parent=sqlx::query("select org_id::text as org from projects where id=$1::uuid").bind(&row.project_id)
         .fetch_one(pool()?).await.map_err(db_error)?.get::<String,_>("org");
     let user=sqlx::query("select email::text as email,display_name from users where id=$1::uuid and deleted_at is null")
@@ -1358,12 +1335,19 @@ async fn run_queued(graph_id:&str)->Result<bool,ServerFnError>{
         let org=sqlx::query("select slug::text as slug from orgs where id=$1::uuid").bind(parent).fetch_one(pool()?).await.map_err(db_error)?.get::<String,_>("slug");
         let org=super::db::org_for_member(&org,&user.id).await?.ok_or_else(||forbidden("generation actor no longer belongs to this organization"))?;
         let(project,_)=super::projects::get(&org,&sqlx::query("select slug::text as slug from projects where id=$1::uuid").bind(&row.project_id).fetch_one(pool()?).await.map_err(db_error)?.get::<String,_>("slug")).await?;
-        let mut ctx=Ctx{org,project,row,user};
-        retire_writer(&mut ctx).await?;
+        let ctx=Ctx{org,project,row,user};
         let cells=cells_of(graph_id).await?.into_iter().map(|r|r.cell).collect::<Vec<_>>();
         let text=lode_message(&ctx.row.graph.name,&cells,None);
-        launch(&ctx,&text,Writing::All,LaunchedBy::Member,"Writing notebook code").await
+        launch(&ctx,&text,Writing::All,LaunchedBy::Member,"Writing project note code").await
     }.await;
+    let retryable=result.as_ref().err().is_some_and(|e|err_text(e).contains("the code writer: timed out")||err_text(e).contains("the code writer: unreachable"));
+    if retryable && startup_attempts<5 {
+        sqlx::query("update graph_generation_requests set startup_attempts=startup_attempts+1,retry_at=now()+interval '30 seconds' where graph_id=$1::uuid and revision=$2::uuid")
+            .bind(graph_id).bind(&revision).execute(&mut *tx).await.map_err(db_error)?;
+        sqlx::query("update graphs set status_detail='Waiting for the code writer; repository preparation will be retried safely' where id=$1::uuid").bind(graph_id).execute(&mut *tx).await.map_err(db_error)?;
+        tx.commit().await.map_err(db_error)?;
+        return Ok(true);
+    }
     let removed=sqlx::query("delete from graph_generation_requests where graph_id=$1::uuid and revision=$2::uuid")
         .bind(graph_id).bind(revision).execute(&mut *tx).await.map_err(db_error)?.rows_affected();
     if let Err(e)=result {if removed!=0{fail_writing(graph_id,&format!("Automatic code generation could not start: {}",err_text(&e))).await?;}}
@@ -1373,7 +1357,7 @@ async fn run_queued(graph_id:&str)->Result<bool,ServerFnError>{
 
 pub async fn tick_queued(){
     let Ok(pool)=pool() else{return;};
-    let Ok(rows)=sqlx::query("select graph_id::text as id from graph_generation_requests order by requested_at limit 8").fetch_all(pool).await else{return;};
+    let Ok(rows)=sqlx::query("select graph_id::text as id from graph_generation_requests where retry_at<=now() order by requested_at limit 8").fetch_all(pool).await else{return;};
     for row in rows{let _=run_queued(&row.get::<String,_>("id")).await;}
 }
 
@@ -1421,13 +1405,19 @@ async fn launch(
     by: LaunchedBy,
     detail: &str,
 ) -> Result<Graph, ServerFnError> {
+    retire_project_runs(&ctx.org.id, &ctx.project.id).await?;
     if !lode::configured() {
         return Err(unavailable(
-            "notebooks cannot be implemented: code writing is not configured",
+            "project notes cannot be implemented: code writing is not configured",
         ));
     }
     let mut current=ctx.clone();
-    if !matches!(writing,Writing::Unchanged){retire_writer(&mut current).await?;}
+    let request_key=sqlx::query("select revision::text as key from graph_generation_requests where graph_id=$1::uuid")
+        .bind(&ctx.row.graph.id).fetch_optional(pool()?).await.map_err(db_error)?.map(|row|row.get::<String,_>("key"));
+    let reuse=if let (Some(id),Some(key))=(&current.row.lode_session_id,&request_key){
+        matches!(lode::status(id).await.map_err(bad_gateway)?,lode::Reply::Ok(ref status) if status.get("requestKey").and_then(Value::as_str)==Some(key.as_str()) && status.get("checkout").and_then(Value::as_str)!=Some("failed"))
+    }else{false};
+    if !matches!(writing,Writing::Unchanged)&&!reuse{retire_writer(&mut current).await?;}
     let ctx=&current;
     let (credentials, model) = lode_credentials(ctx).await?;
     let mut policy = super::db::org_settings(&ctx.org).await?.effect_policy.validate().map_err(bad_request)?;
@@ -1470,7 +1460,7 @@ async fn launch(
                 policy.tools.retain(|tool| binding.policy.tools.contains(tool));
                 execution = lode::bind_execution(&execution, &binding).map_err(bad_gateway)?;
             }
-            lode::message(id, &writer_text, credentials.clone(), &policy.tools, &execution)
+            lode::message_once(id, &writer_text, credentials.clone(), &policy.tools, &execution,request_key.as_deref())
                 .await
                 .map_err(bad_gateway)?
         }
@@ -1485,7 +1475,10 @@ async fn launch(
                 ));
             }
             let (_, _, repo) = repo_connection(ctx).await?;
+            let request_key=request_key.clone().unwrap_or_else(||uuid::Uuid::new_v4().to_string());
             let body = json!({
+                "background":true,
+                "requestKey":request_key,
                 "source": {
                     "url": repo.web_url,
                     "branch": repo.default_branch.clone().unwrap_or_else(|| "main".to_string()),
@@ -1510,10 +1503,13 @@ async fn launch(
             // Opening the checkout precedes generation: the broker policy must
             // bind the actual persisted Lode session ID before a model call.
             let id = lode::open(&body).await.map_err(bad_gateway)?;
+            // Persist the accepted session before any later RPC can time out.
+            // Retrying checkout uses the same request key, not a second agent.
+            sqlx::query("update graphs set lode_session_id=$2 where id=$1::uuid").bind(&ctx.row.graph.id).bind(&id).execute(pool()?).await.map_err(db_error)?;
             let binding = super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, &id, &credentials, &policy.tools).await?;
             policy.tools.retain(|tool| binding.policy.tools.contains(tool));
             execution = lode::bind_execution(&execution, &binding).map_err(bad_gateway)?;
-            if !matches!(lode::message(&id, &writer_text, credentials.clone(), &policy.tools, &execution).await.map_err(bad_gateway)?, lode::Reply::Ok(())) {
+            if !matches!(lode::message_once(&id, &writer_text, credentials.clone(), &policy.tools, &execution,Some(&request_key)).await.map_err(bad_gateway)?, lode::Reply::Ok(())) {
                 return Err(bad_gateway("writer session disappeared before starting"));
             }
             id
@@ -1562,7 +1558,7 @@ async fn launch(
     tx.commit().await.map_err(db_error)?;
     Ok(graph_by_id(&ctx.row.graph.id)
         .await?
-        .ok_or_else(|| not_found("no such notebook"))?
+        .ok_or_else(|| not_found("no such project notes"))?
         .graph)
 }
 
@@ -1583,7 +1579,7 @@ pub async fn implement(
         .map(|c| c.cell)
         .collect();
     if cells.is_empty() {
-        return Err(bad_request("add a cell first"));
+        return Err(bad_request("add a note first"));
     }
     let note = note.trim();
     if note.chars().count() > 4000 {
@@ -1756,7 +1752,7 @@ async fn auto_repair_errors(
         }
         Err(e) => {
             eprintln!(
-                "could not send notebook {} back to lode: {}",
+                "could not send project notes {} back to lode: {}",
                 ctx.row.graph.id,
                 err_text(&e)
             );
@@ -1809,7 +1805,7 @@ async fn auto_repair_build(ctx: &Ctx, diagnostics: &str) -> bool {
         Ok(_) => true,
         Err(e) => {
             eprintln!(
-                "could not send notebook {} back to lode: {}",
+                "could not send project notes {} back to lode: {}",
                 ctx.row.graph.id,
                 err_text(&e)
             );
@@ -1837,7 +1833,7 @@ pub async fn abort(
     guard.commit().await.map_err(db_error)?;
     Ok(graph_by_id(&ctx.row.graph.id)
         .await?
-        .ok_or_else(|| not_found("no such notebook"))?
+        .ok_or_else(|| not_found("no such project notes"))?
         .graph)
 }
 
@@ -1861,11 +1857,12 @@ pub async fn progress(
         // checkout progress. SQL serialization prevents duplicate paid runs.
         spawn_generation(id.clone());
         reload(&mut ctx).await?;
-        return Ok(LodeProgress{graph:ctx.row.graph,state:"queued".into(),entries:Vec::new(),next:after});
+        return Ok(LodeProgress{graph:ctx.row.graph,state:"queued".into(),entries:Vec::new(),next:after,question:None});
     }
     let mut entries = Vec::new();
     let mut next = after;
     let mut state = "none".to_string();
+    let mut question=None;
     if let (Some(id), true) = (ctx.row.lode_session_id.clone(), lode::configured()) {
         let wait = if ctx.row.graph.status == "implementing" {
             wait
@@ -1897,10 +1894,14 @@ pub async fn progress(
             }
         }
     }
+    if let Some(id)=&ctx.row.lode_session_id{if let lode::Reply::Ok(status)=lode::status(id).await.map_err(bad_gateway)?{
+        question=status.get("question").filter(|q|!q.is_null()).map(|q|serde_json::from_value(q.clone())).transpose().map_err(|_|bad_gateway("invalid writer question"))?;
+        if question.is_some(){state="waiting".into();}
+    }}
     if ctx.row.graph.status == "implementing" {
         if let Err(e) = advance(&mut ctx, state == "running").await {
             eprintln!(
-                "notebook {} did not advance: {}",
+                "project notes {} did not advance: {}",
                 ctx.row.graph.id,
                 err_text(&e)
             );
@@ -1913,41 +1914,85 @@ pub async fn progress(
         state,
         entries,
         next,
+        question,
     })
 }
 
 fn spawn_generation(graph:String){tokio::spawn(async move{let _=run_queued(&graph).await;});}
 
+/// Close migrated writers and protected authority before exposing new execution.
+/// The queue is deleted only after every external step acknowledges retirement.
+pub(super) async fn retire_project_runs(org: &str, project: &str) -> Result<(), ServerFnError> {
+    let mut tx = super::connector::lock(org).await?;
+    retire_project_runs_locked(&mut tx, org, project).await?;
+    tx.commit().await.map_err(db_error)
+}
+
+pub(super) async fn retire_project_runs_locked(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, org: &str, project: &str) -> Result<(), ServerFnError> {
+    let rows = sqlx::query("select r.graph_id::text as graph,r.lode_session_id,r.lun_session_ids from project_note_retirements r join graphs g on g.id=r.graph_id join projects p on p.id=g.project_id where p.id=$1::uuid and p.org_id=$2::uuid for update of r")
+        .bind(project).bind(org).fetch_all(&mut **tx).await.map_err(db_error)?;
+    for row in rows {
+        if let Some(writer) = row.get::<Option<String>, _>("lode_session_id") {
+            lode::narrow(&writer, &[]).await.map_err(bad_gateway)?;
+            lode::abort(&writer).await.map_err(bad_gateway)?;
+        }
+        super::connector::revoke_graph(tx, org, &row.get::<String, _>("graph")).await?;
+        for runtime in row.get::<Vec<String>, _>("lun_session_ids") {
+            lun::end_checked(&runtime).await.map_err(bad_gateway)?;
+        }
+        sqlx::query("delete from project_note_retirements where graph_id=$1::uuid")
+            .bind(row.get::<String, _>("graph")).execute(&mut **tx).await.map_err(db_error)?;
+    }
+    Ok(())
+}
+
+pub(super) async fn tick_retirements() {
+    let Ok(pool) = pool() else { return; };
+    let Ok(rows) = sqlx::query("select distinct p.id::text as project,p.org_id::text as org from project_note_retirements r join graphs g on g.id=r.graph_id join projects p on p.id=g.project_id limit 8").fetch_all(pool).await else { return; };
+    for row in rows {
+        if let Err(e) = retire_project_runs(&row.get::<String, _>("org"), &row.get::<String, _>("project")).await {
+            eprintln!("scheduler: retiring pre-merge authority: {}", err_text(&e));
+        }
+    }
+}
+
+pub async fn answer_question(org:&Org,user:&User,project:&str,id:&str,answer:&str)->Result<Graph,ServerFnError>{
+    let ctx=member_ctx(org,user,project,"").await?;
+    let writer=ctx.row.lode_session_id.as_deref().ok_or_else(||conflict("the writer session was removed; regenerate this project"))?;
+    let status=match lode::status(writer).await.map_err(bad_gateway)?{lode::Reply::Ok(v)=>v,lode::Reply::Gone=>return Err(conflict("the writer restarted; regenerate this project"))};
+    if status.pointer("/execution/execution/binding/user_id").and_then(Value::as_str)!=Some(user.id.as_str()){return Err(forbidden("only the user who started this bounded run can answer; start a new run as yourself"));}
+    if answer.is_empty()||answer.len()>4096{return Err(bad_request("answer must contain 1–4096 UTF-8 bytes"));}
+    refresh_warrants_checked(&ctx,writer).await?;
+    lode::answer(writer,id,answer).await.map_err(bad_gateway)?;
+    Ok(ctx.row.graph)
+}
+
 /// Fresh warrants for lode's run in flight: they live 300 s, a run lasts
 /// longer (§5), and lode keeps them in memory only.
 async fn refresh_warrants(ctx: &Ctx, lode_session: &str) {
-    match lode_credentials(ctx).await {
-        Ok((credentials, _)) => {
-            let tools = match super::db::org_settings(&ctx.org).await {
-                Ok(settings) => settings.effect_policy.tools,
-                Err(_) => return,
-            };
-            let status = match lode::status(lode_session).await {
-                Ok(lode::Reply::Ok(status)) => status, _ => return,
-            };
-            let tools = match lode::narrowing_tools(&status, &tools) { Ok(tools) => tools, Err(_) => return };
-            let cells = match cells_of(&ctx.row.graph.id).await { Ok(cells) => cells, Err(_) => return };
-            let execution = match writer_execution(ctx, &cells).await { Ok(execution) => execution, Err(_) => return };
-            let binding = match super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, lode_session, &credentials, &tools).await { Ok(binding) => binding, Err(_) => return };
-            let tools: Vec<_> = tools.into_iter().filter(|tool| binding.policy.tools.contains(tool)).collect();
-            let execution = match lode::bind_execution(&execution, &binding) { Ok(execution) => execution, Err(_) => return };
-            if let Err(e) = lode::refresh(lode_session, credentials, &tools, &execution).await {
-                eprintln!(
-                    "could not refresh lode's warrants for {}: {e}",
-                    ctx.row.graph.id
-                );
-            }
-        }
-        Err(e) => eprintln!(
-            "could not mint lode's warrants for {}: {}",
-            ctx.row.graph.id,
-            err_text(&e)
-        ),
+    if let Err(e) = refresh_warrants_checked(ctx, lode_session).await {
+        eprintln!("could not refresh lode's warrants for {}: {}", ctx.row.graph.id, err_text(&e));
+    }
+}
+
+/// Answer/resume must acknowledge the live refresh, rather than silently reuse
+/// an old warrant after a project permission or membership change.
+async fn refresh_warrants_checked(ctx: &Ctx, lode_session: &str) -> Result<(), ServerFnError> {
+    let (credentials, _) = lode_credentials(ctx).await?;
+    let tools = super::db::org_settings(&ctx.org).await?.effect_policy.tools;
+    let status = match lode::status(lode_session).await.map_err(bad_gateway)? {
+        lode::Reply::Ok(status) => status,
+        lode::Reply::Gone => return Err(conflict("the writer session was removed; regenerate this project")),
+    };
+    let tools = lode::narrowing_tools(&status, &tools).map_err(bad_gateway)?;
+    let cells = cells_of(&ctx.row.graph.id).await?;
+    let execution = writer_execution(ctx, &cells).await.map_err(bad_gateway)?;
+    let binding = super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, lode_session, &credentials, &tools).await?;
+    let tools: Vec<_> = tools.into_iter().filter(|tool| binding.policy.tools.contains(tool)).collect();
+    let execution = lode::bind_execution(&execution, &binding).map_err(bad_gateway)?;
+    match lode::refresh(lode_session, credentials, &tools, &execution).await.map_err(bad_gateway)? {
+        lode::Reply::Ok(()) => Ok(()),
+        lode::Reply::Gone => Err(conflict("the writer session was removed; regenerate this project")),
     }
 }
 
@@ -1965,7 +2010,7 @@ pub async fn tick_implementing() {
     {
         Ok(rows) => rows.iter().map(|r| r.get("id")).collect(),
         Err(e) => {
-            eprintln!("scheduler: implementing notebooks: {e}");
+            eprintln!("scheduler: implementing project notes: {e}");
             return;
         }
     };
@@ -1973,7 +2018,7 @@ pub async fn tick_implementing() {
         let mut ctx = match background_ctx(&id).await {
             Ok(ctx) => ctx,
             Err(e) => {
-                eprintln!("scheduler: notebook {id}: {e}");
+                eprintln!("scheduler: project notes {id}: {e}");
                 continue;
             }
         };
@@ -1988,7 +2033,7 @@ pub async fn tick_implementing() {
                 }
                 Ok(lode::Reply::Gone) => false,
                 Err(e) => {
-                    eprintln!("scheduler: notebook {id}: {e}");
+                    eprintln!("scheduler: project notes {id}: {e}");
                     continue;
                 }
             },
@@ -2022,6 +2067,11 @@ async fn advance(ctx: &mut Ctx, lode_running: bool) -> Result<(), ServerFnError>
     };
     if status.as_ref().is_some_and(lode::running) {
         return Ok(());
+    }
+    if let Some(status)=&status {
+        if status.get("checkout").and_then(Value::as_str)==Some("failed") {
+            return Err(bad_gateway(status.get("error").and_then(Value::as_str).unwrap_or("Repository preparation failed. Retry generation.")));
+        }
     }
     let head = match status.as_ref().and_then(lode::head) {
         Some(head) => head,
@@ -2131,13 +2181,13 @@ pub async fn rebuild(
 ) -> Result<Graph, ServerFnError> {
     if !lun::configured() {
         return Err(unavailable(
-            "notebooks cannot be built: the code runtime is not configured",
+            "project notes cannot be built: the code runtime is not configured",
         ));
     }
     let mut ctx = member_ctx(org, user, project_slug, graph_slug).await?;
     if ctx.row.graph.status == "implementing" {
         return Err(conflict(
-            "the notebook's code is being written; wait for it",
+            "the project's code is being written; wait for it",
         ));
     }
     let head = branch_head(&ctx).await?;
@@ -2157,7 +2207,7 @@ pub async fn rebuild(
     }
     Ok(graph_by_id(&ctx.row.graph.id)
         .await?
-        .ok_or_else(|| not_found("no such notebook"))?
+        .ok_or_else(|| not_found("no such project notes"))?
         .graph)
 }
 
@@ -2242,7 +2292,7 @@ async fn read_lun_json(ctx: &Ctx, commit: &str) -> Result<LunJson, ServerFnError
     let body = read_repo_file(ctx, "lun.json", commit).await?;
     serde_json::from_slice(&body).map_err(|e| {
         bad_request(format!(
-            "the notebook's manifest (lun.json) is unreadable: {e}"
+            "the project's manifest (lun.json) is unreadable: {e}"
         ))
     })
 }
@@ -2294,6 +2344,11 @@ async fn build_request(ctx: &Ctx, commit: &str) -> Result<(Value, LunJson), Serv
         &super::connector::scoped(&connection, "repositories.read", repo.full_name.split('/').map(str::to_string).collect(), true), 0).await?.grant;
     let cells: Vec<Cell> = cells_of(&ctx.row.graph.id).await?.into_iter().map(|row| row.cell).collect();
     let contracts=build_contracts(&cells);
+    for function in &lun_json.functions {
+        if function.producer && cells.iter().any(|cell| cell.name == function.name && matches!(cell.cell_type,CellType::Scheduled | CellType::Watch)) {
+            return Err(bad_request("Scheduled/watch source notes use ordinary fetch functions. Put graph-internal waits and yields in a calculation note declared producer:true."));
+        }
+    }
     let mut functions = serde_json::to_value(&lun_json.functions).map_err(|_| bad_request("invalid function declarations"))?;
     if let Some(functions) = functions.as_array_mut() {
         for function in functions {
@@ -2334,7 +2389,7 @@ async fn adopt(ctx: &mut Ctx, build: &lun::Build) -> Result<(), ServerFnError> {
         .clone()
         .ok_or_else(|| bad_request(format!("the build has no graph named '{GRAPH_NAME}'")))?;
     let cells = cells_of(&ctx.row.graph.id).await?;
-    let mut tx = pool()?.begin().await.map_err(db_error)?;
+    let mut tx = runtime_lock(&ctx.row.graph.id).await.map_err(bad_gateway)?;
     for c in &cells {
         let imp = cell_impl(c.cell.cell_type, &c.cell.name, &c.cell.config, &lun_json);
         let has_code = !c.cell.cell_type.has_function() || imp.function.is_some();
@@ -2361,7 +2416,7 @@ async fn adopt(ctx: &mut Ctx, build: &lun::Build) -> Result<(), ServerFnError> {
         .collect();
     sqlx::query(
         "update graphs set status = 'ready', status_detail = $2, structure = $3::jsonb, \
-         last_nodes = $4::jsonb, lun_session_id = null, session_build_id = $5, \
+          last_nodes = $4::jsonb, lun_session_id = null, runtime_state = null, runtime_due_at = null, runtime_revision=runtime_revision+1, session_build_id = $5, \
          updated_at = now() where id = $1::uuid",
     )
     .bind(&ctx.row.graph.id)
@@ -2543,7 +2598,7 @@ pub async fn source_execution(ctx: &Ctx, function: &str) -> Result<Value, String
     let text = |e: ServerFnError| err_text(&e);
     let cells = cells_of(&ctx.row.graph.id).await.map_err(text)?;
     let cell = cells.iter().find(|row| row.cell.implementation.as_ref().and_then(|i| i.function.as_deref()) == Some(function))
-        .ok_or("source function is not declared in this notebook")?;
+        .ok_or("source function is not declared in this project")?;
     check_cell_refs(ctx, cell.cell.cell_type, &cell.cell.config).await.map_err(text)?;
     Ok(json!({
         "binding": {"org_id": ctx.org.id, "user_id": ctx.user.id, "graph_id": ctx.row.graph.id},
@@ -2555,18 +2610,56 @@ pub async fn source_execution(ctx: &Ctx, function: &str) -> Result<Value, String
 
 /// Register the graph as a lun session, with the last value recorded for
 /// each of its inputs: first registration and re-registration alike.
-async fn register(ctx: &mut Ctx) -> Result<lun::SessionAnswer, String> {
+async fn register(ctx: &mut Ctx) -> Result<lun::GraphAnswer, String> {
+    retire_project_runs(&ctx.org.id, &ctx.project.id).await.map_err(|e| err_text(&e))?;
+    let mut tx = runtime_lock(&ctx.row.graph.id).await?;
+    reload(ctx).await.map_err(|e| err_text(&e))?;
+    scheduling_clear(&ctx.row.graph.id,None).await?;
+    let answer = register_locked(ctx, &mut tx).await?;
+    tx.commit().await.map_err(|e| format!("database error: {e}"))?;
+    drain_deliveries(&ctx.row.graph.id).await;
+    Ok(answer)
+}
+
+/// Serialize app-owned state across feeds, registrations and producer wake-ups.
+/// Lun still validates the state against the exact compiled graph before effects.
+pub(super) async fn runtime_lock(graph: &str) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, String> {
+    let mut tx = pool().map_err(|e| err_text(&e))?.begin().await.map_err(|e| format!("database error: {e}"))?;
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1,4))").bind(graph)
+        .execute(&mut *tx).await.map_err(|e| format!("database error: {e}"))?;
+    Ok(tx)
+}
+
+async fn scheduling_clear(graph:&str,current:Option<&str>)->Result<(),String>{
+    let busy=sqlx::query("select 1 from scheduled_runs where graph_id=$1::uuid and state in ('running','uncertain') and ($2::text is null or id::text<>$2) limit 1")
+        .bind(graph).bind(current).fetch_optional(pool().map_err(|e|err_text(&e))?).await.map_err(|e|e.to_string())?.is_some();
+    if busy{return Err("A scheduled occurrence is still running or its outcome is uncertain. Inspect run history and reconcile effects before explicitly restarting the project.".into());}
+    Ok(())
+}
+
+async fn store_runtime(ctx: &mut Ctx, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, answer: &lun::GraphAnswer) -> Result<(), String> {
+    let saved=sqlx::query("update graphs set runtime_state=$2::jsonb,runtime_due_at=to_timestamp($3::double precision/1000),runtime_revision=runtime_revision+1,lun_session_id=null,session_user_id=$4::uuid,last_nodes=$5::jsonb,updated_at=now() where id=$1::uuid returning runtime_revision")
+        .bind(&ctx.row.graph.id).bind(answer.state.to_string()).bind(answer.next_call_at.map(|n| n as f64)).bind(&ctx.user.id)
+        .bind(serde_json::to_string(&answer.nodes).map_err(|e| e.to_string())?)
+        .fetch_one(&mut **tx).await.map_err(|e| format!("database error: {e}"))?;
+    ctx.row.runtime_state = Some(answer.state.clone());
+    ctx.row.runtime_revision = saved.get("runtime_revision");
+    ctx.row.session_user_id = Some(ctx.user.id.clone());
+    Ok(())
+}
+
+async fn initial_step(ctx: &Ctx) -> Result<lun::GraphAnswer, String> {
     let text = |e: ServerFnError| err_text(&e);
     let build = ctx
         .row
         .session_build_id
         .clone()
-        .ok_or("the notebook is not built")?;
+        .ok_or("the project is not built")?;
     let structure = ctx
         .row
         .structure
         .clone()
-        .ok_or("the notebook is not built")?;
+        .ok_or("the project is not built")?;
     let recorded = latest_inputs(&ctx.row.graph.id).await.map_err(text)?;
     let inputs: Map<String, Value> = recorded
         .into_iter()
@@ -2604,29 +2697,23 @@ async fn register(ctx: &mut Ctx) -> Result<lun::SessionAnswer, String> {
         "connectors": connector_grants(ctx, &cells).await?,
         "liaisonUrl": config::runtime_liaison_url(),
     });
-    let answer = lun::start(&build, GRAPH_NAME, &body).await?;
-    let pool = pool().map_err(text)?;
-    sqlx::query(
-        "update graphs set lun_session_id = $2, session_user_id = $3::uuid, last_nodes = $4::jsonb, \
-         updated_at = now() where id = $1::uuid",
-    )
-    .bind(&ctx.row.graph.id)
-    .bind(&answer.session)
-    .bind(&ctx.user.id)
-    .bind(serde_json::to_string(&answer.nodes).unwrap_or_else(|_| "[]".into()))
-    .execute(pool)
-    .await
-    .map_err(|e| format!("database error: {e}"))?;
-    sqlx::query(
-        "insert into graph_updates (graph_id, fed_by, changed) values ($1::uuid, 'register', $2::jsonb)",
+    lun::step(&build, GRAPH_NAME, &body).await
+}
+
+async fn register_locked(ctx: &mut Ctx, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<lun::GraphAnswer, String> {
+    let answer=initial_step(ctx).await?;
+    let cells=cells_of(&ctx.row.graph.id).await.map_err(|e|err_text(&e))?;
+    store_runtime(ctx, tx, &answer).await?;
+    let update=sqlx::query(
+        "insert into graph_updates (graph_id, fed_by, changed,runtime_revision) values ($1::uuid, 'register', $2::jsonb,$3) returning id::text as id",
     )
     .bind(&ctx.row.graph.id)
     .bind(serde_json::to_string(&answer.changed).unwrap_or_else(|_| "[]".into()))
-    .execute(pool)
+    .bind(ctx.row.runtime_revision)
+    .fetch_one(&mut **tx)
     .await
     .map_err(|e| format!("database error: {e}"))?;
-    ctx.row.lun_session_id = Some(answer.session.clone());
-    ctx.row.session_user_id = Some(ctx.user.id.clone());
+    enqueue_deliveries(ctx,&cells,&answer.changed,&update.get::<String,_>("id"),tx).await?;
     Ok(answer)
 }
 
@@ -2634,25 +2721,43 @@ async fn register(ctx: &mut Ctx) -> Result<lun::SessionAnswer, String> {
 /// again first if lun lost it — record what changed, and send what the
 /// graph's `channel` sinks now say.
 pub async fn feed(
-    mut ctx: Ctx,
+    ctx: Ctx,
     input: &str,
     value: Value,
     fed_by: &str,
     cell_id: Option<&str>,
 ) -> Result<FeedResult, String> {
+    feed_impl(ctx,input,value,fed_by,cell_id,None).await
+}
+
+pub(super) async fn feed_scheduled(ctx:Ctx,input:&str,value:Value,cell:&str,run:&str,build:&str)->Result<FeedResult,String>{
+    feed_impl(ctx,input,value,"check",Some(cell),Some((run,build))).await
+}
+
+async fn feed_impl(mut ctx:Ctx,input:&str,value:Value,fed_by:&str,cell_id:Option<&str>,scheduled:Option<(&str,&str)>)->Result<FeedResult,String>{
     let text = |e: ServerFnError| err_text(&e);
+    retire_project_runs(&ctx.org.id, &ctx.project.id).await.map_err(text)?;
+    let mut tx = runtime_lock(&ctx.row.graph.id).await?;
+    reload(&mut ctx).await.map_err(text)?;
+    scheduling_clear(&ctx.row.graph.id,scheduled.map(|s|s.0)).await?;
+    if let Some((run,build))=scheduled {
+        if ctx.row.session_build_id.as_deref()!=Some(build){
+            super::scheduler::finish_run(run,super::scheduler::RunResult::Cancelled,"build changed before scheduled input dispatch").await;
+            return Err("scheduled input cancelled because its build changed".into());
+        }
+    }
     // The session runs the adopted build, even while lode writes the next.
     if ctx.row.session_build_id.is_none() {
-        return Err("the notebook is not built yet".to_string());
+        return Err("the project is not built yet".to_string());
     }
     let structure = ctx
         .row
         .structure
         .clone()
-        .ok_or("the notebook is not built yet")?;
+        .ok_or("the project is not built yet")?;
     if !structure.inputs.iter().any(|i| i == input) {
         return Err(format!(
-            "the graph has no input '{input}' (implement the notebook again)"
+            "the graph has no input '{input}' (implement the project again)"
         ));
     }
     let pool = pool().map_err(text)?;
@@ -2670,48 +2775,100 @@ pub async fn feed(
     .map_err(|e| format!("database error: {e}"))?;
 
     let cells = cells_of(&ctx.row.graph.id).await.map_err(text)?;
-    let updated = match ctx.row.lun_session_id.clone() {
-        Some(session) => {
+    let updated = match ctx.row.runtime_state.clone().filter(|_| ctx.row.session_user_id.as_deref() == Some(ctx.user.id.as_str())) {
+        Some(state) => {
             let mut inputs = Map::new();
             inputs.insert(input.to_string(), value);
             let body =
-                json!({ "inputs": inputs, "warrants": storage_warrants(&ctx, &cells).await?,
+                json!({ "inputs": inputs, "state": state, "warrants": storage_warrants(&ctx, &cells).await?,
                     "binding": { "org_id": ctx.org.id, "user_id": ctx.user.id, "graph_id": ctx.row.graph.id },
                     "policy": super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.for_cells(&cells.iter().map(|c| c.cell.clone()).collect::<Vec<_>>()),
                     "connectors": connector_grants(&ctx, &cells).await?, "liaisonUrl": config::runtime_liaison_url() });
-            lun::update(&session, &body).await?
+            Some(lun::step(ctx.row.session_build_id.as_deref().ok_or("project notes are not built")?, GRAPH_NAME, &body).await?)
         }
         None => None,
     };
     // Lost (or never registered): the recorded inputs, the new one included.
     let answer = match updated {
         Some(a) => a,
-        None => register(&mut ctx).await?,
+        None => initial_step(&ctx).await?,
     };
-    sqlx::query("update graphs set last_nodes = $2::jsonb, updated_at = now() where id = $1::uuid")
-        .bind(&ctx.row.graph.id)
-        .bind(serde_json::to_string(&answer.nodes).unwrap_or_else(|_| "[]".into()))
-        .execute(pool)
-        .await
-        .map_err(|e| format!("database error: {e}"))?;
-    sqlx::query(
-        "insert into graph_updates (graph_id, fed_by, cell_id, changed) \
-         values ($1::uuid, $2, $3::uuid, $4::jsonb)",
+    store_runtime(&mut ctx, &mut tx, &answer).await?;
+    let update=sqlx::query(
+        "insert into graph_updates (graph_id, fed_by, cell_id, changed,scheduled_run_id,runtime_revision) \
+         values ($1::uuid, $2, $3::uuid, $4::jsonb,$5::uuid,$6) returning id::text as id",
     )
     .bind(&ctx.row.graph.id)
     .bind(fed_by)
     .bind(cell_id)
     .bind(serde_json::to_string(&answer.changed).unwrap_or_else(|_| "[]".into()))
-    .execute(pool)
+    .bind(scheduled.map(|s|s.0))
+    .bind(ctx.row.runtime_revision)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| format!("database error: {e}"))?;
-    send_channel_sinks(&ctx, &cells, &answer.changed).await;
+    enqueue_deliveries(&ctx,&cells,&answer.changed,&update.get::<String,_>("id"),&mut tx).await?;
+    if let Some((run,_))=scheduled {
+        sqlx::query("update scheduled_runs set state='completed',finished_at=now(),detail='source result fed; graph state persisted' where id=$1::uuid and state='running' and phase='graph'")
+            .bind(run).execute(&mut *tx).await.map_err(|e|e.to_string())?;
+    }
+    tx.commit().await.map_err(|e| format!("database error: {e}"))?;
+    drain_deliveries(&ctx.row.graph.id).await;
     let repair = auto_repair_errors(&ctx, &cells, &answer.changed, &answer.nodes).await;
     Ok(FeedResult {
         changed: answer.changed,
         nodes: answer.nodes,
         repair,
     })
+}
+
+/// Resume due producers using private caller-owned state and fresh actor grants.
+/// Consume the due marker before effects so an ambiguous failure is not replayed
+/// automatically. A later explicit input or regeneration can resume the project.
+pub(super) async fn tick_runtime() {
+    let Ok(pool) = pool() else { return; };
+    // Moving a deadline and creating its stable occurrence are one transaction.
+    // A crash leaves a queued record; it does not lose or implicitly replay work.
+    let _ = sqlx::query("with due as (select g.id,g.runtime_due_at,g.runtime_revision,g.session_build_id,g.session_user_id from graphs g where g.archived_at is null and g.runtime_state is not null and g.runtime_due_at<=now() and g.session_build_id is not null and not exists(select 1 from scheduled_runs r where r.graph_id=g.id and r.kind='producer' and r.state in ('queued','running','uncertain')) order by g.runtime_due_at limit 8 for update skip locked), queued as (insert into scheduled_runs(occurrence_key,graph_id,actor_id,kind,due_at,build_id,runtime_revision,phase) select 'producer:'||id::text||':'||runtime_revision::text,id,session_user_id,'producer',runtime_due_at,session_build_id,runtime_revision,'graph' from due on conflict do nothing returning graph_id) update graphs g set runtime_due_at=null from queued q where g.id=q.graph_id")
+        .execute(pool).await;
+    let Ok(rows) = sqlx::query("select r.id::text as run,r.graph_id::text as id,r.runtime_revision,r.build_id,r.actor_id::text as actor from scheduled_runs r where r.kind='producer' and r.state='queued' and not exists(select 1 from scheduled_runs blocked where blocked.graph_id=r.graph_id and blocked.state='uncertain') order by r.created_at limit 8").fetch_all(pool).await else { return; };
+    for row in rows {
+        let id = row.get::<String, _>("id");
+        let run = row.get::<String, _>("run");
+        if let Err(e) = resume_runtime(&id,&run,row.get("runtime_revision"),&row.get::<String,_>("build_id"),row.get::<Option<String>,_>("actor").as_deref()).await {
+            super::scheduler::finish_run(&run,super::scheduler::RunResult::Uncertain,&e).await;
+            eprintln!("scheduler: project producer {id}: {e}");
+        }
+    }
+}
+
+async fn resume_runtime(graph: &str,run:&str,revision:i64,build:&str,actor:Option<&str>) -> Result<(), String> {
+    let text = |e: ServerFnError| err_text(&e);
+    let mut ctx = background_ctx(graph).await?;
+    retire_project_runs(&ctx.org.id, &ctx.project.id).await.map_err(text)?;
+    let mut tx = runtime_lock(graph).await?;
+    reload(&mut ctx).await.map_err(text)?;
+    if ctx.row.runtime_revision!=revision || ctx.row.session_build_id.as_deref()!=Some(build) || actor!=Some(ctx.user.id.as_str()) {
+        super::scheduler::finish_run(run,super::scheduler::RunResult::Cancelled,"superseded by an input, build or actor change").await;
+        return Ok(());
+    }
+    let cells = cells_of(graph).await.map_err(text)?;
+    let body = json!({"inputs":{},"state":ctx.row.runtime_state,
+        "binding":{"org_id":ctx.org.id,"user_id":ctx.user.id,"graph_id":graph},
+        "policy":super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.for_cells(&cells.iter().map(|c|c.cell.clone()).collect::<Vec<_>>()),
+        "connectors":connector_grants(&ctx,&cells).await?,"warrants":storage_warrants(&ctx,&cells).await?});
+    if !super::scheduler::begin_run(run,"queued","graph").await? { return Ok(()); }
+    let answer = lun::step(ctx.row.session_build_id.as_deref().ok_or("project is not built")?, GRAPH_NAME, &body).await?;
+    store_runtime(&mut ctx,&mut tx,&answer).await?;
+    let update=sqlx::query("insert into graph_updates(graph_id,fed_by,changed,scheduled_run_id,runtime_revision) values($1::uuid,'producer',$2::jsonb,$3::uuid,$4) returning id::text as id")
+        .bind(graph).bind(serde_json::to_string(&answer.changed).map_err(|e|e.to_string())?).bind(run).bind(ctx.row.runtime_revision).fetch_one(&mut *tx).await.map_err(|e|e.to_string())?;
+    enqueue_deliveries(&ctx,&cells,&answer.changed,&update.get::<String,_>("id"),&mut tx).await?;
+    sqlx::query("update scheduled_runs set state='completed',finished_at=now(),detail='bounded graph step returned' where id=$1::uuid and state='running'")
+        .bind(run).execute(&mut *tx).await.map_err(|e|e.to_string())?;
+    tx.commit().await.map_err(|e|e.to_string())?;
+    drain_deliveries(graph).await;
+    auto_repair_errors(&ctx,&cells,&answer.changed,&answer.nodes).await;
+    Ok(())
 }
 
 /// The text a `channel` sink sends: its node's string output, or its JSON.
@@ -2727,57 +2884,60 @@ pub fn sink_text(output: &Value) -> Option<String> {
     Some(text.chars().take(4000).collect())
 }
 
-/// §4.5: a `channel` sink whose node's outcome changed sends its text,
-/// through the same path as an inbox reply (liaison, a `write` warrant, the
-/// message recorded with its sender). An unrelated recompute changes
-/// nothing here, so sends nothing.
-async fn send_channel_sinks(ctx: &Ctx, cells: &[CellRow], changed: &[GraphNode]) {
-    for c in cells
-        .iter()
-        .filter(|c| c.cell.cell_type == CellType::ChannelSink)
-    {
-        let Some(function) = c
-            .cell
-            .implementation
-            .as_ref()
-            .and_then(|i| i.function.clone())
-        else {
-            continue;
-        };
-        let Some(output) = changed
-            .iter()
-            .find(|n| n.function.as_deref() == Some(function.as_str()))
-            .and_then(|n| n.outcome.as_ref())
-            .and_then(|o| o.output.as_ref())
-        else {
-            continue;
-        };
-        let (Some(text), Some(channel_id)) =
-            (sink_text(output), c.cell.config.channel_id.as_deref())
-        else {
-            continue;
-        };
-        let recipient = c.cell.config.recipient.clone().unwrap_or_default();
-        if let Err(e) = channels::send_scoped(
-            &ctx.org,
-            &ctx.user,
-            &ctx.project.slug,
-            channel_id,
-            &recipient,
-            &text,
-            &c.cell.config.connectors,
-            Some(&c.cell.id),
-        )
-        .await
-        {
-            eprintln!(
-                "channel sink {} of graph {} could not send: {}",
-                c.cell.name,
-                ctx.row.graph.id,
-                err_text(&e)
-            );
+/// Preserve every emission in runtime order, including repeated node IDs in a
+/// producer burst. Outbox rows and graph state commit in the same transaction.
+async fn enqueue_deliveries(ctx:&Ctx,cells:&[CellRow],changed:&[GraphNode],update:&str,tx:&mut sqlx::Transaction<'_,sqlx::Postgres>)->Result<(),String>{
+    for (index,node) in changed.iter().enumerate(){
+        if node.function.is_none(){continue;}
+        let Some(output)=node.outcome.as_ref().and_then(|o|o.output.as_ref())else{continue;};
+        let Some(text)=sink_text(output)else{continue;};
+        for row in cells.iter().filter(|c|c.cell.cell_type==CellType::ChannelSink && c.cell.implementation.as_ref().and_then(|i|i.function.as_deref())==node.function.as_deref()){
+            let Some(channel)=row.cell.config.channel_id.as_deref()else{continue;};
+            sqlx::query("insert into graph_delivery_outbox(graph_id,update_id,emission_index,cell_id,actor_id,channel_id,recipient,body,runtime_revision) values($1::uuid,$2::uuid,$3,$4::uuid,$5::uuid,$6::uuid,$7,$8,$9) on conflict do nothing")
+                .bind(&ctx.row.graph.id).bind(update).bind(index as i32).bind(&row.cell.id).bind(&ctx.user.id).bind(channel)
+                .bind(row.cell.config.recipient.as_deref().unwrap_or("")).bind(&text).bind(ctx.row.runtime_revision).execute(&mut **tx).await.map_err(|e|e.to_string())?;
         }
     }
+    Ok(())
+}
+
+pub(super) async fn tick_deliveries(){
+    let Ok(pool)=pool()else{return;};
+    let _=sqlx::query("update graph_delivery_outbox set state='uncertain',finished_at=now(),detail='Delivery response was not recorded; reconcile before an explicit restart. No automatic resend.' where state='sending' and started_at<now()-interval '15 minutes'").execute(pool).await;
+    let Ok(rows)=sqlx::query("select distinct graph_id::text as graph from graph_delivery_outbox where state='pending' limit 8").fetch_all(pool).await else{return;};
+    for row in rows{drain_deliveries(&row.get::<String,_>("graph")).await;}
+}
+
+async fn drain_deliveries(graph:&str){
+    if let Err(e)=drain_deliveries_checked(graph).await{eprintln!("outbox: project {graph}: {e}");}
+}
+
+async fn drain_deliveries_checked(graph:&str)->Result<(),String>{
+    let pool=pool().map_err(|e|err_text(&e))?;
+    let mut guard=pool.begin().await.map_err(|e|e.to_string())?;
+    if !sqlx::query("select pg_try_advisory_xact_lock(hashtextextended($1,6)) as held").bind(graph).fetch_one(&mut *guard).await.map_err(|e|e.to_string())?.get::<bool,_>("held"){return Ok(());}
+    let blocked=sqlx::query("select 1 from graph_delivery_outbox where graph_id=$1::uuid and state in ('sending','uncertain') limit 1").bind(graph).fetch_optional(pool).await.map_err(|e|e.to_string())?.is_some();
+    if blocked{return Ok(());}
+    let rows=sqlx::query("select id::text as id,cell_id::text as cell,actor_id::text as actor,channel_id::text as channel,recipient,body from graph_delivery_outbox where graph_id=$1::uuid and state='pending' order by runtime_revision,emission_index,id limit 256").bind(graph).fetch_all(pool).await.map_err(|e|e.to_string())?;
+    for row in rows{
+        let id=row.get::<String,_>("id");
+        let result=async{
+            let ctx=background_ctx(graph).await?;
+            let cells=cells_of(graph).await.map_err(|e|err_text(&e))?;
+            let cell=row.get::<String,_>("cell");let channel=row.get::<String,_>("channel");let recipient=row.get::<String,_>("recipient");
+            let current=cells.iter().find(|c|c.cell.id==cell && c.cell.cell_type==CellType::ChannelSink).ok_or("delivery note was removed or changed")?;
+            if row.get::<Option<String>,_>("actor").as_deref()!=Some(ctx.user.id.as_str()) || current.cell.config.channel_id.as_deref()!=Some(&channel) || current.cell.config.recipient.as_deref().unwrap_or("")!=recipient {
+                return Err("delivery actor or destination changed".to_string());
+            }
+            sqlx::query("update graph_delivery_outbox set state='sending',started_at=now() where id=$1::uuid and state='pending'").bind(&id).execute(pool).await.map_err(|e|e.to_string())?;
+            channels::send_scoped(&ctx.org,&ctx.user,&ctx.project.slug,&channel,&recipient,&row.get::<String,_>("body"),&current.cell.config.connectors,Some(&cell)).await.map_err(|e|err_text(&e))?;
+            Ok::<_,String>(())
+        }.await;
+        let (state,detail)=match result{Ok(())=>("sent",String::new()),Err(e)=>("uncertain",e)};
+        sqlx::query("update graph_delivery_outbox set state=case when state='pending' and $2='uncertain' then 'cancelled' else $2 end,detail=$3,finished_at=now() where id=$1::uuid and state in ('pending','sending')").bind(&id).bind(state).bind(&detail).execute(pool).await.map_err(|e|e.to_string())?;
+        if state=="uncertain"{break;}
+    }
+    guard.commit().await.map_err(|e|e.to_string())
 }
 
 /// A `ui` source's widget changed: feed it.
@@ -2828,12 +2988,22 @@ pub async fn restart_session(
 ) -> Result<FeedResult, ServerFnError> {
     let mut ctx = member_ctx(org, user, project_slug, graph_slug).await?;
     if ctx.row.session_build_id.is_none() {
-        return Err(conflict("the notebook is not built yet"));
+        return Err(conflict("the project is not built yet"));
     }
     if let Some(old) = ctx.row.lun_session_id.clone() {
         lun::end(&old).await;
     }
-    let answer = register(&mut ctx).await.map_err(bad_gateway)?;
+    // This is an explicit member action, not an automatic retry of an uncertain
+    // effect. Keep the old run history and deliberately abandon its continuation.
+    let mut tx=runtime_lock(&ctx.row.graph.id).await.map_err(bad_gateway)?;
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1,6))").bind(&ctx.row.graph.id).execute(&mut *tx).await.map_err(db_error)?;
+    reload(&mut ctx).await?;
+    sqlx::query("update scheduled_runs set state='cancelled',finished_at=now(),detail='Explicit member restart abandoned this occurrence; prior effects require caller reconciliation' where graph_id=$1::uuid and state in ('queued','running','input_ready','uncertain')")
+        .bind(&ctx.row.graph.id).execute(&mut *tx).await.map_err(db_error)?;
+    sqlx::query("update graph_delivery_outbox set state='cancelled',finished_at=now(),detail='Explicit member restart abandoned pending deliveries; prior sends require caller reconciliation' where graph_id=$1::uuid and state in ('pending','sending','uncertain')").bind(&ctx.row.graph.id).execute(&mut *tx).await.map_err(db_error)?;
+    let answer = register_locked(&mut ctx,&mut tx).await.map_err(bad_gateway)?;
+    tx.commit().await.map_err(db_error)?;
+    drain_deliveries(&ctx.row.graph.id).await;
     if ctx.row.graph.status == "ready" {
         set_status(&ctx.row.graph.id, "ready", None).await?;
     }

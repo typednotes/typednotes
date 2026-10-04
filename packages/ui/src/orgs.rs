@@ -22,6 +22,7 @@ pub fn OrgsPanel() -> Element {
 
         div { class: "orgs",
             StatusLine { health: status().and_then(|r| r.ok()) }
+            crate::onboarding::FirstProjectSetup {}
 
             NewOrgForm { on_created: move |_| orgs.restart() }
 
@@ -69,16 +70,16 @@ fn StatusLine(health: Option<api::Health>) -> Element {
         missing.push("credential broker not configured (no tests)");
     }
     if h.database && h.schema && !h.computations {
-        missing.push("computations schema not applied (no notebooks)");
+        missing.push("computations schema not applied (no project notes)");
     }
     if !h.lode {
-        missing.push("code writing not configured (notebooks cannot be implemented)");
+        missing.push("code writing not configured (notes cannot be implemented)");
     }
     if !h.lun {
-        missing.push("code runtime not configured (notebooks cannot run)");
+        missing.push("code runtime not configured (notes cannot run)");
     }
     if !h.compute {
-        missing.push("notebook database not configured (no database sinks)");
+        missing.push("actor database not configured (no database sinks)");
     }
     let class = if !h.database || !h.schema {
         "err"

@@ -5,9 +5,9 @@
 //! dependencies shown per cell.
 
 use api::{
-    abort_graph, add_cell, cell_code, cell_phase, current_user, delete_cell, delete_graph,
+    abort_graph, add_cell, cell_code, cell_phase, current_user, delete_cell,
     dependencies, describe_config, feed_cell, get_graph, graph_progress, implement_graph,
-    list_connections, list_graphs, mentions, move_cell, node_label, node_of, rebuild_graph,
+    list_connections, mentions, move_cell, node_label, node_of, rebuild_graph,
     report_cell, restart_graph, rotate_endpoint, set_cell_secret, set_graph_model, update_cell,
     validate_cell, widget_for, Cell, CellConfig, CellPhase, CellType, Channel, Connection,
     FeedResult, Graph, GraphDetail, GraphNode, LodeEntry, Provider, Widget, UI_FORMATS,
@@ -27,8 +27,7 @@ use crate::components::textarea::Textarea;
 use crate::connections::{PermissionEditor, CONNECTIONS_CSS};
 use crate::orgs::ORGS_CSS;
 use crate::render::{pretty, JsonView, Output};
-use crate::slug_form::{NewSlugForm, Scope};
-use crate::{error_message, navigate_to};
+use crate::error_message;
 
 pub(crate) const NOTEBOOK_CSS: Asset = asset!("/assets/styling/notebook.css");
 
@@ -63,56 +62,6 @@ fn status_class(status: &str) -> &'static str {
     }
 }
 
-// ── The project's notebooks ─────────────────────────────────────────────
-
-#[component]
-pub(crate) fn GraphsPanel(slug: ReadSignal<String>, project: ReadSignal<String>) -> Element {
-    let mut graphs = use_server_future(move || list_graphs(slug(), project()))?;
-    rsx! {
-        Card {
-            CardHeader {
-                CardTitle { "Notebooks" }
-                CardDescription {
-                    "Cells in plain language, implemented as typed Lean functions in the primary "
-                    "repository, and run as a reactive graph."
-                }
-            }
-            CardContent {
-                match graphs() {
-                    None => rsx! { p { "Loading…" } },
-                    Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load notebooks: {error_message(&e)}" } },
-                    Some(Ok(list)) if list.is_empty() => rsx! { p { class: "orgs-empty", "No notebook yet — create one below." } },
-                    Some(Ok(list)) => rsx! {
-                        table { class: "orgs-table",
-                            thead { tr { th { "Slug" } th { "Name" } th { "Status" } th { "Updated" } } }
-                            tbody {
-                                for g in list {
-                                    tr { key: "{g.id}",
-                                        td { Link { to: "/orgs/{slug}/projects/{project}/graphs/{g.slug}", code { "{g.slug}" } } }
-                                        td { "{g.name}" }
-                                        td { span { class: status_class(&g.status), "{g.status}" } }
-                                        td { "{g.updated_at}" }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                }
-                h4 { class: "projects-new", "New notebook" }
-                NewSlugForm {
-                    scope: Scope::Graph { org: slug(), project: project() },
-                    name_placeholder: "Invoices",
-                    slug_placeholder: "invoices",
-                    on_created: move |created: String| {
-                        graphs.restart();
-                        navigate_to(&format!("/orgs/{}/projects/{}/graphs/{created}", slug(), project()));
-                    },
-                }
-            }
-        }
-    }
-}
-
 // ── The notebook page ───────────────────────────────────────────────────
 
 #[component]
@@ -122,13 +71,14 @@ pub fn NotebookPage(
     graph: ReadSignal<String>,
 ) -> Element {
     let me = use_server_future(current_user)?;
-    let mut detail = use_server_future(move || get_graph(slug(), project(), graph()))?;
+    let mut detail = use_server_future(move || async move {if graph().is_empty(){api::get_project_notes(slug(),project()).await}else{get_graph(slug(), project(), graph()).await}})?;
     let connections = use_server_future(move || list_connections(slug()))?;
 
     // lode's log and the notebook's live status, followed while it is
     // implementing: the server holds each request until lode has news.
     let mut log = use_signal(Vec::<LodeEntry>::new);
     let mut next = use_signal(|| 0u64);
+    let mut question=use_signal(||None::<api::WriterQuestion>);
     let mut live = use_signal(|| None::<Graph>);
     // The nodes of the last feed, over the page's (keyed by the page's
     // `updated_at`, so a reload supersedes them): feeding an input updates
@@ -144,6 +94,7 @@ pub fn NotebookPage(
         loop {
             match graph_progress(slug(), project(), graph(), next(), 20).await {
                 Ok(p) => {
+                    question.set(p.question.clone());
                     let from = next();
                     log.write()
                         .extend(p.entries.into_iter().filter(|e| e.index >= from));
@@ -200,10 +151,9 @@ pub fn NotebookPage(
         document::Link { rel: "stylesheet", href: CONNECTIONS_CSS }
         document::Link { rel: "stylesheet", href: NOTEBOOK_CSS }
         div { class: "orgs nb",
-            p { class: "back-link", Link { to: "/orgs/{slug}/projects/{project}", "← Project" } }
             match detail() {
                 None => rsx! { p { "Loading…" } },
-                Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load this notebook: {error_message(&e)}" } },
+                Some(Err(e)) => rsx! { p { class: "orgs-error", "Could not load project notes: {error_message(&e)}" } },
                 Some(Ok(d)) => {
                     let current = live().filter(|g| g.id == d.graph.id && g.updated_at >= d.graph.updated_at).unwrap_or(d.graph.clone());
                     rsx! {
@@ -219,6 +169,7 @@ pub fn NotebookPage(
                         if !log().is_empty() || current.status=="implementing" {
                             LodeLog { entries: log(), running: current.status == "implementing" }
                         }
+                        if let Some(pending)=question(){WriterQuestion{slug:slug(),project:project(),pending,on_started:started}}
                         Cells {
                             slug: slug(),
                             project: project(),
@@ -251,6 +202,18 @@ pub fn NotebookPage(
 }
 
 #[component]
+fn WriterQuestion(slug:String,project:String,pending:api::WriterQuestion,on_started:EventHandler<Graph>)->Element{
+    let mut value=use_signal(String::new);let mut error=use_signal(||None::<String>);let mut busy=use_signal(||false);
+    rsx!{Card{CardHeader{CardTitle{"The code writer needs your input"}CardDescription{"Work is paused. Your answer does not expand project permissions."}}
+        CardContent{p{"{pending.question.text}"}
+            div{class:"conn-actions",for option in &pending.question.options{Button{variant:ButtonVariant::Outline,disabled:busy(),onclick:{let option=option.clone();move |_|value.set(option.clone())},"{option}"}}}
+            if pending.question.free_text{Textarea{id:"writer-answer",value:value(),oninput:move |e:FormEvent|value.set(e.value()),rows:3}}
+            Button{disabled:busy()||value().trim().is_empty(),onclick:move |_|{let(slug,project,id)=(slug.clone(),project.clone(),pending.id.clone());async move{busy.set(true);match api::answer_project_question(slug,project,id,value()).await{Ok(g)=>on_started.call(g),Err(e)=>error.set(Some(error_message(&e)))}busy.set(false);}},"Answer and continue"}
+            if let Some(e)=error(){p{class:"orgs-error",role:"alert","{e}"}}
+        }}}
+}
+
+#[component]
 fn Header(
     slug: String,
     project: String,
@@ -263,7 +226,6 @@ fn Header(
     let mut note = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
-    let mut confirming = use_signal(|| false);
     let implementing = graph.status == "implementing";
     let g = detail.graph.slug.clone();
 
@@ -312,32 +274,13 @@ fn Header(
         }
     };
     let (abort, rebuild, restart) = (act.clone(), act.clone(), act);
-    let delete = {
-        let (slug, project, g) = (slug.clone(), project.clone(), g.clone());
-        move |_| {
-            let (slug, project, g) = (slug.clone(), project.clone(), g.clone());
-            async move {
-                if !confirming() {
-                    confirming.set(true);
-                    return;
-                }
-                match delete_graph(slug.clone(), project.clone(), g).await {
-                    Ok(()) => navigate_to(&format!("/orgs/{slug}/projects/{project}")),
-                    Err(e) => {
-                        error.set(Some(error_message(&e)));
-                        confirming.set(false);
-                    }
-                }
-            }
-        }
-    };
 
     rsx! {
         Card {
             CardHeader {
-                CardTitle { title: "Notebook: the basic work unit, a reactive graph of described cells, inputs and outputs.", "{detail.graph.name}" }
+                CardTitle { title: "Project notes: descriptions, inputs and outputs compiled as a typed reactive program.", "Notes" }
                 CardDescription {
-                    code { "{detail.org.slug}/{detail.project.slug}/{detail.graph.slug}" }
+                    code { "{detail.org.slug}/{detail.project.slug}" }
                     " · "
                     span { class: status_class(&graph.status), "{graph.status}" }
                     if let Some(commit) = graph.commit.clone() {
@@ -356,21 +299,11 @@ fn Header(
                 }
                 if detail.project.repo.is_none() {
                     p { class: "orgs-error",
-                        "Set the project's primary repository first: the notebook's code is written there. "
+                        "Choose the project's repository first: note code is written there. "
                         Link { to: "/orgs/{slug}/projects/{project}/settings/repository", "Choose one in the project's settings" }
                     }
                 }
-                details { class: "nb-advanced nb-setup", open: detail.graph.model_name.is_none(),
-                    summary { title: "AI model, token costs and default-workspace settings.", "Notebook setup" }
-                ModelPicker {
-                    slug: slug.clone(),
-                    project: project.clone(),
-                    graph: detail.graph.clone(),
-                    ai,
-                    on_changed: move |_| on_changed.call(()),
-                }
-                Link { to: "/settings", "Choose your default workspace" }
-                }
+                Link {to:"/orgs/{slug}/projects/{project}/settings/model","Project model and permissions"}
                 div { class: "conn-subform",
                     details { class: "nb-advanced", open: implementing,
                         summary { "Writing instructions" }
@@ -381,7 +314,7 @@ fn Header(
                         Textarea {
                             id: "nb-note",
                             rows: 2,
-                            placeholder: if implementing { "Use cents, not floats." } else { "Anything to know beyond the cells." },
+                            placeholder: if implementing { "Use cents, not floats." } else { "Anything to know beyond the notes." },
                             value: note(),
                             oninput: move |e: FormEvent| note.set(e.value()),
                         }
@@ -406,18 +339,10 @@ fn Header(
                                 "Rebuild from the repository"
                             }
                             if graph.status == "ready" {
-                                Button { variant: ButtonVariant::Outline, disabled: busy(), onclick: move |_| restart("restart"), "Restart session" }
+                                Button { variant: ButtonVariant::Outline, disabled: busy(), onclick: move |_| restart("restart"), "Restart project runtime" }
+                                p { class:"conn-meta", "An explicit restart abandons pending continuations and starts from recorded inputs. Review uncertain scheduled outcomes first: external effects may already have happened." }
                             }
                             }
-                        }
-                        details { class: "nb-advanced nb-danger",
-                            summary { "Delete notebook" }
-                        Button {
-                            size: ButtonSize::Sm,
-                            variant: if confirming() { ButtonVariant::Destructive } else { ButtonVariant::Ghost },
-                            onclick: delete,
-                            if confirming() { "Confirm: delete the notebook, its cells and secrets" } else { "Delete notebook" }
-                        }
                         }
                     }
                 }
@@ -484,7 +409,7 @@ pub(crate) fn ModelPicker(
         }
     };
     rsx! {
-        div { class: "conn-picker",
+        div { class: "conn-picker project-model-picker",
             div { class: "orgs-field conn-select",
                 Label { html_for: "nb-model-conn", "Model through" }
                 Select::<String> {
@@ -507,7 +432,8 @@ pub(crate) fn ModelPicker(
                 }
             }
             div { class: "orgs-field",
-                crate::ai_models::ModelPicker { key: "{connection}", slug: model_slug.clone(), connection_id: connection(), value: model, disabled: graph.status == "implementing" }
+                Label { html_for: "project-model", "Model" }
+                crate::ai_models::ModelPicker { key: "{connection}", id:"project-model", slug: model_slug.clone(), connection_id: connection(), value: model, disabled: graph.status == "implementing" }
             }
             Button { variant: ButtonVariant::Outline, disabled: model().trim().is_empty() || graph.status == "implementing", onclick: save, "Save model" }
         }
@@ -581,9 +507,9 @@ fn Cells(
     rsx! {
         Card {
             CardHeader {
-                CardTitle { "Cells" }
+                CardTitle { "Project notes" }
                 CardDescription {
-                    "Describe each node in plain language. Sources bring the world in, sinks send results out; "
+                    "Describe each note in plain language. Source notes bring the world in, sink notes send results out; "
                     "Typednotes writes their code and runs them as one graph."
                 }
             }
@@ -592,19 +518,19 @@ fn Cells(
                 div { class: "nb-toolbar",
                     div { class: "conn-select",
                         Select::<CellOrder> {
-                            value: Some(selected_order), aria_label: "Cell order",
+                            value: Some(selected_order), aria_label: "Note order",
                             on_value_change: move |value: Option<CellOrder>| { if let Some(value) = value { order.set(value); } },
                             SelectOption::<CellOrder> { index: 0usize, value: CellOrder::Declaration, text_value: "Declaration order", "Declaration order" }
                             SelectOption::<CellOrder> { index: 1usize, value: CellOrder::Name, text_value: "Name", "Name" }
                             SelectOption::<CellOrder> { index: 2usize, value: CellOrder::Topological, text_value: "Dependency order", "Dependency order" }
                         }
                     }
-                    Button { variant: if !diagram() { ButtonVariant::Secondary } else { ButtonVariant::Ghost }, aria_pressed: (!diagram()).to_string(), onclick: move |_| diagram.set(false), "Notebook" }
+                    Button { variant: if !diagram() { ButtonVariant::Secondary } else { ButtonVariant::Ghost }, aria_pressed: (!diagram()).to_string(), onclick: move |_| diagram.set(false), "Notes" }
                     Button { variant: if diagram() { ButtonVariant::Secondary } else { ButtonVariant::Ghost }, aria_pressed: diagram().to_string(), onclick: move |_| diagram.set(true), "Dependency graph" }
                 }
                 }
                 if detail.cells.is_empty() {
-                    p { class: "orgs-empty", "No cell yet — add the first one below." }
+                    p { class: "orgs-empty", "No notes yet — describe the first one below." }
                 }
                 if diagram() && !detail.cells.is_empty() {
                     DependencyGraph { cells: detail.cells.clone(), nodes: nodes.clone(), on_select: move |id: String| selected.set(Some(id)) }
@@ -637,7 +563,7 @@ fn Cells(
                         }
                     }
                 }
-                details { class: "nb-advanced nb-add-cell", open: detail.cells.is_empty(), summary { "Add a cell" }
+                details { class: "nb-advanced nb-add-cell", open: detail.cells.is_empty(), summary { "Add a note" }
                 CellEditor {
                     slug: slug.clone(),
                     project: project.clone(),
@@ -676,8 +602,8 @@ fn DependencyGraph(cells: Vec<Cell>, nodes: Vec<GraphNode>, on_select: EventHand
     let height = 48 + rows.values().copied().max().unwrap_or(1) * 100;
     rsx! {
         div { class: "nb-graph-wrap",
-            p { class: "conn-meta", "Arrows run from an input cell to the cells that use it. Select a cell to edit it below." }
-            svg { class: "nb-dependency-graph", view_box: "0 0 {width} {height}", width: "{width}", height: "{height}", role: "group", "aria-label": "Notebook cell dependencies",
+            p { class: "conn-meta", "Arrows connect an input note to notes that use it. Select a note to edit it below." }
+            svg { class: "nb-dependency-graph", view_box: "0 0 {width} {height}", width: "{width}", height: "{height}", role: "group", "aria-label": "Project note dependencies",
                 defs { marker { id: "nb-arrow", view_box: "0 0 10 10", ref_x: "9", ref_y: "5", marker_width: "6", marker_height: "6", orient: "auto-start-reverse", path { d: "M 0 0 L 10 5 L 0 10 z" } } }
                 for cell in &sorted {
                     for name in cell_dependencies(cell, &cells, &nodes) {
@@ -688,7 +614,7 @@ fn DependencyGraph(cells: Vec<Cell>, nodes: Vec<GraphNode>, on_select: EventHand
                 }
                 for cell in &sorted {
                     if let Some((x, y)) = positions.get(&cell.name) {
-                        g { class: "nb-graph-link", role: "button", tabindex: "0", "aria-label": "Go to cell {cell.name}",
+                        g { class: "nb-graph-link", role: "button", tabindex: "0", "aria-label": "Go to note {cell.name}",
                             onclick: { let id = cell.id.clone(); move |_| on_select.call(id.clone()) },
                             onkeydown: { let id = cell.id.clone(); move |event: KeyboardEvent| {
                                 if event.key() == Key::Enter || event.key() == Key::Character(" ".into()) {
@@ -1013,7 +939,7 @@ fn Lifecycle(
                 }
                 if cell.cell_type.has_function() {
                     Button { size: ButtonSize::Sm, variant: ButtonVariant::Outline, disabled: busy() || implementing,
-                        onclick: move |_| regenerate("Regenerate this cell's code from its current description, dependencies, output type and permissions.".into()),
+                        onclick: move |_| regenerate("Regenerate this note's code from its description, inputs, output type and project permissions.".into()),
                         "Regenerate code" }
                 }
             }
@@ -1022,10 +948,10 @@ fn Lifecycle(
             }
             match phase {
                 CellPhase::NoCode if !implementing => rsx! {
-                    p { class: "conn-meta", "Implement the notebook: its code is written from its description." }
+                    p { class: "conn-meta", "Generate project code from your note descriptions." }
                 },
                 CellPhase::NoCode => rsx! {
-                    p { class: "conn-meta", "Other cells are being written; implement again to include this one." }
+                    p { class: "conn-meta", "Other notes are being written; regenerate to include this one." }
                 },
                 CellPhase::Failed => rsx! {
                     div { class: "conn-actions",
@@ -1133,7 +1059,7 @@ fn WritingView(
                         p { class: "conn-meta", "The code as it is being written (not published yet):" }
                         pre { class: "nb-code nb-diff", {diff_lines(&draft)} }
                     },
-                    None => rsx! { p { class: "conn-meta", "No unpublished code mentions this cell yet." } },
+                    None => rsx! { p { class: "conn-meta", "No unpublished code mentions this note yet." } },
                 },
                 Some(Err(e)) => rsx! { p { class: "orgs-error", "{e}" } },
                 None => rsx! { p { class: "conn-meta", "Reading the changes…" } },
@@ -1146,7 +1072,7 @@ fn WritingView(
                     size: ButtonSize::Sm,
                     variant: ButtonVariant::Ghost,
                     onclick: move |_| whole.set(!whole()),
-                    if whole() { "Only this cell" } else { "The whole run ({run.len()})" }
+                    if whole() { "Only this note" } else { "The whole run ({run.len()})" }
                 }
             }
             if shown.is_empty() {
@@ -1422,7 +1348,7 @@ fn InputWidget(
     rsx! {
         div { class: "nb-widget",
             if cell.stale {
-                p { class: "conn-meta", "Values feed the current built input type. Regenerate the notebook to adopt a changed source type." }
+                p { class: "conn-meta", "Values feed the current input type. Regenerate project code to adopt a changed source type." }
             }
             match widget.clone() {
                 Widget::Toggle => {
@@ -1488,7 +1414,7 @@ fn InputWidget(
                 },
             }
             if !ready {
-                p { class: "conn-meta", "Implement the notebook to feed its inputs." }
+                p { class: "conn-meta", "Generate project code to feed its source notes." }
             }
             if let Some(e) = error() {
                 p { class: "orgs-error", "{e}" }
@@ -1578,7 +1504,7 @@ fn EndpointBox(slug: String, project: String, graph: String, cell: Cell) -> Elem
             EndpointUrl { url: u }
         } else {
             p { class: "conn-meta",
-                if cell.has_endpoint { "POST JSON to this cell's URL (shown once, when it was made)." } else { "No URL yet." }
+                if cell.has_endpoint { "POST JSON to this source note's URL (shown once, when created)." } else { "No URL yet." }
             }
         }
         div { class: "conn-actions",
@@ -1679,8 +1605,6 @@ fn CellEditor(
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     let mut shown_url = use_signal(|| None::<String>);
-    let policy_slug = slug.clone();
-    let permissions = use_server_future(move || api::get_org_settings(policy_slug.clone()))?;
     let editing = existing.is_some();
     let prefix = existing
         .as_ref()
@@ -1762,12 +1686,12 @@ fn CellEditor(
     let t = cell_type();
     rsx! {
         form { class: "conn-section nb-editor", onsubmit: submit,
-            h4 { if editing { "Edit the cell" } else { "Add a cell" } }
+            h4 { if editing { "Edit note" } else { "Add a note" } }
             if !editing {
                 div { class: "conn-select conn-select-wide",
                     Select::<CellType> {
                         value: Some(selected_kind), disabled: busy(),
-                        aria_label: "Kind of cell",
+                        aria_label: "Kind of note",
                         on_value_change: move |v: Option<CellType>| {
                             if let Some(v) = v {
                                 cell_type.set(v);
@@ -1803,9 +1727,9 @@ fn CellEditor(
             }
             if !t.is_source() {
                 div { class: "orgs-field conn-wide",
-                    Label { html_for: "{prefix}-dependencies", "Input cells (in argument order)" }
+                    Label { html_for: "{prefix}-dependencies", "Input notes (in argument order)" }
                     Input { id: "{prefix}-dependencies", placeholder: "price, tax", value: dependency_names(), oninput: move |e: FormEvent| dependency_names.set(e.value()) }
-                    p { class: "conn-meta", "Refer to cells by name, or write @cell_name in the description. Leave empty for no dependencies." }
+                    p { class: "conn-meta", "Refer to notes by name, or write @note_name in the description. Leave empty for no inputs." }
                     div { class: "nb-reference-picker",
                         for other in cells.iter().filter(|c| Some(&c.id) != existing.as_ref().map(|e| &e.id) && c.cell_type != CellType::Secret) {
                             Button { r#type: "button", size: ButtonSize::Sm, variant: ButtonVariant::Ghost,
@@ -1825,7 +1749,7 @@ fn CellEditor(
                     Label { html_for: "{prefix}-output-type", "Output type (optional Lean 4 constraint)" }
                     Input { id: "{prefix}-output-type", placeholder: "Nat, String, List Invoice…", value: output_type(), oninput: move |e: FormEvent| output_type.set(e.value()) }
                     p { class: "conn-meta",
-                        if t.has_function() { "Argument types come from the input cells. The generated function must return Eff effs T with this output type." }
+                        if t.has_function() { "Argument types come from input notes. Generated code must preserve this output type." }
                         else { "Constrains the source's input value and widget. The runtime must validate fed values against this Lean type." }
                     }
                 }
@@ -1855,7 +1779,7 @@ fn CellEditor(
                         Label { html_for: "{prefix}-secret", "Secret name" }
                         Input { id: "{prefix}-secret", placeholder: "pricing_api_key", value: secret(), oninput: move |e: FormEvent| secret.set(e.value()) }
                     }
-                    p { class: "conn-meta", "Set the value once the cell exists; it goes to the vault and is never shown again." }
+                    p { class: "conn-meta", "Set the value after creating this source note. It goes to the vault and is never shown again." }
                 },
                 CellType::ChannelSource | CellType::ChannelSink => rsx! {
                     if channels.is_empty() {
@@ -1889,7 +1813,7 @@ fn CellEditor(
                         Label { html_for: "{prefix}-table", "Table" }
                         Input { id: "{prefix}-table", placeholder: "totals", value: table(), oninput: move |e: FormEvent| table.set(e.value()) }
                     }
-                    p { class: "conn-meta", "In your own database schema: only your notebooks, as you, can write there." }
+                    p { class: "conn-meta", "In your actor-bound database schema, within project permissions." }
                 },
                 CellType::HttpSink => rsx! {
                     div { class: "orgs-field conn-wide",
@@ -1943,14 +1867,9 @@ fn CellEditor(
                 },
                 _ => rsx! {},
             }
-            if t != CellType::Secret {
-                CellConnections { connections: connections.clone(), value: connectors(), id: prefix.clone(), disabled: busy(),
-                    policy: permissions().and_then(Result::ok).map(|s| s.effect_policy),
-                    storage_scope: if t == CellType::StorageSink { Some((connection(), path())) } else { None },
-                    on_change: move |value: Vec<CellConnector>| connectors.set(value) }
-            }
+            p {class:"conn-meta","All notes use the project's operation and resource permissions."}
             div { class: "conn-actions",
-                Button { r#type: "submit", disabled: busy(), if editing { "Save" } else { "Add cell" } }
+                Button { r#type: "submit", disabled: busy(), if editing { "Save note" } else { "Add note" } }
                 if let Some(cancel) = on_cancel {
                     Button { r#type: "button", variant: ButtonVariant::Ghost, onclick: move |_| cancel.call(()), "Cancel" }
                 }
@@ -1966,11 +1885,11 @@ fn CellEditor(
 }
 
 #[component]
-fn CellConnections(connections: Vec<Connection>, value: Vec<CellConnector>, id: String, disabled: bool, policy: Option<api::EffectPolicy>, storage_scope: Option<(String, String)>, on_change: EventHandler<Vec<CellConnector>>) -> Element {
+pub(crate) fn CellConnections(connections: Vec<Connection>, value: Vec<CellConnector>, id: String, disabled: bool, policy: Option<api::EffectPolicy>, storage_scope: Option<(String, String)>, on_change: EventHandler<Vec<CellConnector>>) -> Element {
     rsx! {
         details { class: "cell-connections",
-            summary { "Connections for this cell ({value.len()})" }
-            p { class: "conn-meta", "Select the accounts this cell may use. Permissions inherit each connection's ceiling; Advanced can narrow operations and resources. Organization policy and runtime warrants remain upper bounds." }
+            summary { "Project connections ({value.len()})" }
+            p { class: "conn-meta", "Select accounts available to all project notes. Operation and resource scopes stay below organization, connection and runtime-warrant ceilings." }
             if connections.is_empty() { p { class: "conn-meta", "No connections available. Add one in the organization's connection settings." } }
             for connection in &connections {
                 {let parent = connection.permissions.clone().unwrap_or_else(|| ConnectorPermissions::preset(connection.provider, PermissionPreset::ReadOnly));
@@ -2004,7 +1923,7 @@ fn CellConnections(connections: Vec<Connection>, value: Vec<CellConnector>, id: 
                                 } }, "Use configured object: {path}" }
                         }
                     }
-                    if !allowed { p { class: "conn-meta", "Disabled by organization notebook permissions." } }
+                    if !allowed { p { class: "conn-meta", "Disabled by organization execution permissions." } }
                 }
                 }}
             }

@@ -250,7 +250,7 @@ impl ConnectorPermissions {
         if requested.max_request_bytes > self.max_request_bytes || requested.max_response_bytes > self.max_response_bytes
             || requested.scopes.iter().any(|grant| !self.scopes.iter().any(|parent| parent.operation == grant.operation &&
                 if parent.descendants { grant.root.starts_with(&parent.root) } else { !grant.descendants && grant.root == parent.root })) {
-            return Err("a cell cannot widen its connection permissions".into());
+            return Err("requested note/project grants cannot widen connection permissions".into());
         }
         Ok(requested.clone())
     }
