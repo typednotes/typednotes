@@ -789,6 +789,7 @@ def main():
     parser.add_argument("--app-port", type=int, default=18754)
     parser.add_argument("--pg-port", type=int, default=55459)
     parser.add_argument("--mock-port", type=int, default=58310)
+    parser.add_argument("--paired-only", action="store_true", help="Run only the hosted QR pairing browser checks")
     parser.add_argument("--pg-bin", type=Path, default=Path("/opt/homebrew/opt/postgresql@16/bin") if Path("/opt/homebrew/opt/postgresql@16/bin/postgres").exists() else None, help="Directory with a complete PostgreSQL server installation")
     parser.add_argument("--output-parent", type=Path, default=Path(tempfile.gettempdir()) / "opencode")
     parser.add_argument("--cleanup-fixture", type=Path, help="Remove only a stopped fixture's PostgreSQL data, preserving screenshots/logs")
@@ -894,8 +895,12 @@ def main():
             context = browser.new_context(viewport={"width": 1280, "height": 900})
             page = context.new_page()
             try:
-                from project_notes_cases import verify_project_notes
-                verify_project_notes(page,context,app,output,SQL,STATE,USER,TOKEN,ORG,PROJECT,GRAPH,GH)
+                context.add_cookies([{"name":"tn_session","value":TOKEN,"url":app}])
+                if not args.paired_only:
+                    from project_notes_cases import verify_project_notes
+                    verify_project_notes(page,context,app,output,SQL,STATE,USER,TOKEN,ORG,PROJECT,GRAPH,GH)
+                from paired_ui_cases import verify_pairing_ui
+                verify_pairing_ui(page,app,output)
             except Exception:
                 page.screenshot(path=str(output / "failure.png"), full_page=True)
                 output.joinpath("failure-dom.html").write_text(page.content())

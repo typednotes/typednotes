@@ -106,7 +106,7 @@ async fn project_resources(tx: &mut Tx, org: &str, owner: Option<&str>) -> Resul
 }
 
 async fn private_resources(tx: &mut Tx, org: &str, owner: Option<&str>) -> Result<(), ServerFnError> {
-    let rows = sqlx::query("select id::text as id, user_id::text as owner, provider from connections \
+    let rows = sqlx::query("select id::text as id, user_id::text as owner, provider, base_url from connections \
         where org_id=$1::uuid and ($2::text is null or user_id::text=$2)")
         .bind(org).bind(owner).fetch_all(&mut **tx).await.map_err(errors::db_error)?;
     for row in rows {
@@ -114,6 +114,7 @@ async fn private_resources(tx: &mut Tx, org: &str, owner: Option<&str>) -> Resul
         let provider = Provider::from_id(&provider_id)
             .ok_or_else(|| errors::bad_gateway("unknown connection provider; refusing incomplete credential cleanup"))?;
         let id: String = row.get("id");
+        super::paired::unlink_locked(org, &row.get::<String,_>("owner"), &id, provider, &row.get::<String,_>("base_url")).await?;
         let path = vault::credential_path(provider, &row.get::<String, _>("owner"), &id);
         delete_secret(&path).await?;
         delete_secret(&format!("{path}/permissions")).await?;

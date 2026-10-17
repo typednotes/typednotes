@@ -1,6 +1,15 @@
 # Push order and CI gates
 
-## Local project-notes/stateless release
+## Prepared paired-messaging release
+
+Publish **Liaison v0.7.0** before **Typednotes v0.12.0**, with main and the
+corresponding annotated tag together in each repository. Check exact-commit main
+CI and image publication. Before deploying the app, adopt SQL through **0016**
+and provision broker-owned persistent encrypted device storage. Existing
+stateless runtime/writer dependencies remain unchanged by this feature.
+See [the rollout and verification limits](release-0.12.0.md).
+
+## Previous project-notes/stateless release
 
 The current local release set is app 0.11.0, Lode 0.5.0 and fleet 0.7.0 with
 app SQL through 0015, Lun 0.4.1 and Linen 1.12.0. Commits and annotated tags are

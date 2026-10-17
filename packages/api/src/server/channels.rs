@@ -7,8 +7,8 @@
 //! | Provider | Connection | Inbound address | Inbound delivery |
 //! |---|---|---|---|
 //! | `slack` | the app installed in a workspace (OAuth, bot token) | team id + channel id | Events API → `POST /hooks/slack` |
-//! | `whatsapp` | Cloud API phone number id + access token | phone number id | webhook → `POST /hooks/whatsapp` |
-//! | `signal` | a signal-cli-rest-api bridge + number + token | the number | pulled through liaison when the inbox loads |
+//! | `whatsapp` | QR-linked native device (or legacy Cloud API) | paired identity (or phone ID) | scoped broker inbox (or Meta webhook) |
+//! | `signal` | QR-linked native device (or legacy REST bridge) | paired account ID (or number) | scoped broker inbox |
 //!
 //! Webhook deliveries are authenticated by the providers' signatures
 //! (Slack's signing secret, Meta's app secret) before anything is parsed.
@@ -38,7 +38,8 @@ use crate::{
 macro_rules! channel_columns {
     () => {
         "ch.id::text as id, ch.provider, ch.label, ch.connection_id::text as connection_id, \
-         to_char(ch.created_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI \"UTC\"') as created_at"
+         to_char(ch.created_at at time zone 'UTC', 'YYYY-MM-DD HH24:MI \"UTC\"') as created_at, \
+         (select c.base_url = 'https://paired.typednotes.invalid' from connections c where c.id=ch.connection_id) as paired"
     };
 }
 
@@ -50,6 +51,7 @@ fn channel_of(row: &PgRow) -> Channel {
         label: row.get("label"),
         connection_id: row.get("connection_id"),
         created_at: row.get("created_at"),
+        paired: row.get("paired"),
     }
 }
 
@@ -368,9 +370,8 @@ async fn record(m: NewMessage<'_>) -> Result<Option<String>, ServerFnError> {
     Ok(row.map(|r| r.get("id")))
 }
 
-/// The project's latest messages, newest first — after pulling what its
-/// Signal bridges hold (best-effort: a bridge that is down only delays its
-/// messages).
+/// The project's latest messages after bounded, authorized paired-device pulls.
+/// An unavailable broker leaves already-recorded project messages readable.
 pub async fn inbox(
     org: &Org,
     user: &User,
@@ -378,9 +379,9 @@ pub async fn inbox(
 ) -> Result<Vec<Message>, ServerFnError> {
     let (project, _) = projects::get(org, project_slug).await?;
     for channel in list(org, project_slug).await? {
-        if channel.provider == Provider::Signal {
+        if matches!(channel.provider, Provider::Signal | Provider::Whatsapp) {
             if let Err(e) = pull_signal(org, user, project_slug, &channel.id).await {
-                eprintln!("signal pull for channel {} failed: {e}", channel.id);
+                eprintln!("paired inbox pull for channel {} failed: {e}", channel.id);
             }
         }
     }
@@ -432,14 +433,14 @@ fn send_call(
             ))
         }
         Provider::Whatsapp => {
-            let to = validate_phone(recipient)?;
+            let to = if super::paired::is_paired(connection) { crate::validate_recipient(Provider::Whatsapp, recipient)? } else { validate_phone(recipient)? };
             Ok((
                 post(vec![routed.external_id.clone(), to.clone()]),
                 to,
             ))
         }
         Provider::Signal => {
-            let to = format!("+{}", validate_phone(recipient)?);
+            let to = if super::paired::is_paired(connection) { crate::validate_recipient(Provider::Signal, recipient)? } else { format!("+{}", validate_phone(recipient)?) };
             Ok((
                 post(vec![routed.external_id.clone(), to.clone()]),
                 to,
@@ -559,20 +560,58 @@ fn parse_signal(body: &[u8]) -> Result<Vec<Inbound>, String> {
         .collect())
 }
 
-/// Pull what the Signal bridge holds for the channel's number into the
-/// inbox. The bridge hands each message out once, so they are recorded as
-/// they arrive.
+/// Read bounded recent native-device deliveries for each allowed conversation.
+/// Replays are deduplicated before the corresponding durable cursor advances.
 async fn pull_signal(
     org: &Org,
     user: &User,
     project_slug: &str,
     channel_id: &str,
 ) -> Result<usize, ServerFnError> {
-    let _ = (org, user, project_slug, channel_id);
-    Err(bad_request("Signal history is unsupported by the native broker; use inbound delivery instead"))
+    let routed = get(org, project_slug, channel_id).await?;
+    let (connection, owner) = connections::get(org, user, &routed.channel.connection_id).await?;
+    if !super::paired::is_paired(&connection) { return Ok(0); }
+    let Some(sender) = connection.external_id.as_deref() else { return Ok(0); };
+    let permissions = connection.permissions.clone().unwrap_or_else(|| crate::ConnectorPermissions::preset(connection.provider, crate::PermissionPreset::ReadOnly));
+    let mut resources = Vec::<Vec<String>>::new();
+    for scope in permissions.scopes.iter().filter(|scope| scope.operation == "messages.read") {
+        let resource = if scope.root.is_empty() && scope.descendants || scope.root == [sender] && scope.descendants {
+            vec![sender.to_string()]
+        } else if scope.root.len() == 2 && scope.root[0] == sender { scope.root.clone() } else { continue; };
+        if !resources.contains(&resource) { resources.push(resource); }
+    }
+    let mut count = 0;
+    for resource in resources {
+        let selector = serde_json::to_string(&resource).map_err(|_| bad_request("invalid message selector"))?;
+        let after = sqlx::query("select cursor::text as cursor from paired_inbox_cursors where channel_id=$1::uuid and selector=$2")
+            .bind(channel_id).bind(&selector).fetch_optional(pool()?).await.map_err(db_error)?
+            .map(|row| row.get::<String,_>("cursor")).unwrap_or_else(|| "0".into());
+        let call = ProviderCall::new("messages.read", resource.clone(), json!({"after": after}))
+            .with_permissions(super::connector::scoped(&connection, "messages.read", resource.clone(), false));
+        let body = connections::call_ok(org, user, &connection, &owner, call).await?;
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Received { id: String, peer: String, body: String, timestamp: u64, sequence: u64 }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Page { messages: Vec<Received>, next: String }
+        let page: Page = serde_json::from_slice(&body).map_err(|_| bad_gateway("invalid paired inbox response"))?;
+        let next = page.next.parse::<u64>().map_err(|_| bad_gateway("invalid paired inbox cursor"))?;
+        if page.messages.len() > 100 || next < after.parse::<u64>().unwrap_or(0) { return Err(bad_gateway("invalid paired inbox page")); }
+        for message in page.messages {
+            if message.sequence > next || resource.get(1).is_some_and(|peer| peer != &message.peer) { return Err(bad_gateway("message leaves its authorized conversation")); }
+            let _ = message.timestamp;
+            let inbound = Inbound { external_id: message.id, peer: message.peer, peer_name: None, body: message.body };
+            if record_inbound(channel_id, &inbound).await? { count += 1; }
+        }
+        sqlx::query("insert into paired_inbox_cursors(channel_id,selector,cursor) values($1::uuid,$2,$3::text::numeric) \
+            on conflict(channel_id,selector) do update set cursor=greatest(paired_inbox_cursors.cursor,excluded.cursor)")
+            .bind(channel_id).bind(selector).bind(next.to_string()).execute(pool()?).await.map_err(db_error)?;
+    }
+    Ok(count)
 }
 
-/// Pull a Signal channel by id, as its connection's owner — for the
+/// Pull a paired channel by id, as its connection's owner — for the
 /// scheduler's tick, which has no request (docs/computations.md §3.6).
 pub async fn pull_signal_channel(channel_id: &str) -> Result<usize, String> {
     let text = |e: ServerFnError| super::errors::message(&e);
@@ -583,7 +622,7 @@ pub async fn pull_signal_channel(channel_id: &str) -> Result<usize, String> {
          from channels ch join projects p on p.id = ch.project_id join orgs o on o.id = p.org_id \
          join connections c on c.id = ch.connection_id join users u on u.id = c.user_id \
          join memberships m on m.org_id = o.id and m.user_id = u.id \
-         where ch.id = $1::uuid and ch.provider = 'signal'",
+         where ch.id = $1::uuid and ch.provider in ('signal','whatsapp')",
     )
     .bind(channel_id)
     .fetch_optional(pool().map_err(text)?)
@@ -1002,6 +1041,7 @@ mod tests {
                 label: "l".into(),
                 connection_id: "c".into(),
                 created_at: String::new(),
+                paired: false,
             },
             external_id: external_id.into(),
             external_channel: external_channel.map(str::to_string),

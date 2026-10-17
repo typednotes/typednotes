@@ -288,6 +288,21 @@ pub fn validate_phone(number: &str) -> Result<String, String> {
     }
 }
 
+/// Canonical direct-message selectors. Account IDs/LIDs are never group IDs.
+pub fn validate_recipient(provider: crate::Provider, value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if provider == crate::Provider::Signal && value.len() == 36 && value.bytes().enumerate().all(|(i,c)| {
+        if [8,13,18,23].contains(&i) { c == b'-' } else { c.is_ascii_hexdigit() }
+    }) { return Ok(value.to_ascii_lowercase()); }
+    if provider == crate::Provider::Whatsapp {
+        if let Some(user) = value.strip_suffix("@lid") {
+            if !user.is_empty() && user.len() <= 32 && user.bytes().all(|c| c.is_ascii_digit()) { return Ok(value.into()); }
+        }
+    }
+    let phone = validate_phone(value)?;
+    Ok(if provider == crate::Provider::Signal { format!("+{phone}") } else { phone })
+}
+
 /// A WhatsApp Cloud API phone number id (the numeric id Meta shows next to
 /// the number, not the number itself) and its access token.
 pub fn validate_whatsapp(phone_number_id: &str, token: &str) -> Result<(String, String), String> {
@@ -542,6 +557,13 @@ mod tests {
         );
         assert!(validate_phone("12345").is_err());
         assert!(validate_phone("+33 6 12 34 56 7a").is_err());
+        let account = "00000000-0000-4000-8000-000000000099";
+        assert_eq!(validate_recipient(Provider::Signal, account).unwrap(), account);
+        assert_eq!(validate_recipient(Provider::Signal, "+33 612345678").unwrap(), "+33612345678");
+        assert_eq!(validate_recipient(Provider::Whatsapp, "123456@lid").unwrap(), "123456@lid");
+        assert!(validate_recipient(Provider::Whatsapp, "123456@g.us").is_err());
+        assert!(validate_recipient(Provider::Signal, "123456@lid").is_err());
+        assert!(validate_recipient(Provider::Whatsapp, account).is_err());
         assert!(validate_whatsapp("106540352242922", "EAAG-token-1234").is_ok());
         assert!(validate_whatsapp("+33612345678", "EAAG-token-1234").is_err());
         let (url, number, _) = validate_signal(

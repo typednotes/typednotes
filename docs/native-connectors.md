@@ -1,5 +1,14 @@
 # App/native connector integration
 
+## Native paired messaging
+
+Signal and WhatsApp now additionally support hosted QR-linked native Rust
+adapters inside Liaison. Their catalog adds `messages.read` for bounded direct
+text delivery; legacy transports remain send-only. Signed owner-bound device
+provisioning is separate from notebook effects. See [paired messaging](paired-messaging.md)
+for the full permission, lifecycle, storage, migration and verification contract.
+The historical release counts below predate these two added operation/provider pairs.
+
 ## Repository selection contract (Liaison 0.6.3)
 
 `repositories.list` uses resource `[]` and optional canonical decimal-text `page`

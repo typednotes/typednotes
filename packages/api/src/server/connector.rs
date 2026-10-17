@@ -203,8 +203,8 @@ pub async fn mint_for_cell(org: &Org, user: &User, connection: &Connection, owne
                 let resource = if connection.provider == crate::Provider::Slack {
                     vec![channel.get::<Option<String>, _>("external_channel").ok_or_else(|| errors::forbidden("interface has no channel"))?]
                 } else {
-                    let peer = crate::validate_phone(config.recipient.as_deref().unwrap_or("")).map_err(errors::forbidden)?;
-                    vec![channel.get("external_id"), if connection.provider == crate::Provider::Signal { format!("+{peer}") } else { peer }]
+                    let peer = crate::validate_recipient(connection.provider, config.recipient.as_deref().unwrap_or("")).map_err(errors::forbidden)?;
+                    vec![channel.get("external_id"), peer]
                 };
                 scoped(connection, "messages.send", resource, false)
             },
@@ -230,8 +230,8 @@ pub async fn mint_for_cell(org: &Org, user: &User, connection: &Connection, owne
             let resource = if connection.provider == crate::Provider::Slack {
                 vec![channel.get::<Option<String>, _>("external_channel").ok_or_else(|| errors::forbidden("interface has no channel"))?]
             } else {
-                let peer = crate::validate_phone(config.recipient.as_deref().unwrap_or("")).map_err(errors::forbidden)?;
-                vec![channel.get("external_id"), if connection.provider == crate::Provider::Signal { format!("+{peer}") } else { peer }]
+                let peer = crate::validate_recipient(connection.provider, config.recipient.as_deref().unwrap_or("")).map_err(errors::forbidden)?;
+                vec![channel.get("external_id"), peer]
             };
             declared = declared.intersect(&scoped(connection, "messages.send", resource, false));
         }

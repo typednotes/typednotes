@@ -106,7 +106,8 @@ pub async fn health() -> Health {
          &&table_exists(pool,"public.note_origins").await
          &&table_exists(pool,"public.project_note_retirements").await
          &&table_exists(pool,"public.scheduled_runs").await
-         &&table_exists(pool,"public.graph_delivery_outbox").await
+          &&table_exists(pool,"public.graph_delivery_outbox").await
+          &&table_exists(pool,"public.paired_inbox_cursors").await
         && sqlx::query("select exists(select 1 from pg_trigger where tgrelid='public.projects'::regclass and tgname='projects_notes' and tgenabled in ('O','A')) as ready")
             .fetch_one(pool).await.map(|row|row.get::<bool,_>("ready")).unwrap_or(false);
     let ledger = database && table_exists(pool, "public.credit_ledger").await;

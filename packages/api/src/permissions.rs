@@ -114,7 +114,7 @@ pub fn connector_operations(provider: Provider) -> &'static [ConnectorOperation]
             "messages.send" => "Send messages", true; "messages.update" => "Edit messages", true;
             "messages.delete" => "Delete messages", true;
         ],
-        Provider::Whatsapp | Provider::Signal => operations!["messages.send" => "Send messages", true],
+        Provider::Whatsapp | Provider::Signal => operations!["messages.read" => "Read paired-device messages", false; "messages.send" => "Send messages", true],
         Provider::Github | Provider::Gitlab => operations![
             "repositories.list" => "List repositories", false; "repositories.read" => "Read repositories and code", false;
             "repositories.write" => "Write code", true; "repositories.delete" => "Delete code files", true; "issues.read" => "Read issues", false;
@@ -289,8 +289,8 @@ mod tests {
         for (provider, denied) in [
             (Provider::Caldav, vec!["events.invite"]),
             (Provider::Slack, vec!["files.read"]),
-            (Provider::Signal, vec!["channels.list", "messages.read", "messages.update", "messages.delete", "files.read"]),
-            (Provider::Whatsapp, vec!["channels.list", "messages.read", "messages.update", "messages.delete", "files.read"]),
+            (Provider::Signal, vec!["channels.list", "messages.update", "messages.delete", "files.read"]),
+            (Provider::Whatsapp, vec!["channels.list", "messages.update", "messages.delete", "files.read"]),
         ] {
             for operation in denied {
                 assert!(!connector_operations(provider).iter().any(|op| op.id == operation));
@@ -301,6 +301,12 @@ mod tests {
             }
         }
         assert!(Provider::Radius.can_generate());
+        for provider in [Provider::Signal, Provider::Whatsapp] {
+            let read = ConnectorPermissions::preset(provider, PermissionPreset::ReadOnly);
+            assert!(read.permits("messages.read", &["sender".into(), "peer".into()]));
+            assert!(!read.permits("messages.send", &["sender".into(), "peer".into()]));
+            assert!(!connector_operations(provider).iter().any(|op| op.id.starts_with("device.")));
+        }
         assert!(connector_operations(Provider::Radius).iter().any(|op| op.id == "inference.generate"));
         assert!(!ConnectorPermissions::preset(Provider::Github, PermissionPreset::ReadWrite).permits("repositories.delete", &[]));
         assert!(connector_operations(Provider::OpencodeZen).iter().any(|op| op.id == "classification.evaluate"));

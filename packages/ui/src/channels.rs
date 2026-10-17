@@ -1,7 +1,7 @@
 use api::{
     add_existing_interface, add_slack_channel, connect_signal, connect_whatsapp, health, list_channels, list_connections,
     list_messages, list_slack_channels, remove_channel, send_message, validate_message,
-    validate_phone, validate_signal, validate_whatsapp, Channel, Health, Message, Provider,
+    validate_signal, validate_whatsapp, Channel, Health, Message, Provider,
 };
 use dioxus::prelude::*;
 
@@ -14,6 +14,7 @@ use crate::components::textarea::Textarea;
 use crate::connections::{connect_url, oauth_ready};
 use crate::error_message;
 use crate::navigate_to;
+use crate::paired::PairDeviceForm;
 
 /// A project's messaging interfaces: where people reach it (project
 /// settings).
@@ -169,8 +170,10 @@ fn ChannelRow(
 ) -> Element {
     let mut confirming = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
-    let (note, ok) = delivery_note(channel.provider, health.as_ref());
+    let (note, ok) = if channel.paired { ("Linked device · messages received through Typednotes".to_string(), true) } else { delivery_note(channel.provider, health.as_ref()) };
     let id = channel.id.clone();
+    let manage_slug = slug.clone();
+    let manage_project = project.clone();
     rsx! {
         div { class: "conn-row",
             div { class: "conn-main",
@@ -203,6 +206,10 @@ fn ChannelRow(
             }
             if let Some(e) = error() {
                 div { class: "conn-result err", "{e}" }
+            }
+            if channel.paired {
+                PairDeviceForm { slug: manage_slug, project: manage_project, provider: channel.provider,
+                    existing: Some(channel.connection_id.clone()), bound: true, on_added: on_removed }
             }
         }
     }
@@ -247,12 +254,25 @@ fn AddInterface(
                 p { class: "conn-meta", "Loading messaging connections…" }
             } else if let Some(Err(error)) = connections() {
                 p { class: "orgs-error", "Could not load connections: {error_message(&error)}" }
+            } else if kind() != Provider::Slack && existing.iter().any(|c| c.base_url == api::PAIRED_DEVICE_BASE && c.external_id.is_none()) {
+                PairDeviceForm { key: "pair-{kind().id()}", slug: slug.clone(), project: project.clone(), provider: kind(),
+                    existing: existing.first().map(|c| c.id.clone()), on_added: move |_| { connections.restart(); on_added.call(()); } }
             } else if kind() != Provider::Slack && !existing.is_empty() {
                 ExistingInterface { key: "{kind().id()}", slug: slug.clone(), project: project.clone(), connections: existing, on_added }
             } else { match kind() {
                 Provider::Slack => rsx! { SlackForm { slug: slug.clone(), project: project.clone(), health: health.clone(), on_added } },
-                Provider::Whatsapp => rsx! { WhatsappForm { slug: slug.clone(), project: project.clone(), on_added: move |_| { connections.restart(); on_added.call(()); } } },
-                _ => rsx! { SignalForm { slug: slug.clone(), project: project.clone(), on_added: move |_| { connections.restart(); on_added.call(()); } } },
+                Provider::Whatsapp => rsx! {
+                    PairDeviceForm { key: "new-{kind().id()}", slug: slug.clone(), project: project.clone(), provider: Provider::Whatsapp, on_added: move |_| { connections.restart(); on_added.call(()); } }
+                    details { summary { "Cloud API setup" }
+                        WhatsappForm { slug: slug.clone(), project: project.clone(), on_added: move |_| { connections.restart(); on_added.call(()); } }
+                    }
+                },
+                _ => rsx! {
+                    PairDeviceForm { key: "new-{kind().id()}", slug: slug.clone(), project: project.clone(), provider: Provider::Signal, on_added: move |_| { connections.restart(); on_added.call(()); } }
+                    details { summary { "Existing bridge setup" }
+                        SignalForm { slug: slug.clone(), project: project.clone(), on_added: move |_| { connections.restart(); on_added.call(()); } }
+                    }
+                },
             } }
         }
     }
@@ -590,7 +610,7 @@ fn Composer(
             evt.prevent_default();
             let checked = validate_message(&text()).and_then(|_| {
                 if needs_recipient {
-                    validate_phone(&recipient()).map(|_| ())
+                    api::validate_recipient(provider.unwrap_or(Provider::Whatsapp), &recipient()).map(|_| ())
                 } else {
                     Ok(())
                 }
@@ -639,7 +659,7 @@ fn Composer(
                 if needs_recipient {
                     div { class: "orgs-field",
                         Label { html_for: "msg-to", "To" }
-                        Input { id: "msg-to", placeholder: "+33 6 12 34 56 78", value: recipient(), oninput: move |e: FormEvent| recipient.set(e.value()) }
+                        Input { id: "msg-to", placeholder: "Phone number or account ID", value: recipient(), oninput: move |e: FormEvent| recipient.set(e.value()) }
                     }
                 }
             }
@@ -652,7 +672,7 @@ fn Composer(
                     oninput: move |e: FormEvent| text.set(e.value()),
                 }
             }
-            if provider == Some(Provider::Whatsapp) {
+            if provider == Some(Provider::Whatsapp) && channels.iter().any(|c| c.id == channel() && !c.paired) {
                 p { class: "conn-meta", "WhatsApp only delivers free text within 24 hours of the person's last message." }
             }
             Button { r#type: "submit", disabled: busy(), "Send" }

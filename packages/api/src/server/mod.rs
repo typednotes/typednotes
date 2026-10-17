@@ -28,3 +28,4 @@ pub mod warrant;
 pub mod workspace;
 pub mod shares;
 pub mod deletion;
+pub mod paired;

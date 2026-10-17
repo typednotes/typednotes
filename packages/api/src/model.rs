@@ -517,6 +517,20 @@ pub struct TestResult {
     pub message: String,
 }
 
+/// Non-secret linked-device state. QR material is short lived and returned only
+/// to the connection owner/admin; it is never stored in a connection DTO.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DevicePairing {
+    pub connection: String,
+    pub state: String,
+    pub identity: Option<String>,
+    pub qr_svg: Option<String>,
+    pub expires_at: u64,
+    pub error: Option<String>,
+}
+
+pub const PAIRED_DEVICE_BASE: &str = "https://paired.typednotes.invalid";
+
 /// A project: work inside an org, with an optional primary repository.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Project {
@@ -573,6 +587,8 @@ pub struct Channel {
     pub label: String,
     pub connection_id: String,
     pub created_at: String,
+    #[serde(default)]
+    pub paired: bool,
 }
 
 /// A Slack conversation a bot can post to.

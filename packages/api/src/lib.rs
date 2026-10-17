@@ -34,7 +34,7 @@ pub fn start_background() {
 }
 
 #[cfg(feature = "server")]
-use server::{channels, connections, db, errors, graphs, members, projects, session};
+use server::{channels, connections, db, errors, graphs, members, paired, projects, session};
 
 mod model;
 pub use model::*;
@@ -618,6 +618,26 @@ pub async fn clear_project_repo(slug: String, project: String) -> Result<Project
 }
 
 // ── Interfaces and inbox ────────────────────────────────────────────────
+
+/// Start hosted QR pairing. Only an organization admin may create the connection.
+#[post("/api/devices/pair")]
+pub async fn pair_device(slug: String, provider: Provider) -> Result<DevicePairing, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    paired::start(&org, &user, provider).await
+}
+
+/// Owner/admin-only pairing state; never exposes stored device credentials.
+#[post("/api/devices/status")]
+pub async fn paired_device_status(slug: String, connection: String, start: bool) -> Result<DevicePairing, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    paired::status(&org, &user, &connection, start).await
+}
+
+#[post("/api/devices/unlink")]
+pub async fn unlink_device(slug: String, connection: String) -> Result<(), ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    paired::unlink(&org, &user, &connection).await
+}
 
 /// The project's messaging interfaces.
 #[post("/api/channels")]

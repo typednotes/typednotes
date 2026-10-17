@@ -144,6 +144,11 @@ pub async fn store(
         .fetch_one(&mut *tx).await.map_err(db_error)?.get::<bool,_>("ready");
     if !guard { return Err(unavailable("connection creation requires migration 0009_connection_provider_guard.sql")); }
     connector::require_actor(&mut tx, &org.id, &user.id).await?;
+    if credential.get("kind").and_then(Value::as_str) == Some("paired_device") {
+        let role = sqlx::query("select role from memberships where org_id=$1::uuid and user_id=$2::uuid")
+            .bind(&org.id).bind(&user.id).fetch_one(&mut *tx).await.map_err(db_error)?.get::<String,_>("role");
+        if !matches!(role.as_str(), "owner" | "admin") { return Err(forbidden("only current organization admins can link a messaging account")); }
+    }
     let existing = sqlx::query("select 1 from connections where org_id=$1::uuid and provider=$2 limit 1")
         .bind(&org.id).bind(new.provider.id()).fetch_optional(&mut *tx).await.map_err(db_error)?;
     if existing.is_some() { return Err(conflict(format!("{} is already connected to this organization; use or remove that connection first", new.provider.name()))); }
@@ -210,8 +215,13 @@ pub async fn remove(org: &Org, user: &User, id: &str) -> Result<(), ServerFnErro
         ));
     }
     let mut tx = connector::lock(&org.id).await?;
+    connector::require_actor(&mut tx, &org.id, &user.id).await?;
+    let role = sqlx::query("select role from memberships where org_id=$1::uuid and user_id=$2::uuid")
+        .bind(&org.id).bind(&user.id).fetch_one(&mut *tx).await.map_err(db_error)?.get::<String,_>("role");
+    if owner != user.id && !matches!(role.as_str(), "owner" | "admin") { return Err(forbidden("your current role cannot remove this connection")); }
     connector::publish_ceiling(&org.id, connection.provider.id(), id, &crate::ConnectorPermissions::deny_all()).await?;
     connector::revoke(&mut tx, &org.id, Some(id)).await?;
+    super::paired::unlink_locked(&org.id, &owner, id, connection.provider, &connection.base_url).await?;
     vault::delete(&vault::credential_path(connection.provider, &owner, id))
         .await
         .map_err(|e| {
@@ -311,7 +321,9 @@ fn probe(c: &Connection) -> Result<ProviderCall, String> {
         Provider::Slack => ("channels.list", Vec::new()),
         Provider::Notion => ("pages.read", Vec::new()),
         Provider::Jmap => ("mailboxes.list", Vec::new()),
-        Provider::Signal | Provider::Whatsapp => return Err("this provider supports sending only; no read-only broker probe is available".into()),
+        Provider::Signal | Provider::Whatsapp if super::paired::is_paired(c) =>
+            ("messages.read", vec![c.external_id.clone().ok_or("finish QR pairing before testing")?]),
+        Provider::Signal | Provider::Whatsapp => return Err("this legacy transport supports sending only; no read-only broker probe is available".into()),
         _ => return Err("no supported native probe".into()),
     };
     let resource = if permissions.permits(operation, &root) && !matches!(c.provider, Provider::Notion | Provider::Jmap) { root }
@@ -429,6 +441,12 @@ fn describe(c: &Connection, body: &[u8]) -> Result<String, String> {
             }
             let count = json.as_ref().and_then(|j| j.get("channels")).and_then(Value::as_array).ok_or("Slack returned no channel inventory")?.len();
             Some(format!("{count} channels visible"))
+        }
+        Provider::Whatsapp | Provider::Signal if super::paired::is_paired(c) => {
+            if !json.as_ref().and_then(|j| j.get("messages")).is_some_and(Value::is_array) {
+                return Err("the linked device returned no inbox page".into());
+            }
+            Some("paired-device inbox is readable".into())
         }
         Provider::Whatsapp => {
             field("/display_phone_number").map(|n| match field("/verified_name") {

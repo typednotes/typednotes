@@ -138,7 +138,7 @@ class Fixture(BaseHTTPRequestHandler):
                 state.setdefault("writes",[]).append((self.path,json.loads(raw)))
                 # Test gateways stay entirely local. The app itself still writes
                 # the validated HTTPS base and never reads a credential back.
-                if "base_url" in document and document.get("kind") != "postgres":
+                if "base_url" in document and document.get("kind") not in ("postgres", "paired_device"):
                     document["base_url"] = state["upstream"] + "/base"
                 state["documents"][self.path] = document
             return self.reply(200, {})
@@ -198,6 +198,8 @@ def main():
     parser.add_argument("--runtime", action="store_true", help="Exercise app-provisioned local grants through a compiled Lun driver")
     parser.add_argument("--writer", action="store_true", help="Verify actual app writer launch/narrowing/PUT request shapes")
     parser.add_argument("--real-writer", action="store_true", help="Actual app/broker/Lode checkout, generation, publish and Lun adoption")
+    parser.add_argument("--paired-signal-library", type=Path)
+    parser.add_argument("--paired-whatsapp-library", type=Path)
     args = parser.parse_args()
     if args.writer and args.real_writer:
         parser.error("--writer shape peer and --real-writer actual Lode are separate fixture modes")
@@ -246,6 +248,11 @@ def main():
             env = {**os.environ, "DATABASE_URL": database, "LIAISON_ROOT_KEY": key,
                    "SECRETS_HOST": "127.0.0.1", "SECRETS_PORT": str(vault.server_port),
                    "SECRETS_INSECURE": "1", "SECRETS_TOKEN": "broker-read-fixture", "LIAISON_PORT": str(broker_port)}
+            if args.paired_signal_library and args.paired_whatsapp_library:
+                device_root = scratch / "devices"
+                device_root.mkdir(mode=0o700)
+                env.update(LIAISON_PAIRED_DIR=str(device_root), LIAISON_SIGNAL_LIBRARY=str(args.paired_signal_library.resolve()),
+                           LIAISON_WHATSAPP_LIBRARY=str(args.paired_whatsapp_library.resolve()))
             for name in ["SECRETS_USERNAME", "SECRETS_PASSWORD", "COMPUTE_DB_URL", "LODE_URL", "LUN_URL"]:
                 env.pop(name, None)
             app = f"http://127.0.0.1:{app_port}"
@@ -585,6 +592,10 @@ def main():
                         input=json.dumps({"broker": broker, "provider": "radius", "credentials": radius}) + "\n", capture_output=True, text=True, timeout=60)
                     assert response.returncode == 0, (response.stdout, response.stderr)
                     print(response.stdout.strip(), flush=True)
+                if args.paired_signal_library and args.paired_whatsapp_library:
+                    from paired_device_cases import verify_paired
+                    runtime_args={"runtime":runtime,"broker":broker,"key":key,"scratch":scratch,"command":command,"env":env} if args.runtime else None
+                    verify_paired(api, exchange, sql, app, org, user, vault, scratch / "devices", runtime_args)
                 print(f"PASS: {len(checks)} real app/broker/SQL integration groups")
         finally:
             for process in reversed(processes):

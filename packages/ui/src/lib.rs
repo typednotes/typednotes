@@ -26,6 +26,7 @@ mod settings;
 pub use settings::{AccountPage, OrgSettingsPage, ProjectSettingsPage};
 
 mod channels;
+mod paired;
 mod connections;
 mod members;
 mod render;

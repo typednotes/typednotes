@@ -86,7 +86,13 @@ fleet source release **v0.6.2**. See
 The shared CI/release and documentation-link conventions are in
 [`docs/workflow-policy.md`](https://github.com/typednotes/typednotes/blob/main/docs/workflow-policy.md).
 
-The local **v0.11.0** release uses **Org → Project → Notes**, project-level
+The prepared **v0.12.0** release adds hosted Signal/WhatsApp QR pairing with native
+Rust adapters inside **Liaison v0.7.0**, scoped direct-text reads/sends and device
+lifecycle cleanup. It requires app migration **0016** and broker-owned persistent
+encrypted storage. See [release notes](https://github.com/typednotes/typednotes/blob/main/docs/release-0.12.0.md)
+and [paired messaging setup](https://github.com/typednotes/typednotes/blob/main/docs/paired-messaging.md).
+
+The **v0.11.0** release uses **Org → Project → Notes**, project-level
 models/permissions and **Lun v0.4.1**'s stateless producer API. Typednotes persists
 execution state and owns durable schedules, uncertain outcomes and ordered delivery
 outboxes. It needs app migrations **0014/0015**, the current background-checkout/

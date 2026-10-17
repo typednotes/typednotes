@@ -307,7 +307,7 @@ async fn check_run(d:&Due)->Result<(),String>{
     Ok(())
 }
 
-/// Pull the Signal channels ready notebooks listen on; new messages feed
+/// Pull the paired channels ready notebooks listen on; new messages feed
 /// the graphs as they are recorded.
 async fn pull_signal() {
     let Ok(pool) = pool() else { return };
@@ -315,7 +315,7 @@ async fn pull_signal() {
         "select distinct ch.id::text as id from graph_cells c \
          join graphs g on g.id = c.graph_id \
          join channels ch on ch.id::text = c.config ->> 'channel_id' \
-         where c.kind = 'source' and c.variant = 'channel' and ch.provider = 'signal' \
+         where c.kind = 'source' and c.variant = 'channel' and ch.provider in ('signal','whatsapp') \
            and g.session_build_id is not null",
     )
     .fetch_all(pool)
@@ -323,14 +323,14 @@ async fn pull_signal() {
     {
         Ok(rows) => rows,
         Err(e) => {
-            eprintln!("scheduler: Signal channels: {e}");
+            eprintln!("scheduler: paired channels: {e}");
             return;
         }
     };
     for r in rows {
         let id: String = r.get("id");
         if let Err(e) = channels::pull_signal_channel(&id).await {
-            eprintln!("scheduler: Signal pull of {id} failed: {e}");
+            eprintln!("scheduler: paired inbox pull of {id} failed: {e}");
         }
     }
 }

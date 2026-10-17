@@ -1,5 +1,10 @@
 # Users and connections — the cross-service contract
 
+Hosted Signal/WhatsApp QR linking is described in [paired messaging](paired-messaging.md).
+It adds the `paired_device` vault credential and a signed broker device-control
+endpoint; the legacy bridge/Cloud API examples below continue to describe those
+explicit transport choices.
+
 The rich `Eff` native migration, trusted policy namespaces, revocation history,
 verified callers and coordinated deployment requirements are specified in
 [App/native connector integration](native-connectors.md). Generic provider HTTP

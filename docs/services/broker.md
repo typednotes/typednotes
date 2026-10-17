@@ -2,6 +2,14 @@
 
 **Language:** Lean 4 + `linen` (see §8 — throughput is unmeasured)
 
+Hosted Signal/WhatsApp linked-device transports additionally load native Rust
+libraries inside this process. The existing `/v0/egress` four-ceiling connector
+path handles direct-text reads/sends; `/v0/device` is a separate signed
+owner-bound provisioning plane whose warrants never reach notebook code.
+`/_health/paired` reports configured/loadable adapters without provider IO.
+See [paired messaging](../paired-messaging.md) and the sibling Liaison
+`native/README.md` for the full credential, storage, lifecycle and proof boundary.
+
 ## 1. Purpose
 
 The only component in the system that can reach the outside world. Every third-party API
