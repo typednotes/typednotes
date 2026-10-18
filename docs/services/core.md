@@ -1,6 +1,7 @@
 # `core` — users, orgs, resources, warrant minting
 
-**Language:** Lean 4 + `linen` · **Deploys** [`ledger`](ledger.md) as a module
+**Current implementation:** Rust fullstack app. **Historical design below:** a
+proposed standalone Lean core. See [the implemented system map](../system-architecture.md).
 
 **Current implementation note:** identity/workspace control currently lives in
 the Rust fullstack app; the service design below describes the intended split.
@@ -8,6 +9,9 @@ Its confirmed org/account deletion and ownership/default transitions are in
 [the deletion contract](../deletion.md). Migration 0012 adds relational guards;
 ledger migration 0003 supplies compatible billing cascades. Rust/SQL ownership
 checks are trusted boundaries, separate from Lean runtime effect guarantees.
+The Lean type/theorem sketches below are proposed interfaces, not proofs of the
+current Rust implementation. Ledger runs a sweeper process; the app and broker
+consume its shared SQL contract directly.
 
 ## 1. Purpose
 
@@ -27,6 +31,10 @@ verifying `idp` tokens offline, `Crypto/JOSE/FFI.hmac` for minting warrant tags,
 already does.
 
 ## 3. Interface
+
+**Historical proposed interface:** the current Rust app directly calls Liaison
+for authorized provider operations and provisioning; the following paragraph
+describes the older extraction proposal.
 
 Consumed by [`web`](web.md) for everything the user does, and by [`broker`](broker.md)
 only for the root key and hold settlement. `core` never calls `broker`; the dependency runs

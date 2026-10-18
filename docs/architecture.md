@@ -1,6 +1,12 @@
-# Typednotes — Architecture
+# Typednotes — architecture decisions (historical draft)
 
 **Status:** draft · **Last updated:** 2026-09-22
+
+> **Historical design record.** For the implemented architecture, exact component
+> roles and current SVG diagrams, start with [the system architecture guide](system-architecture.md).
+> This draft retains proposals and earlier terminology, including the standalone
+> IdP/core split and an obsolete service diagram. Its universal egress and runtime
+> descriptions must not be treated as current implementation or deployment claims.
 
 This document records the architectural decisions for Typednotes: a system where a
 server-side agent acts on resources **on behalf of** users.

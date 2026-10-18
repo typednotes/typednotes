@@ -1,7 +1,8 @@
 # `ledger` — usage events and credits
 
-**Language:** Lean 4 + `linen` · **Deployed inside** [`core`](core.md), documented separately
-because its invariants are distinct
+**Language:** Lean 4 + `linen`. **Implementation:** shared SQL/model library and
+a separate expired-hold sweeper process. The app and Liaison issue request-path
+ledger SQL directly. See [the implemented system architecture](../system-architecture.md).
 
 **Current deletion contract:** append-only ledger migration 0003 cascades billing
 rows with a removed org and nulls the removed actor pointer in a surviving org's
@@ -11,9 +12,11 @@ below is the baseline; see [the current deletion contract](../deletion.md).
 
 ## 1. Purpose
 
-Record what was consumed and what it cost, and hold the credit balance that bounds spend.
-Written by [`broker`](broker.md) at the egress and inference call sites; rolled up and
-pushed to Stripe.
+Own credit/hold/usage schemas and arithmetic, with a derived credit balance and
+expired-hold cleanup. Liaison reserves and settles declared call cost; this is not
+automatically measured provider-token usage or an invoice. Stripe rollup and tax
+integration in the historical architecture are proposals, not established parts
+of this implementation.
 
 **Not responsible for:** invoices, VAT, or e-invoicing — all bought, see
 `../architecture.md` §5.3–5.5. **Stripe is never the source of truth for usage.**
@@ -34,8 +37,10 @@ hosting makes this sharper, not softer — there is no in-memory balance to prot
 
 The division, and it is worth stating so nobody later "improves" it:
 
-> **Lean makes the arithmetic and the lifecycle correct. Postgres makes the concurrency
-> correct.** The pure core is only trustworthy because it never tries to own the balance.
+> **Lean checks the arithmetic/lifecycle model; PostgreSQL must provide concurrent
+> isolation.** The current shared reserve SQL has a documented `READ COMMITTED`
+> race; a local settlement bound is not a global no-overspend theorem. See
+> [the ledger implementation's guarantee boundary](https://github.com/typednotes/ledger#guarantees).
 
 ## 4. State
 

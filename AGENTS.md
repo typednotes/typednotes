@@ -13,6 +13,26 @@ workflow seems to imply it. Pushing is the user's action, always.
 Committing locally is fine when the user asks for it. If work seems ready to push, say so
 and stop there.
 
+# Documentation and code synchronization
+
+**Keep documentation in sync with the code in the same change.** Documentation
+review is part of completing implementation work, not a later cleanup task.
+
+- Update relevant `docs/*.md`, service contracts and README entry points when
+  behavior, APIs, wire/storage schemas, permissions, ownership, deployment or
+  recovery semantics change. Add a document when a new contract has no home.
+- Keep architecture diagrams and their explanatory text synchronized with the
+  implementation. Update SVG arrows, boundaries and labels together, and check
+  rendering, text fit, accessibility descriptions and links after editing.
+- Use `docs/system-architecture.md` as the implemented-system overview. Trace
+  claims to the owning code/service; do not copy a historical design as if it
+  were the current implementation.
+- Distinguish proposed, implemented, locally verified, published and deployed
+  behavior. Label historical decision records and incomplete deployment wiring.
+- Keep proof claims, tests, operational assumptions and remaining trusted
+  boundaries explicit. References to papers or similar systems explain a design;
+  they do not transfer those systems' guarantees to Typednotes.
+
 # Connector capabilities and `Eff` permissions
 
 **Keep connector possibilities and effect-level permissions in sync.** Adding,

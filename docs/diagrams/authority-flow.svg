@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc">
+  <title id="title">Independent authority ceilings and checked effect execution</title>
+  <desc id="desc">Organization, connection, cell execution and warrant/run grants must all permit an operation and resource. Lun also checks that the cell grant narrows the compiled Eff capability. Liaison independently verifies the signed warrant, reads live protected policies, reserves credit and consumes a native plan before using credentials. Provider OAuth and ACL limits still apply.</desc>
+  <defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 9 4.5 0 9Z" fill="#426380"/></marker></defs>
+  <style>text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}.title{font-size:28px;font-weight:700}.head{font-size:20px;font-weight:700}.body{font-size:16px}.small{font-size:14px;fill:#526575}.node{fill:#f5f8fb;stroke:#acbfce;stroke-width:1.5}.secure{fill:#eaf6f2;stroke:#5c9184;stroke-width:1.5}.flow{fill:none;stroke:#426380;stroke-width:2;marker-end:url(#arrow)}</style>
+  <rect width="1200" height="900" fill="white"/>
+  <text x="40" y="46" class="title">Authority is an intersection, never a convenience union</text>
+  <text x="40" y="77" class="body">Permission includes named operations, component-wise resource scopes and minimum byte limits.</text>
+  <path class="flow" d="M172 220V245H600V280M457 220V254H600V280M742 220V254H600V280M1027 220V245H600V280"/>
+  <path class="flow" d="M600 380V407H200V450"/>
+  <path class="flow" d="M600 407V450"/>
+  <path class="flow" d="M360 522H430"/>
+  <path class="flow" d="M770 522H840"/>
+  <path class="flow" d="M200 660V625H530V595"/>
+  <path class="flow" d="M700 660V595"/>
+
+  <g data-box="org"><rect x="40" y="115" width="265" height="105" rx="8" class="node"/>
+    <text x="57" y="147" class="head">Organization ceiling</text><text x="57" y="176" class="body">Enabled effects / providers</text><text x="57" y="202" class="small">Operations + resource scopes</text>
+  </g>
+  <g data-box="connection"><rect x="325" y="115" width="265" height="105" rx="8" class="node"/>
+    <text x="342" y="147" class="head">Connection ceiling</text><text x="342" y="176" class="body">Selected provider account</text><text x="342" y="202" class="small">Stored grants + byte limits</text>
+  </g>
+  <g data-box="cell"><rect x="610" y="115" width="265" height="105" rx="8" class="node"/>
+    <text x="627" y="147" class="head">Cell execution grant</text><text x="627" y="176" class="body">Derived from project grants</text><text x="627" y="202" class="small">Must narrow compiled Eff</text>
+  </g>
+  <g data-box="warrant-grant"><rect x="895" y="115" width="265" height="105" rx="8" class="node"/>
+    <text x="912" y="147" class="head">Warrant / run grant</text><text x="912" y="176" class="body">This released delegation</text><text x="912" y="202" class="small">Protected projection + binding</text>
+  </g>
+  <g data-box="intersection"><rect x="410" y="280" width="380" height="100" rx="9" class="secure"/>
+    <text x="600" y="318" text-anchor="middle" class="head">Every ceiling must permit</text><text x="600" y="350" text-anchor="middle" class="body">operation + resource + byte bounds</text>
+  </g>
+  <g data-box="lun"><rect x="40" y="450" width="320" height="145" rx="9" class="node"/>
+    <text x="58" y="488" class="head">Lun runtime handler</text><text x="58" y="518" class="body">Static capability + fresh binding</text><text x="58" y="548" class="body">Consume NativeOperation evidence</text><text x="58" y="577" class="small">Local IO has separate bounded paths</text>
+  </g>
+  <g data-box="broker"><rect x="430" y="450" width="340" height="145" rx="9" class="secure"/>
+    <text x="448" y="488" class="head">Liaison broker</text><text x="448" y="518" class="body">HMAC + four stored ceilings</text><text x="448" y="548" class="body">Prepared / Reserved / Execution</text><text x="448" y="577" class="small">Use credential only on checked path</text>
+  </g>
+  <g data-box="provider"><rect x="840" y="450" width="320" height="145" rx="9" class="node"/>
+    <text x="858" y="488" class="head">Provider operation</text><text x="858" y="518" class="body">OAuth / IAM / ACL still apply</text><text x="858" y="548" class="body">No wider token or raw-IO fallback</text><text x="858" y="577" class="small">Protocol / transport remain trusted</text>
+  </g>
+  <g data-box="live-policy"><rect x="40" y="660" width="320" height="140" rx="9" class="node"/>
+    <text x="58" y="698" class="head">Live policy documents</text><text x="58" y="728" class="body">Connection / organization / run</text><text x="58" y="757" class="body">Independent protected namespaces</text><text x="58" y="782" class="small">Closed or missing gates deny access</text>
+  </g>
+  <g data-box="signed-token"><rect x="430" y="660" width="340" height="140" rx="9" class="node"/>
+    <text x="448" y="698" class="head">Signed warrant</text><text x="448" y="728" class="body">Provider, action, connection</text><text x="448" y="757" class="body">Organization, run, expiry, budget</text><text x="448" y="782" class="small">HMAC validity cannot reopen a gate</text>
+  </g>
+  <text x="40" y="849" class="body">Types prove the named authorization model; SQL, cryptography, FFI and remote API behavior remain explicit trust boundaries.</text>
+  <text x="40" y="877" class="small">The MAC and protected projection jointly bind execution. Resource-prefix grants are not all embedded in the token.</text>
+</svg>

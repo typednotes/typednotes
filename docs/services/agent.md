@@ -2,6 +2,12 @@
 
 **Language:** Lean 4 + `linen`
 
+**Status: abstract role/design sketch.** Lode is the implemented coding agent;
+the current app does not require an additional generic-agent service. The loop
+and theorem signatures below are design examples, not evidence that this separate
+service or every sketched proof exists. See [the current component map](../system-architecture.md)
+and [Lode's contract](lode.md).
+
 ## 1. Purpose
 
 Decide what to do on the user's behalf, and do it by calling [`broker`](broker.md). Uses

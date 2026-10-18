@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="790" viewBox="0 0 1200 790" role="img" aria-labelledby="title desc">
+  <title id="title">Full, Lite and Local deployment shapes</title>
+  <desc id="desc">Full separates service containers and provides a classic compute database. Lite supervises the same six application processes in one warm container using external Serverless SQL, with compute role provisioning disabled and ephemeral worker disks. Local adds PostgreSQL in the combined image and persists a dedicated host directory. Native paired messaging additionally requires adapter packaging, persistent encrypted device storage and worker ownership.</desc>
+  <defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 9 4.5 0 9Z" fill="#426380"/></marker></defs>
+  <style>text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}.title{font-size:28px;font-weight:700}.head{font-size:22px;font-weight:700}.sub{font-size:18px;font-weight:700}.body{font-size:16px}.small{font-size:14px;fill:#526575}.outer{fill:#f5f8fb;stroke:#acbfce;stroke-width:1.5}.box{fill:white;stroke:#acbfce;stroke-width:1.5}.flow{fill:none;stroke:#426380;stroke-width:2;marker-end:url(#arrow)}</style>
+  <rect width="1200" height="790" fill="white"/>
+  <text x="40" y="46" class="title">Logical service boundaries do not require six containers</text>
+  <text x="40" y="77" class="body">Packaging changes process isolation and storage capabilities, not ownership of contracts.</text>
+
+  <g data-box="full-panel"><rect x="40" y="110" width="340" height="490" rx="10" class="outer"/>
+    <text x="60" y="149" class="head">Full</text><text x="60" y="179" class="body">Separate service containers</text>
+  </g>
+  <g data-box="lite-panel"><rect x="430" y="110" width="340" height="490" rx="10" class="outer"/>
+    <text x="450" y="149" class="head">Lite</text><text x="450" y="179" class="body">One warm service container</text>
+  </g>
+  <g data-box="local-panel"><rect x="820" y="110" width="340" height="490" rx="10" class="outer"/>
+    <text x="840" y="149" class="head">Local</text><text x="840" y="179" class="body">Combined image + PostgreSQL</text>
+  </g>
+
+  <g data-box="full-services"><rect x="60" y="205" width="300" height="110" rx="7" class="box"/>
+    <text x="78" y="237" class="sub">Internal service APIs</text><text x="78" y="266" class="body">App · Lode · Lun</text><text x="78" y="292" class="body">Liaison · Ledger · Secrets</text>
+  </g>
+  <g data-box="lite-services"><rect x="450" y="205" width="300" height="110" rx="7" class="box"/>
+    <text x="468" y="237" class="sub">Supervised processes</text><text x="468" y="266" class="body">App · Lode · Lun</text><text x="468" y="292" class="body">Liaison · Ledger · Secrets</text>
+  </g>
+  <g data-box="local-services"><rect x="840" y="205" width="300" height="110" rx="7" class="box"/>
+    <text x="858" y="237" class="sub">Supervised processes</text><text x="858" y="266" class="body">Same six services + PostgreSQL</text><text x="858" y="292" class="small">Only the app port is published locally</text>
+  </g>
+  <path class="flow" d="M210 315V355"/>
+  <path class="flow" d="M600 315V355"/>
+  <path class="flow" d="M990 315V355"/>
+  <g data-box="full-data"><rect x="60" y="355" width="300" height="125" rx="7" fill="#edf4ff" stroke="#6488b8"/>
+    <text x="78" y="388" class="sub">Separated data roles</text><text x="78" y="418" class="body">Core / vault PostgreSQL</text><text x="78" y="446" class="body">Classic compute PostgreSQL</text><text x="78" y="469" class="small">Actor roles + schema confinement</text>
+  </g>
+  <g data-box="lite-data"><rect x="450" y="355" width="300" height="125" rx="7" fill="#edf4ff" stroke="#6488b8"/>
+    <text x="468" y="388" class="sub">External Serverless SQL</text><text x="468" y="418" class="body">Shared logical migration histories</text><text x="468" y="446" class="body">Compute role setup disabled</text><text x="468" y="469" class="small">Worker disks remain ephemeral</text>
+  </g>
+  <g data-box="local-data"><rect x="840" y="355" width="300" height="125" rx="7" fill="#edf4ff" stroke="#6488b8"/>
+    <text x="858" y="388" class="sub">Dedicated host directory</text><text x="858" y="418" class="body">Database + service keys + state</text><text x="858" y="446" class="body">Separate logical compute DB</text><text x="858" y="469" class="small">Supervisor applies packaged migrations</text>
+  </g>
+  <text x="60" y="523" class="body">Private access and operator tooling</text><text x="60" y="553" class="small">Check the concrete fleet declaration.</text>
+  <text x="450" y="523" class="body">Six processes, one container</text><text x="450" y="553" class="small">Co-location is not tenant isolation.</text>
+  <text x="840" y="523" class="body">Human OAuth login still required</text><text x="840" y="553" class="small">Backups must preserve keys and data.</text>
+
+  <g data-box="paired-requirement"><rect x="40" y="640" width="1120" height="115" rx="9" fill="#fff3d7" stroke="#b48a4d" stroke-width="1.5"/>
+    <text x="60" y="675" class="sub">Native paired messaging is an explicit deployment capability</text>
+    <text x="60" y="706" class="body">Device keys need persistent encrypted storage, native adapter libraries and stable worker ownership.</text>
+    <text x="60" y="733" class="small">Reviewed combined-image extraction copies the Liaison binary only; packaging and device-storage wiring need explicit integration.</text>
+  </g>
+</svg>

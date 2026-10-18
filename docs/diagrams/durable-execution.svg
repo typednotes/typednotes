@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="940" viewBox="0 0 1200 940" role="img" aria-labelledby="title desc">
+  <title id="title">Durable orchestration around bounded Lun steps</title>
+  <desc id="desc">The app reads durable occurrences and prior state from PostgreSQL, invokes a bounded Lun step with fresh authority, then commits the returned state, history and delivery outbox together. The app schedules future wake-ups and separately relays ordered messages through Liaison. Lost execution or send responses become uncertain and block automatic replay.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 9 4.5 0 9Z" fill="#426380"/></marker>
+    <marker id="uncertain-arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 9 4.5 0 9Z" fill="#996522"/></marker>
+  </defs>
+  <style>text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}.title{font-size:28px;font-weight:700}.head{font-size:21px;font-weight:700}.body{font-size:16px}.small{font-size:14px;fill:#526575}.node{fill:#f5f8fb;stroke:#acbfce;stroke-width:1.5}.state{fill:#edf4ff;stroke:#6488b8;stroke-width:1.5}.flow{fill:none;stroke:#426380;stroke-width:2;marker-end:url(#arrow)}.ambiguous{fill:none;stroke:#996522;stroke-width:2;stroke-dasharray:6 4;marker-end:url(#uncertain-arrow)}</style>
+  <rect width="1200" height="940" fill="white"/>
+  <text x="45" y="46" class="title">Persistent work belongs to the app; Lun executes a bounded step</text>
+  <text x="45" y="77" class="body">Returned state and delivery intent can commit atomically. Remote effects cannot join that local transaction.</text>
+
+  <path class="flow" d="M540 177H740"/>
+  <text x="640" y="149" text-anchor="middle" class="small">state + inputs</text>
+  <text x="640" y="169" text-anchor="middle" class="small">fresh authority</text>
+  <path class="flow" d="M940 245V298H300V350"/>
+  <text x="625" y="287" text-anchor="middle" class="small">returned state + ordered changes + nextCallAt</text>
+  <path class="flow" d="M540 432H740"/>
+  <text x="640" y="415" text-anchor="middle" class="small">persisted emissions</text>
+  <path class="flow" d="M300 510V600"/>
+  <text x="315" y="562" class="small">schedule next wake-up</text>
+  <path class="flow" d="M940 510V600"/>
+  <text x="956" y="562" class="small">fresh grants per send</text>
+  <path class="flow" d="M60 660H25V177H60"/>
+  <path class="ambiguous" d="M1140 205H1174V823H870"/>
+  <path class="ambiguous" d="M1140 666H1174V823H870"/>
+  <text x="1161" y="306" text-anchor="end" class="small">response lost</text>
+  <text x="1161" y="748" text-anchor="end" class="small">send result ambiguous</text>
+
+  <g data-box="read-state"><rect x="60" y="115" width="480" height="130" rx="9" class="state"/>
+    <text x="80" y="153" class="head">1. Claim and serialize durable work</text><text x="80" y="184" class="body">PostgreSQL occurrence + previous graph state</text><text x="80" y="214" class="small">Bind actor, build, declaration and revision</text>
+  </g>
+  <g data-box="step"><rect x="740" y="115" width="400" height="130" rx="9" class="node"/>
+    <text x="760" y="153" class="head">2. Lun graph / producer step</text><text x="760" y="184" class="body">Checked functions and bounded effects</text><text x="760" y="214" class="small">No durable runtime session or timer sleep</text>
+  </g>
+  <g data-box="commit"><rect x="60" y="350" width="480" height="160" rx="9" class="state"/>
+    <text x="80" y="388" class="head">3. Commit application state</text><text x="80" y="420" class="body">State + revision + outcomes + run completion</text><text x="80" y="452" class="body">Ordered channel-delivery outbox rows</text><text x="80" y="485" class="small">Source response persists before graph handoff</text>
+  </g>
+  <g data-box="relay"><rect x="740" y="350" width="400" height="160" rx="9" class="node"/>
+    <text x="760" y="388" class="head">4. App outbox relay</text><text x="760" y="420" class="body">Send emissions in recorded order</text><text x="760" y="452" class="body">Record sent / failed / uncertain outcome</text><text x="760" y="485" class="small">Do not rerun the graph to resend a message</text>
+  </g>
+  <g data-box="wake"><rect x="60" y="600" width="480" height="120" rx="9" class="node"/>
+    <text x="80" y="638" class="head">5a. App schedules the next invocation</text><text x="80" y="669" class="body">Cadence or returned producer deadline</text><text x="80" y="697" class="small">A worker must run; the browser need not stay open</text>
+  </g>
+  <g data-box="external"><rect x="740" y="600" width="400" height="120" rx="9" class="node"/>
+    <text x="760" y="638" class="head">5b. Liaison → provider</text><text x="760" y="669" class="body">Authorize and perform the external send</text><text x="760" y="697" class="small">Provider idempotency is a separate property</text>
+  </g>
+  <g data-box="uncertain"><rect x="370" y="780" width="500" height="105" rx="9" fill="#fff3d7" stroke="#b48a4d" stroke-width="1.5"/>
+    <text x="620" y="818" text-anchor="middle" class="head">Uncertain: do not automatically replay</text><text x="620" y="850" text-anchor="middle" class="body">Reconcile possible effects before an explicit restart</text>
+  </g>
+  <text x="45" y="919" class="small">A lease expiry or missing response does not establish that a remote effect failed. Exactly-once external effects are not claimed.</text>
+</svg>

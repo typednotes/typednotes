@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc">
+  <title id="title">Typednotes logical services and selected data flows</title>
+  <desc id="desc">The browser uses the Rust fullstack app. The app orchestrates Lode and Lun and stores product state in PostgreSQL. Liaison mediates credentialed provider operations and reads credentials and policies from Secrets. Ledger maintains shared credit tables. Linen is a linked library. Boxes represent responsibilities rather than container boundaries.</desc>
+  <defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 9 4.5 0 9Z" fill="#426380"/></marker></defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a} .title{font-size:28px;font-weight:700} .head{font-size:21px;font-weight:700} .body{font-size:16px} .small{font-size:14px;fill:#526575}
+    .node{fill:#f5f8fb;stroke:#acbfce;stroke-width:1.5} .control{fill:#edf4ff;stroke:#6488b8;stroke-width:1.5} .secure{fill:#eaf6f2;stroke:#5c9184;stroke-width:1.5}
+    .flow{fill:none;stroke:#426380;stroke-width:2;marker-end:url(#arrow)} .store{stroke-dasharray:6 4}
+  </style>
+  <rect width="1200" height="900" fill="white"/>
+  <text x="40" y="46" class="title">Typednotes: logical system map</text>
+  <text x="40" y="77" class="body">Product authority, code generation, checked execution and credentialed effects</text>
+
+  <path class="flow" d="M270 173H410"/>
+  <text x="340" y="157" text-anchor="middle" class="small">UI / API</text>
+  <path class="flow" d="M740 156H930"/>
+  <text x="835" y="140" text-anchor="middle" class="small">OAuth / bootstrap</text>
+  <path class="flow" d="M460 260V303H170V350"/>
+  <text x="210" y="294" class="small">generation</text>
+  <path class="flow" d="M575 260V350"/>
+  <text x="590" y="317" class="small">steps</text>
+  <path class="flow" d="M690 260V303H1030V350"/>
+  <text x="710" y="294" class="small">broker calls / control</text>
+  <path class="flow" d="M300 420H410"/>
+  <text x="355" y="405" text-anchor="middle" class="small">build / trial</text>
+  <path class="flow" d="M740 420H900"/>
+  <text x="820" y="405" text-anchor="middle" class="small">connectors</text>
+  <path class="flow" d="M1160 420H1180V173H1160"/>
+  <path class="flow store" d="M740 235H880V720H740"/>
+  <text x="811" y="643" class="small">app SQL</text>
+  <path class="flow store" d="M960 525V615H700V650"/>
+  <text x="730" y="603" class="small">budget / audit SQL</text>
+  <path class="flow" d="M1030 525V650"/>
+  <text x="1043" y="588" class="small">read / refresh</text>
+  <path class="flow store" d="M300 711H410"/>
+  <text x="355" y="695" text-anchor="middle" class="small">credit SQL</text>
+
+  <g data-box="browser"><rect x="40" y="120" width="230" height="105" rx="9" class="node"/>
+    <text x="58" y="154" class="head">Browser / clients</text><text x="58" y="181" class="body">Notes, inputs, settings</text><text x="58" y="205" class="small">No credential readback</text>
+  </g>
+  <g data-box="app"><rect x="410" y="110" width="330" height="150" rx="9" class="control"/>
+    <text x="430" y="147" class="head">Typednotes app · Rust</text><text x="430" y="177" class="body">UI + trusted product control</text><text x="430" y="204" class="body">Identity, grants, orchestration</text><text x="430" y="234" class="small">Owns durable state and scheduling</text>
+  </g>
+  <g data-box="external"><rect x="930" y="120" width="230" height="105" rx="9" class="node"/>
+    <text x="948" y="154" class="head">External services</text><text x="948" y="181" class="body">Identity, Git, models,</text><text x="948" y="205" class="body">mail, storage, messaging</text>
+  </g>
+  <g data-box="lode"><rect x="40" y="350" width="260" height="135" rx="9" class="node"/>
+    <text x="58" y="387" class="head">Lode · Lean</text><text x="58" y="416" class="body">Bounded coding sessions</text><text x="58" y="443" class="body">Compiler / LSP / Git work</text><text x="58" y="467" class="small">Model + private Git via Liaison</text>
+  </g>
+  <g data-box="lun"><rect x="410" y="350" width="330" height="135" rx="9" class="node"/>
+    <text x="430" y="387" class="head">Lun · Lean</text><text x="430" y="416" class="body">Check, compile, execute a step</text><text x="430" y="443" class="body">Fresh authority; warm code cache</text><text x="430" y="467" class="small">Returns state; does not persist it</text>
+  </g>
+  <g data-box="liaison"><rect x="900" y="350" width="260" height="175" rx="9" class="secure"/>
+    <text x="918" y="387" class="head">Liaison · Lean</text><text x="918" y="416" class="body">Verify, authorize, reserve</text><text x="918" y="443" class="body">Use credentials; audit</text><text x="918" y="475" class="small">In-process Rust device clients</text><text x="918" y="499" class="small">Native messaging state on disk</text>
+  </g>
+  <g data-box="ledger"><rect x="40" y="650" width="260" height="120" rx="9" class="node"/>
+    <text x="58" y="687" class="head">Ledger · Lean</text><text x="58" y="716" class="body">Credit model + SQL contract</text><text x="58" y="744" class="small">Expired-hold sweeper / health</text>
+  </g>
+  <g data-box="database"><rect x="410" y="650" width="330" height="140" rx="9" class="control"/>
+    <text x="430" y="687" class="head">PostgreSQL ownership</text><text x="430" y="717" class="body">App state, occurrences, outbox</text><text x="430" y="744" class="body">Credit holds and broker audit</text><text x="430" y="771" class="small">Compute roles are a separate bound</text>
+  </g>
+  <g data-box="secrets"><rect x="900" y="650" width="260" height="140" rx="9" class="secure"/>
+    <text x="918" y="687" class="head">Secrets · Rust</text><text x="918" y="717" class="body">Auth + path policy + KV</text><text x="918" y="744" class="body">Encrypted storage barrier</text><text x="918" y="771" class="small">App writes; broker reads keys</text>
+  </g>
+  <text x="40" y="837" class="body">Linen is linked into Lean services and generated programs; it is not an HTTP service.</text>
+  <text x="40" y="866" class="small">Selected flows only. Dashed edges are SQL access; crossing lines are not junctions. Local bounded handlers: see the guide.</text>
+</svg>

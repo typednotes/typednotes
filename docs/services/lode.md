@@ -2,8 +2,11 @@
 
 **Language:** Lean 4 + `linen` · **Repository:** [`typednotes/lode`](https://github.com/typednotes/lode)
 
-**Coordinated release target:** Lode 0.3.0, Lun 0.3.0, Typednotes 0.6.0,
+**Earlier coordinated release baseline:** Lode 0.3.0, Lun 0.3.0, Typednotes 0.6.0,
 Linen 1.10.0, Liaison 0.6.0. Release files/pins/publication are parent-owned.
+For the current logical roles and stateless execution path, see
+[the implemented system architecture](../system-architecture.md) and the
+[owning repository](https://github.com/typednotes/lode).
 
 ## 1. Purpose
 
@@ -28,9 +31,10 @@ types, `Data/Json`; Liaison's pure `Liaison.Wire` SDK. The Lean
 toolchain and `lake` are on its `PATH`; the Docker image pre-builds a linen
 package cache so a workspace does not rebuild linen.
 
-**Gaps** (§8): no web access — the model cannot read a URL while implementing a
-cell; and no LSP — its feedback loop is whole-`lake build` diagnostics, not
-hover, goals or diagnostics at a point.
+Lean LSP access is implemented (§8). The feedback loop includes real compiler and
+bounded LSP diagnostics. Authorized HTTP/data exploration can go through checked
+Lun functions under the authenticated runtime bridge; it does not imply an
+unrestricted model-selected URL-fetch tool or raw HTTP fallback.
 
 ## 3. Interface
 

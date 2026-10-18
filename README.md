@@ -55,6 +55,10 @@ Dockerfile            `dx bundle` → the `web` server binary + `public/`
 
 ## Develop
 
+Start with the [implemented system architecture](https://github.com/typednotes/typednotes/blob/main/docs/system-architecture.md)
+for component/service responsibilities, SVG diagrams, execution and authority
+flows, deployment shapes and references to related systems and research.
+
 For a hot-reloaded local app backed by deployed services, use the private
 `.env.local` launcher and transport settings described in
 [`docs/local-development.md`](https://github.com/typednotes/typednotes/blob/main/docs/local-development.md).
@@ -91,6 +95,9 @@ Rust adapters inside **Liaison v0.7.0**, scoped direct-text reads/sends and devi
 lifecycle cleanup. It requires app migration **0016** and broker-owned persistent
 encrypted storage. See [release notes](https://github.com/typednotes/typednotes/blob/main/docs/release-0.12.0.md)
 and [paired messaging setup](https://github.com/typednotes/typednotes/blob/main/docs/paired-messaging.md).
+The **v0.12.1** documentation patch adds the implemented architecture guide,
+research references and five SVG diagrams; see its
+[release notes](https://github.com/typednotes/typednotes/blob/main/docs/release-0.12.1.md).
 
 The **v0.11.0** release uses **Org → Project → Notes**, project-level
 models/permissions and **Lun v0.4.1**'s stateless producer API. Typednotes persists

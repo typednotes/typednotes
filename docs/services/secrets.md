@@ -2,13 +2,20 @@
 
 **Language:** Rust · **Repository:** https://github.com/typednotes/secrets · **Status:** built
 
+For the current clients, path ownership and trust boundaries, see
+[the implemented architecture](../system-architecture.md). The Lean client/type
+sketches retained below are design material, not proofs of the Rust vault.
+
 ## 1. Purpose
 
-Store and serve third-party credentials — the OAuth refresh tokens behind "connect to many
-services". Modelled after OpenBao. Scoped per `(user_id, provider, connection_id)`.
+Authenticate clients, enforce path/capability policies and store encrypted secret
+values. Typednotes uses it for provider credentials, independent live policy/run
+projections, graph secrets and actor-bound compute credentials. The server also
+has additional engines; their existence does not imply all are wired into the app.
 
-**Not responsible for:** deciding who may fetch a credential (that is a warrant check in
-[`broker`](broker.md)).
+Secrets enforces its own client authentication and ACLs. Product membership and
+ownership checks belong to the app; delegated warrant/operation authorization
+belongs to [`broker`](broker.md). These are independent ceilings.
 
 ## 2. Why this one stays in Rust
 
@@ -28,9 +35,12 @@ proof reaches.
 
 ## 3. Interface
 
-Consumed only by [`broker`](broker.md), and only after a warrant check. Never by
-[`agent`](agent.md), never by [`web`](web.md), and a credential is never returned to a
-client.
+The app writes/deletes provider credentials and publishes trusted policy documents
+with a write-only credential identity. Liaison reads/refreshes provider credentials
+behind its authorization path. Lun resolves bounded local compute/graph-secret
+credentials with its own service identity. The browser and model receive no raw
+vault identity or stored provider-token readback; generated functions use checked
+effect handlers rather than an unrestricted vault client.
 
 A `linen` client follows `Cloud/Secret/{SecretsManager,ScalewaySecretManager}` as templates.
 The client type should carry the scope so a call site cannot request a credential outside

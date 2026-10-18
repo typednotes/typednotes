@@ -2,13 +2,18 @@
 
 **Language:** Dioxus 0.7 (web + desktop)
 
+**Current packaging:** shared Rust UI in `packages/ui`, served by the fullstack
+app in `packages/web`. This is a logical role, not an independent frontend
+service. See [the implemented architecture](../system-architecture.md).
+
 ## 1. Purpose
 
-The user interface: OIDC login handoff, connecting third-party services, triggering and
-watching agent runs, billing and credit purchase.
+The user interface: app login, organization/project/note settings, connected
+accounts, code-generation progress, typed inputs/outputs, messaging and public
+shares. Credit-purchase/tax UX in older proposals is not implied by this scope.
 
-Also hosts the **login UI** that [`idp`](idp.md) redirects to for its challenge handoff —
-see `idp` §3. That is the one place where frontend code sits on a security-critical path.
+A future standalone [`idp`](idp.md) challenge handoff is a design proposal;
+current login is handled by the app's external-provider flows and session cookie.
 
 ## 2. The honest framing
 
@@ -29,10 +34,11 @@ in preference to hand-rolled HTML, per `AGENTS.md`.
 
 Neither is a proof; both are review rules.
 
-1. **No third-party credential ever reaches the client.** Access tokens and refresh tokens
-   live in [`secrets`](secrets.md) and are used only inside [`broker`](broker.md). The
-   frontend sees connection *status*, never a token. A "just for debugging" endpoint that
-   returns one is the failure mode to watch for.
+1. **No stored third-party credential readback.** Persisted provider tokens live
+   in [`secrets`](secrets.md) and are resolved by authorized backend paths, not
+   returned in connection DTOs. A user can enter their own key in a setup form;
+   owner/admin-only short-lived pairing codes are deliberately displayed for
+   linking. Neither is an API for reading the stored credential back.
 2. **The client never mints or attenuates a warrant.** Warrants are minted in
    [`core`](core.md) and attenuated in [`agent`](agent.md). A warrant in browser-reachable
    code is attenuable by the user's browser — which is not a vulnerability by itself, since

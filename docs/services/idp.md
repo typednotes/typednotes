@@ -2,6 +2,11 @@
 
 **Language:** Lean 4 + `linen` · **Decision:** [`../architecture.md`](../architecture.md) §3.1
 
+**Status: proposed service, not a current deployment dependency.** The protocol,
+module split, gap list and theorem sketches below are a historical design.
+Current human login uses the Rust app's GitHub/Google flows and app-owned sessions;
+see [the implemented architecture](../system-architecture.md).
+
 ## 1. Purpose
 
 Authenticate humans and issue OIDC tokens. Two modules in one binary, split because they
