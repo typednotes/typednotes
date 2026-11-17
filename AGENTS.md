@@ -1,6 +1,6 @@
 # AGENTS.md — Typednotes
 
-<!-- agents-md standard v3 — github.com/ngrislain/agents. Refresh with the agents-md skill. -->
+<!-- agents-md standard v4 — github.com/ngrislain/agents. Refresh with the agents-md skill. -->
 
 Instructions for coding agents (Claude Code, Codex, pi, opencode, …) and for humans working on
 this project. `CLAUDE.md` imports this file; edit this one.
