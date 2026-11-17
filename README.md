@@ -98,6 +98,10 @@ and [paired messaging setup](https://github.com/typednotes/typednotes/blob/main/
 The **v0.12.1** documentation patch adds the implemented architecture guide,
 research references and five SVG diagrams; see its
 [release notes](https://github.com/typednotes/typednotes/blob/main/docs/release-0.12.1.md).
+The **v0.12.2** maintenance patch enforces `cargo fmt` and `cargo clippy -D warnings`
+in CI; runtime behavior is unchanged. See its
+[release notes](https://github.com/typednotes/typednotes/blob/main/docs/release-0.12.2.md)
+and [`CHANGELOG.md`](https://github.com/typednotes/typednotes/blob/main/CHANGELOG.md).
 
 The **v0.11.0** release uses **Org → Project → Notes**, project-level
 models/permissions and **Lun v0.4.1**'s stateless producer API. Typednotes persists
