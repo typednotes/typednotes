@@ -1,18 +1,28 @@
+use crate::components::{
+    button::{Button, ButtonSize, ButtonVariant},
+    card::{Card, CardContent, CardDescription, CardHeader, CardTitle},
+    select::{Select, SelectOption},
+};
+use crate::{auth::LoginPanel, error_message};
 use api::{get_workspace, list_orgs, list_projects, set_workspace_defaults};
 use dioxus::prelude::*;
-use crate::components::{button::{Button,ButtonSize,ButtonVariant}, card::{Card,CardContent,CardHeader,CardTitle,CardDescription}, select::{Select,SelectOption}};
-use crate::{auth::LoginPanel,error_message};
 
 pub const SETUP_CSS: Asset = asset!("/assets/styling/setup.css");
 pub static WORKSPACE_REVISION: GlobalSignal<u64> = Signal::global(|| 0);
-pub(crate) fn refresh_workspace() { *WORKSPACE_REVISION.write() += 1; }
+pub(crate) fn refresh_workspace() {
+    *WORKSPACE_REVISION.write() += 1;
+}
 
 /// Setup is persisted user state. The landing opens the relevant standard page.
 #[component]
 pub fn WorkspaceLanding() -> Element {
     let workspace = use_server_future(get_workspace)?;
     let nav = navigator();
-    use_effect(move || { if let Some(Ok(w))=workspace() { nav.replace(w.default_url.unwrap_or(w.setup_url)); } });
+    use_effect(move || {
+        if let Some(Ok(w)) = workspace() {
+            nav.replace(w.default_url.unwrap_or(w.setup_url));
+        }
+    });
     rsx! { match workspace() {
         Some(Err(ServerFnError::ServerError{code:401,..})) => rsx!{LoginPanel{error:None}},
         Some(Err(e)) => rsx!{p{class:"orgs-error","Could not open your project: {error_message(&e)}"}},
@@ -28,7 +38,11 @@ pub fn OnboardingPage() -> Element {
 
 #[component]
 pub fn WorkspaceGuide(current_path: ReadSignal<String>) -> Element {
-    let mut workspace=use_resource(move || { let _=current_path(); let _=*WORKSPACE_REVISION.read(); get_workspace() });
+    let mut workspace = use_resource(move || {
+        let _ = current_path();
+        let _ = *WORKSPACE_REVISION.read();
+        get_workspace()
+    });
     rsx! {
         document::Stylesheet{href:SETUP_CSS}
         if let Some(Ok(w))=workspace() { if w.setup_required {
@@ -50,16 +64,41 @@ pub fn WorkspaceGuide(current_path: ReadSignal<String>) -> Element {
 /// session preferences. Selecting a target never widens its execution grants.
 #[component]
 pub(crate) fn DefaultWorkspace() -> Element {
-    let mut workspace=use_server_future(get_workspace)?;
-    let orgs=use_resource(list_orgs);
-    let projects=use_resource(move || async move {match workspace().and_then(Result::ok).and_then(|w|w.org){Some(o)=>list_projects(o.slug).await,None=>Ok(Vec::new())}});
-    let selected_org=use_memo(move ||workspace().and_then(Result::ok).and_then(|w|w.org.map(|o|o.slug)));
-    let selected_project=use_memo(move ||workspace().and_then(Result::ok).and_then(|w|w.project.map(|p|p.slug)));
-    let mut error=use_signal(||None::<String>);let mut busy=use_signal(||false);
-    let save=use_callback(move |(o,p,g):(String,Option<String>,Option<String>)|{spawn(async move{
-        busy.set(true);match set_workspace_defaults(o,p,g,false).await{Ok(_)=>{error.set(None);workspace.restart();refresh_workspace();},Err(e)=>error.set(Some(error_message(&e)))}busy.set(false);
-    });});
-    rsx!{Card{CardHeader{CardTitle{"Default project"}CardDescription{"Choose the organization and project to open after sign-in."}}
+    let mut workspace = use_server_future(get_workspace)?;
+    let orgs = use_resource(list_orgs);
+    let projects = use_resource(move || async move {
+        match workspace().and_then(Result::ok).and_then(|w| w.org) {
+            Some(o) => list_projects(o.slug).await,
+            None => Ok(Vec::new()),
+        }
+    });
+    let selected_org = use_memo(move || {
+        workspace()
+            .and_then(Result::ok)
+            .and_then(|w| w.org.map(|o| o.slug))
+    });
+    let selected_project = use_memo(move || {
+        workspace()
+            .and_then(Result::ok)
+            .and_then(|w| w.project.map(|p| p.slug))
+    });
+    let mut error = use_signal(|| None::<String>);
+    let mut busy = use_signal(|| false);
+    let save = use_callback(move |(o, p, g): (String, Option<String>, Option<String>)| {
+        spawn(async move {
+            busy.set(true);
+            match set_workspace_defaults(o, p, g, false).await {
+                Ok(_) => {
+                    error.set(None);
+                    workspace.restart();
+                    refresh_workspace();
+                }
+                Err(e) => error.set(Some(error_message(&e))),
+            }
+            busy.set(false);
+        });
+    });
+    rsx! {Card{CardHeader{CardTitle{"Default project"}CardDescription{"Choose the organization and project to open after sign-in."}}
         CardContent{div{class:"conn-subform",
             if let Some(Ok(options))=orgs(){Select::<String>{value:Some(selected_org.into()),aria_label:"Default organization",disabled:busy(),on_value_change:move |v:Option<String>|{if let Some(v)=v{save.call((v,None,None));}},
                 for(index,o)in options.iter().enumerate(){SelectOption::<String>{index,value:o.slug.clone(),text_value:o.name.clone(),"{o.name}"}}}}
@@ -72,9 +111,10 @@ pub(crate) fn DefaultWorkspace() -> Element {
 }
 
 #[component]
-pub(crate) fn FirstProjectSetup()->Element{
-    let mut setup=use_server_future(get_workspace)?;let mut error=use_signal(||None::<String>);
-    rsx!{if let Some(Ok(w))=setup(){if w.setup_required&&w.project.is_none(){
+pub(crate) fn FirstProjectSetup() -> Element {
+    let mut setup = use_server_future(get_workspace)?;
+    let mut error = use_signal(|| None::<String>);
+    rsx! {if let Some(Ok(w))=setup(){if w.setup_required&&w.project.is_none(){
         Card{CardHeader{CardTitle{"Connect a repository and AI account"}CardDescription{"Choose GitHub or GitLab and an AI provider. Your first project uses the repository's name; its organization uses the repository owner."}}
             CardContent{
                 if let Some(org)=w.org{Link{to:"/orgs/{org.slug}/settings/connections","Connect accounts and choose repository"}}
@@ -86,15 +126,31 @@ pub(crate) fn FirstProjectSetup()->Element{
 }
 
 #[component]
-pub(crate) fn RepositoryProjectSetup(slug:ReadSignal<String>)->Element{
-    let setup=use_server_future(get_workspace)?;
-    let connections=use_resource(move ||{let _=*WORKSPACE_REVISION.read();api::list_connections(slug())});
-    let mut connection=use_signal(String::new);let mut repository=use_signal(String::new);let mut page=use_signal(||1u32);
-    let repos=use_resource(move ||async move{if connection().is_empty(){Ok(api::RepoPage{repos:Vec::new(),next_page:None,truncated:false})}else{api::list_repo_page(slug(),connection(),page()).await}});
-    let selected_connection=crate::components::select::use_selected(connection.into());
-    let selected_repository=crate::components::select::use_selected(repository.into());
-    let mut error=use_signal(||None::<String>);let mut busy=use_signal(||false);
-    rsx!{if let Some(Ok(w))=setup(){if w.project.is_none()&&w.org.is_some_and(|o|o.slug==slug()){
+pub(crate) fn RepositoryProjectSetup(slug: ReadSignal<String>) -> Element {
+    let setup = use_server_future(get_workspace)?;
+    let connections = use_resource(move || {
+        let _ = *WORKSPACE_REVISION.read();
+        api::list_connections(slug())
+    });
+    let mut connection = use_signal(String::new);
+    let mut repository = use_signal(String::new);
+    let mut page = use_signal(|| 1u32);
+    let repos = use_resource(move || async move {
+        if connection().is_empty() {
+            Ok(api::RepoPage {
+                repos: Vec::new(),
+                next_page: None,
+                truncated: false,
+            })
+        } else {
+            api::list_repo_page(slug(), connection(), page()).await
+        }
+    });
+    let selected_connection = crate::components::select::use_selected(connection.into());
+    let selected_repository = crate::components::select::use_selected(repository.into());
+    let mut error = use_signal(|| None::<String>);
+    let mut busy = use_signal(|| false);
+    rsx! {if let Some(Ok(w))=setup(){if w.project.is_none()&&w.org.is_some_and(|o|o.slug==slug()){
         Card{CardHeader{CardTitle{"Choose your first repository"}CardDescription{"Connect an AI account above, then choose a repository. You can keep managing organizations and projects manually."}}
             CardContent{div{class:"conn-subform repo-picker",
                 if let Some(Ok(accounts))=connections(){

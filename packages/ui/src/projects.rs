@@ -1,6 +1,7 @@
 use api::{
     clear_project_repo, current_user, delete_project, get_project, health, list_connections,
-    list_projects, list_repo_page, repository_name, set_project_repo, Connection, Project, Provider, Repo,
+    list_projects, list_repo_page, repository_name, set_project_repo, Connection, Project,
+    Provider, Repo,
 };
 use dioxus::prelude::*;
 
@@ -302,13 +303,38 @@ pub(crate) fn RepoPanel(slug: String, project: Project, on_changed: EventHandler
 }
 
 #[component]
-fn NotebookWriteGrant(slug: String, project: String, repo: api::RepoRef, connections: Vec<Connection>, on_changed: EventHandler<()>) -> Element {
-    let permissions_href=format!("/orgs/{slug}/settings/permissions");
-    let mut busy=use_signal(||false);let mut error=use_signal(||None::<String>);
-    let connection=connections.iter().find(|c|repo.connection_id.as_ref()==Some(&c.id));
-    let root=repo.full_name.split('/').chain(["typednotes"]).map(str::to_string).collect::<Vec<_>>();
-    let allowed=connection.is_some_and(|c|c.permissions.clone().unwrap_or_else(||api::ConnectorPermissions::preset(c.provider,api::PermissionPreset::ReadOnly)).scopes.iter().any(|s|s.operation=="repositories.write"&&s.descendants&&root.starts_with(&s.root)));
-    rsx!{div{class:"conn-subform repo-code-grant",
+fn NotebookWriteGrant(
+    slug: String,
+    project: String,
+    repo: api::RepoRef,
+    connections: Vec<Connection>,
+    on_changed: EventHandler<()>,
+) -> Element {
+    let permissions_href = format!("/orgs/{slug}/settings/permissions");
+    let mut busy = use_signal(|| false);
+    let mut error = use_signal(|| None::<String>);
+    let connection = connections
+        .iter()
+        .find(|c| repo.connection_id.as_ref() == Some(&c.id));
+    let root = repo
+        .full_name
+        .split('/')
+        .chain(["typednotes"])
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let allowed = connection.is_some_and(|c| {
+        c.permissions
+            .clone()
+            .unwrap_or_else(|| {
+                api::ConnectorPermissions::preset(c.provider, api::PermissionPreset::ReadOnly)
+            })
+            .scopes
+            .iter()
+            .any(|s| {
+                s.operation == "repositories.write" && s.descendants && root.starts_with(&s.root)
+            })
+    });
+    rsx! {div{class:"conn-subform repo-code-grant",
         p{class:"conn-meta","Project code is published only inside " code{"{repo.full_name}/typednotes/"} ". Repository selection grants read access, not code writing."}
         if !allowed {Button{variant:ButtonVariant::Outline,disabled:busy()||connection.is_none_or(|c|!c.can_remove),onclick:move |_|{let(slug,project)=(slug.clone(),project.clone());async move{
             busy.set(true);match api::allow_project_code_writes(slug,project).await{Ok(_)=>{error.set(None);on_changed.call(());},Err(e)=>error.set(Some(error_message(&e)))}busy.set(false);
@@ -348,34 +374,76 @@ fn RepoPicker(
         let id = connection();
         let requested_page = page();
         async move {
-            let result = if id.is_empty() { Err("Select a code connection.".into()) }
-                else { list_repo_page(org, id.clone(), requested_page).await.map_err(|e| error_message(&e)) };
+            let result = if id.is_empty() {
+                Err("Select a code connection.".into())
+            } else {
+                list_repo_page(org, id.clone(), requested_page)
+                    .await
+                    .map_err(|e| error_message(&e))
+            };
             (id, requested_page, result)
         }
     });
-    let current = pages().filter(|(id, number, _)| *id == connection() && *number == page()).map(|(_, _, result)| result);
+    let current = pages()
+        .filter(|(id, number, _)| *id == connection() && *number == page())
+        .map(|(_, _, result)| result);
     let mut inventory = previous();
-    if let Some(Ok(current)) = &current { inventory.extend(current.repos.clone()); }
+    if let Some(Ok(current)) = &current {
+        inventory.extend(current.repos.clone());
+    }
     inventory.sort_by(|a, b| a.full_name.cmp(&b.full_name));
     inventory.dedup_by(|a, b| a.full_name == b.full_name);
-    let owners: Vec<String> = inventory.iter().filter_map(|r| r.full_name.split_once('/').map(|(owner, _)| owner.to_string()))
-        .collect::<std::collections::BTreeSet<_>>().into_iter().collect();
-    let choices: Vec<Repo> = inventory.iter().filter(|r| owner().is_empty() || r.full_name.split_once('/').is_some_and(|(name, _)| name == owner()))
-        .filter(|r| r.full_name.to_lowercase().contains(&filter().to_lowercase())).cloned().collect();
+    let owners: Vec<String> = inventory
+        .iter()
+        .filter_map(|r| {
+            r.full_name
+                .split_once('/')
+                .map(|(owner, _)| owner.to_string())
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let choices: Vec<Repo> = inventory
+        .iter()
+        .filter(|r| {
+            owner().is_empty()
+                || r.full_name
+                    .split_once('/')
+                    .is_some_and(|(name, _)| name == owner())
+        })
+        .filter(|r| {
+            r.full_name
+                .to_lowercase()
+                .contains(&filter().to_lowercase())
+        })
+        .cloned()
+        .collect();
     use_effect(move || {
         let id = connection();
         if !id.is_empty() && !connections().iter().any(|c| c.id == id) {
-            connection.set(String::new()); repo.set(String::new()); owner.set(String::new());
-            previous.set(Vec::new()); page.set(1);
+            connection.set(String::new());
+            repo.set(String::new());
+            owner.set(String::new());
+            previous.set(Vec::new());
+            page.set(1);
         }
     });
-    let provider = connections().iter().find(|c| c.id == connection()).map(|c| c.provider);
+    let provider = connections()
+        .iter()
+        .find(|c| c.id == connection())
+        .map(|c| c.provider);
     let parsed = provider.and_then(|provider| repository_name(provider, &repo()).ok());
     let displayed_repository = use_memo(move || {
-        connections().iter().find(|c| c.id == connection()).and_then(|c| repository_name(c.provider, &repo()).ok())
+        connections()
+            .iter()
+            .find(|c| c.id == connection())
+            .and_then(|c| repository_name(c.provider, &repo()).ok())
     });
     let loading = pages.state()() == UseResourceState::Pending;
-    let can_load = current.as_ref().and_then(|result| result.as_ref().ok()).and_then(|result| result.next_page);
+    let can_load = current
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .and_then(|result| result.next_page);
     let choice_count = choices.len();
 
     let save = move |event: FormEvent| {

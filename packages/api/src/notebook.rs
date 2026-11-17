@@ -37,28 +37,45 @@ pub fn cell_references(description: &str) -> Vec<String> {
 /// Rename explicit references, preserving ordinary prose, email addresses and
 /// longer identifiers. The caller saves these dependent declarations atomically.
 pub fn renamed_dependents(cells: &[Cell], old: &str, new: &str) -> Vec<Cell> {
-    cells.iter().filter_map(|cell| {
-        let mut next = cell.clone();
-        if let Some(deps) = &mut next.config.dependencies {
-            for dep in deps { if dep == old { *dep = new.into(); } }
-        }
-        let chars: Vec<(usize, char)> = cell.description.char_indices().collect();
-        let mut description = String::new();
-        let mut copied = 0;
-        for (i, &(offset, ch)) in chars.iter().enumerate() {
-            if ch != '@' || (i > 0 && (chars[i - 1].1.is_alphanumeric() || chars[i - 1].1 == '_')) { continue; }
-            let end = chars[i + 1..].iter().find(|(_, c)| !c.is_ascii_alphanumeric() && *c != '_')
-                .map_or(cell.description.len(), |(offset, _)| *offset);
-            if &cell.description[offset + 1..end] == old {
-                description.push_str(&cell.description[copied..offset + 1]);
-                description.push_str(new);
-                copied = end;
+    cells
+        .iter()
+        .filter_map(|cell| {
+            let mut next = cell.clone();
+            if let Some(deps) = &mut next.config.dependencies {
+                for dep in deps {
+                    if dep == old {
+                        *dep = new.into();
+                    }
+                }
             }
-        }
-        description.push_str(&cell.description[copied..]);
-        next.description = description;
-        if next.description != cell.description || next.config != cell.config { Some(next) } else { None }
-    }).collect()
+            let chars: Vec<(usize, char)> = cell.description.char_indices().collect();
+            let mut description = String::new();
+            let mut copied = 0;
+            for (i, &(offset, ch)) in chars.iter().enumerate() {
+                if ch != '@'
+                    || (i > 0 && (chars[i - 1].1.is_alphanumeric() || chars[i - 1].1 == '_'))
+                {
+                    continue;
+                }
+                let end = chars[i + 1..]
+                    .iter()
+                    .find(|(_, c)| !c.is_ascii_alphanumeric() && *c != '_')
+                    .map_or(cell.description.len(), |(offset, _)| *offset);
+                if &cell.description[offset + 1..end] == old {
+                    description.push_str(&cell.description[copied..offset + 1]);
+                    description.push_str(new);
+                    copied = end;
+                }
+            }
+            description.push_str(&cell.description[copied..]);
+            next.description = description;
+            if next.description != cell.description || next.config != cell.config {
+                Some(next)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Named arguments in their declared order. Old cells without a declaration
@@ -73,10 +90,15 @@ pub fn cell_dependencies(cell: &Cell, cells: &[Cell], nodes: &[GraphNode]) -> Ve
     }
     node_of(nodes, cell)
         .map(|node| {
-            node.args.iter().filter_map(|id| {
-                cells.iter().find(|c| node_of(nodes, c).is_some_and(|n| n.id == *id))
-                    .map(|c| c.name.clone())
-            }).collect()
+            node.args
+                .iter()
+                .filter_map(|id| {
+                    cells
+                        .iter()
+                        .find(|c| node_of(nodes, c).is_some_and(|n| n.id == *id))
+                        .map(|c| c.name.clone())
+                })
+                .collect()
         })
         .unwrap_or_default()
 }
@@ -85,13 +107,22 @@ pub fn cell_dependencies(cell: &Cell, cells: &[Cell], nodes: &[GraphNode]) -> Ve
 pub fn validate_dependencies(cells: &[Cell]) -> Result<(), String> {
     let mut remaining: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for cell in cells {
-        let deps = cell.config.dependencies.clone().unwrap_or_else(|| cell_references(&cell.description));
+        let deps = cell
+            .config
+            .dependencies
+            .clone()
+            .unwrap_or_else(|| cell_references(&cell.description));
         if cell.cell_type.is_source() && !deps.is_empty() {
-            return Err(format!("{}: source cells cannot depend on another cell", cell.name));
+            return Err(format!(
+                "{}: source cells cannot depend on another cell",
+                cell.name
+            ));
         }
         let mut set = BTreeSet::new();
         for dep in &deps {
-            let target = cells.iter().find(|c| c.name == *dep)
+            let target = cells
+                .iter()
+                .find(|c| c.name == *dep)
                 .ok_or_else(|| format!("{}: no note named @{dep}", cell.name))?;
             if target.id == cell.id {
                 return Err(format!("{}: a note cannot depend on itself", cell.name));
@@ -106,9 +137,16 @@ pub fn validate_dependencies(cells: &[Cell]) -> Result<(), String> {
         remaining.insert(&cell.name, set);
     }
     while !remaining.is_empty() {
-        let ready: Vec<_> = remaining.iter().filter(|(_, deps)| deps.is_empty()).map(|(name, _)| *name).collect();
+        let ready: Vec<_> = remaining
+            .iter()
+            .filter(|(_, deps)| deps.is_empty())
+            .map(|(name, _)| *name)
+            .collect();
         if ready.is_empty() {
-            return Err(format!("dependency cycle: {}", remaining.keys().copied().collect::<Vec<_>>().join(" → ")));
+            return Err(format!(
+                "dependency cycle: {}",
+                remaining.keys().copied().collect::<Vec<_>>().join(" → ")
+            ));
         }
         for name in ready {
             remaining.remove(name);
@@ -131,7 +169,11 @@ pub fn ordered_cells(cells: &[Cell], nodes: &[GraphNode], order: CellOrder) -> V
             let mut done = BTreeSet::new();
             let mut sorted = Vec::new();
             while !out.is_empty() {
-                let ready = out.iter().position(|c| cell_dependencies(c, cells, nodes).iter().all(|n| done.contains(n)));
+                let ready = out.iter().position(|c| {
+                    cell_dependencies(c, cells, nodes)
+                        .iter()
+                        .all(|n| done.contains(n))
+                });
                 let Some(index) = ready else {
                     // Legacy/unavailable graph metadata stays visible, even if inconsistent.
                     sorted.extend(out);
@@ -147,8 +189,31 @@ pub fn ordered_cells(cells: &[Cell], nodes: &[GraphNode], order: CellOrder) -> V
     out
 }
 
-pub const NOTEBOOK_EFFECTS: &[&str] = &["Trace", "Error", "HTTP", "FileSystem", "PostgreSQL", "SecretStore", "ObjectStore", "Connector"];
-pub const WRITER_TOOLS: &[&str] = &["read", "ls", "grep", "write", "edit", "bash", "todo", "check", "lsp", "publish", "lun_build", "lun_call", "ask_user"];
+pub const NOTEBOOK_EFFECTS: &[&str] = &[
+    "Trace",
+    "Error",
+    "HTTP",
+    "FileSystem",
+    "PostgreSQL",
+    "SecretStore",
+    "ObjectStore",
+    "Connector",
+];
+pub const WRITER_TOOLS: &[&str] = &[
+    "read",
+    "ls",
+    "grep",
+    "write",
+    "edit",
+    "bash",
+    "todo",
+    "check",
+    "lsp",
+    "publish",
+    "lun_build",
+    "lun_call",
+    "ask_user",
+];
 
 /// Admin-owned upper bounds. Empty lists grant nothing; permissions are never
 /// widened by a cell's generated code or by a session update.
@@ -169,7 +234,9 @@ pub struct EffectPolicy {
     pub connector_ceilings: BTreeMap<String, crate::ConnectorPermissions>,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 impl Default for EffectPolicy {
     fn default() -> Self {
@@ -187,7 +254,9 @@ impl Default for EffectPolicy {
 impl EffectPolicy {
     /// Text editing uses the same strict schema and validation as visual editing.
     pub fn from_toml(text: &str) -> Result<Self, String> {
-        if text.len() > 262_144 { return Err("permission TOML: at most 256 KiB".into()); }
+        if text.len() > 262_144 {
+            return Err("permission TOML: at most 256 KiB".into());
+        }
         let policy: Self = toml::from_str(text).map_err(|e| format!("permission TOML: {e}"))?;
         policy.validate()
     }
@@ -197,14 +266,25 @@ impl EffectPolicy {
     }
 
     pub fn allows_connector(&self, provider: Provider) -> bool {
-        self.allows_provider(provider) && (self.effects.iter().any(|effect| effect == "Connector") ||
-            (matches!(provider, Provider::S3 | Provider::Azure) && self.effects.iter().any(|effect| effect == "ObjectStore")))
+        self.allows_provider(provider)
+            && (self.effects.iter().any(|effect| effect == "Connector")
+                || (matches!(provider, Provider::S3 | Provider::Azure)
+                    && self.effects.iter().any(|effect| effect == "ObjectStore")))
     }
 
     /// User-facing explanation of a denied call, without suggesting a bypass.
-    pub fn connector_blocker(&self, provider: Provider, parent: &crate::ConnectorPermissions, operation: &str, resource: &[String]) -> Option<String> {
+    pub fn connector_blocker(
+        &self,
+        provider: Provider,
+        parent: &crate::ConnectorPermissions,
+        operation: &str,
+        resource: &[String],
+    ) -> Option<String> {
         if !self.allows_provider(provider) {
-            return Some(format!("{} is disabled in Organization settings → Execution policy → Connector providers.", provider.name()));
+            return Some(format!(
+                "{} is disabled in Organization settings → Execution policy → Connector providers.",
+                provider.name()
+            ));
         }
         if !self.allows_connector(provider) {
             return Some("Connector access is disabled in Organization settings → Execution policy → Effects. An owner or admin must enable Connector and save permissions.".into());
@@ -212,45 +292,65 @@ impl EffectPolicy {
         if !parent.permits(operation, resource) {
             return Some(format!("Connection permissions do not allow {operation} for this resource. Its creator or an admin can edit the connection's operations and resource boundary."));
         }
-        if self.connector_ceilings.get(provider.id()).is_some_and(|p| !p.permits(operation, resource)) {
+        if self
+            .connector_ceilings
+            .get(provider.id())
+            .is_some_and(|p| !p.permits(operation, resource))
+        {
             return Some(format!("The organization ceiling for {} does not allow {operation} for this resource. An admin can edit it in Organization settings → Execution policy → Advanced connector ceilings.", provider.name()));
         }
         None
     }
 
     pub fn validate(&self) -> Result<Self, String> {
-        let normalize = |values: &[String], allowed: &[&str], what: &str| -> Result<Vec<String>, String> {
-            let mut result = BTreeSet::new();
-            for value in values {
-                let value = value.trim();
-                if !allowed.contains(&value) {
-                    return Err(format!("{what}: unknown '{value}'"));
+        let normalize =
+            |values: &[String], allowed: &[&str], what: &str| -> Result<Vec<String>, String> {
+                let mut result = BTreeSet::new();
+                for value in values {
+                    let value = value.trim();
+                    if !allowed.contains(&value) {
+                        return Err(format!("{what}: unknown '{value}'"));
+                    }
+                    result.insert(value.to_string());
                 }
-                result.insert(value.to_string());
-            }
-            Ok(result.into_iter().collect())
-        };
+                Ok(result.into_iter().collect())
+            };
         let providers: Vec<_> = Provider::ALL.iter().map(|p| p.id()).collect();
         let mut domains = BTreeSet::new();
         for domain in &self.domains {
             let domain = domain.trim().to_ascii_lowercase();
-            if domain.is_empty() { continue; }
-            if domain.len() > 253 || domain.parse::<std::net::IpAddr>().is_ok()
-                || !domain.contains('.') || domain.ends_with(".internal") || domain.ends_with(".localhost")
-                || domain.split('.').any(|part| part.is_empty() || part.len() > 63
-                    || part.starts_with('-') || part.ends_with('-')
-                    || !part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
-                return Err(format!("domain: '{domain}' must be a public DNS hostname, without a path or wildcard"));
+            if domain.is_empty() {
+                continue;
+            }
+            if domain.len() > 253
+                || domain.parse::<std::net::IpAddr>().is_ok()
+                || !domain.contains('.')
+                || domain.ends_with(".internal")
+                || domain.ends_with(".localhost")
+                || domain.split('.').any(|part| {
+                    part.is_empty()
+                        || part.len() > 63
+                        || part.starts_with('-')
+                        || part.ends_with('-')
+                        || !part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                })
+            {
+                return Err(format!(
+                    "domain: '{domain}' must be a public DNS hostname, without a path or wildcard"
+                ));
             }
             domains.insert(domain);
         }
-        if domains.len() > 100 { return Err("domains: at most 100".into()); }
+        if domains.len() > 100 {
+            return Err("domains: at most 100".into());
+        }
         let mut ceilings = BTreeMap::new();
         for (id, permissions) in &self.connector_ceilings {
             let validated = if let Some(service) = crate::LocalService::from_id(id) {
                 permissions.validate_local(service)?
             } else {
-                let provider = Provider::from_id(id).ok_or_else(|| format!("unknown connector provider '{id}'"))?;
+                let provider = Provider::from_id(id)
+                    .ok_or_else(|| format!("unknown connector provider '{id}'"))?;
                 permissions.validate(provider)?
             };
             ceilings.insert(id.clone(), validated);
@@ -272,10 +372,19 @@ impl EffectPolicy {
     pub fn for_cells(&self, cells: &[Cell]) -> Self {
         let mut policy = self.clone();
         if policy.configured_domains {
-            policy.domains = cells.iter().filter_map(|cell| cell.config.url.as_deref())
-                .filter_map(|url| url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")))
-                .map(|rest| crate::host_of(rest.split(['/', '?']).next().unwrap_or("")).to_ascii_lowercase())
-                .collect::<BTreeSet<_>>().into_iter().collect();
+            policy.domains = cells
+                .iter()
+                .filter_map(|cell| cell.config.url.as_deref())
+                .filter_map(|url| {
+                    url.strip_prefix("https://")
+                        .or_else(|| url.strip_prefix("http://"))
+                })
+                .map(|rest| {
+                    crate::host_of(rest.split(['/', '?']).next().unwrap_or("")).to_ascii_lowercase()
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
         }
         policy
     }
@@ -287,85 +396,210 @@ mod tests {
     use crate::CellConfig;
 
     fn cell(name: &str, position: i32, deps: &[&str]) -> Cell {
-        Cell { id: name.into(), name: name.into(), position, cell_type: CellType::Node,
-            description: "Compute".into(), config: CellConfig { dependencies: Some(deps.iter().map(|s| s.to_string()).collect()), ..Default::default() },
-            implementation: None, secret_set: false, has_endpoint: false, last_input: None,
-            next_due_at: None, last_check: None, writing: false, issue: None, stale: false }
+        Cell {
+            id: name.into(),
+            name: name.into(),
+            position,
+            cell_type: CellType::Node,
+            description: "Compute".into(),
+            config: CellConfig {
+                dependencies: Some(deps.iter().map(|s| s.to_string()).collect()),
+                ..Default::default()
+            },
+            implementation: None,
+            secret_set: false,
+            has_endpoint: false,
+            last_input: None,
+            next_due_at: None,
+            last_check: None,
+            writing: false,
+            issue: None,
+            stale: false,
+        }
     }
 
     #[test]
     fn names_form_a_dag_and_sort_without_changing_declaration_numbers() {
-        let mut cells = vec![cell("total", 0, &["price", "tax"]), cell("tax", 1, &[]), cell("price", 2, &[])];
+        let mut cells = vec![
+            cell("total", 0, &["price", "tax"]),
+            cell("tax", 1, &[]),
+            cell("price", 2, &[]),
+        ];
         assert!(validate_dependencies(&cells).is_ok());
         let order = ordered_cells(&cells, &[], CellOrder::Topological);
-        assert_eq!(order.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["price", "tax", "total"]);
+        assert_eq!(
+            order.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            ["price", "tax", "total"]
+        );
         assert_eq!(order[0].position, 2);
         cells[2].config.dependencies = Some(vec!["total".into()]);
         assert!(validate_dependencies(&cells).unwrap_err().contains("cycle"));
         cells[2].config.dependencies = Some(vec!["missing".into()]);
-        assert!(validate_dependencies(&cells).unwrap_err().contains("no note"));
+        assert!(validate_dependencies(&cells)
+            .unwrap_err()
+            .contains("no note"));
         cells[2].config.dependencies = Some(vec!["price".into()]);
-        assert!(validate_dependencies(&cells).unwrap_err().contains("itself"));
+        assert!(validate_dependencies(&cells)
+            .unwrap_err()
+            .contains("itself"));
     }
 
     #[test]
     fn references_are_explicit_and_permissions_are_exact() {
-        assert_eq!(cell_references("Add @price to @tax; @price is repeated. me@example.com"), ["price", "tax"]);
-        let policy = EffectPolicy { domains: vec!["API.Example.com".into()], ..Default::default() }.validate().unwrap();
-        assert_eq!(policy.domains, ["api.example.com"]);
-        for domain in ["*.example.com", "api.example.com/path", "127.0.0.1", "api.localhost"] {
-            assert!(EffectPolicy { domains: vec![domain.into()], ..Default::default() }.validate().is_err());
+        assert_eq!(
+            cell_references("Add @price to @tax; @price is repeated. me@example.com"),
+            ["price", "tax"]
+        );
+        let policy = EffectPolicy {
+            domains: vec!["API.Example.com".into()],
+            ..Default::default()
         }
-        assert!(!EffectPolicy { providers: Vec::new(), ..Default::default() }.allows_provider(Provider::Openai));
+        .validate()
+        .unwrap();
+        assert_eq!(policy.domains, ["api.example.com"]);
+        for domain in [
+            "*.example.com",
+            "api.example.com/path",
+            "127.0.0.1",
+            "api.localhost",
+        ] {
+            assert!(EffectPolicy {
+                domains: vec![domain.into()],
+                ..Default::default()
+            }
+            .validate()
+            .is_err());
+        }
+        assert!(!EffectPolicy {
+            providers: Vec::new(),
+            ..Default::default()
+        }
+        .allows_provider(Provider::Openai));
         assert!(WRITER_TOOLS.contains(&"lsp"));
-        assert!(EffectPolicy::default().tools.iter().any(|tool| tool == "lsp"));
-        assert!(EffectPolicy { tools: vec!["lsp".into()], ..Default::default() }.validate().is_ok());
-        assert!(EffectPolicy { tools: vec!["lsp_rpc".into()], ..Default::default() }.validate().is_err());
+        assert!(EffectPolicy::default()
+            .tools
+            .iter()
+            .any(|tool| tool == "lsp"));
+        assert!(EffectPolicy {
+            tools: vec!["lsp".into()],
+            ..Default::default()
+        }
+        .validate()
+        .is_ok());
+        assert!(EffectPolicy {
+            tools: vec!["lsp_rpc".into()],
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]
     fn toml_roundtrips_resource_ceilings_and_fails_closed() {
         let mut policy = EffectPolicy::default();
-        policy.connector_ceilings.insert("gmail".into(), crate::ConnectorPermissions::scoped("messages.read", vec!["me".into(), "INBOX".into()], true));
-        policy.connector_ceilings.insert("postgres".into(), crate::ConnectorPermissions::local_preset(crate::LocalService::Postgres, crate::PermissionPreset::ReadOnly, vec!["schema".into()]));
+        policy.connector_ceilings.insert(
+            "gmail".into(),
+            crate::ConnectorPermissions::scoped(
+                "messages.read",
+                vec!["me".into(), "INBOX".into()],
+                true,
+            ),
+        );
+        policy.connector_ceilings.insert(
+            "postgres".into(),
+            crate::ConnectorPermissions::local_preset(
+                crate::LocalService::Postgres,
+                crate::PermissionPreset::ReadOnly,
+                vec!["schema".into()],
+            ),
+        );
         let validated = policy.validate().unwrap();
-        assert_eq!(EffectPolicy::from_toml(&validated.to_toml().unwrap()).unwrap(), validated);
-        for bad in ["effects = [\"RawIO\"]", "unexpected = true", "effects = []\neffects = []"] {
+        assert_eq!(
+            EffectPolicy::from_toml(&validated.to_toml().unwrap()).unwrap(),
+            validated
+        );
+        for bad in [
+            "effects = [\"RawIO\"]",
+            "unexpected = true",
+            "effects = []\neffects = []",
+        ] {
             assert!(EffectPolicy::from_toml(bad).is_err());
         }
-        assert!(EffectPolicy::from_toml(&policy.to_toml().unwrap().replace("messages.read", "messages.unrestricted")).is_err());
+        assert!(EffectPolicy::from_toml(
+            &policy
+                .to_toml()
+                .unwrap()
+                .replace("messages.read", "messages.unrestricted")
+        )
+        .is_err());
         let mut denied = EffectPolicy::default();
         denied.effects.clear();
         denied.providers.clear();
-        assert_eq!(EffectPolicy::from_toml(&denied.to_toml().unwrap()).unwrap().effects.len(), 0);
+        assert_eq!(
+            EffectPolicy::from_toml(&denied.to_toml().unwrap())
+                .unwrap()
+                .effects
+                .len(),
+            0
+        );
     }
 
     #[test]
     fn connector_diagnostics_preserve_each_independent_ceiling() {
         for provider in [Provider::Github, Provider::Baseten, Provider::S3] {
             let operation = crate::connector_operations(provider)[0].id;
-            let parent = crate::ConnectorPermissions::preset(provider, crate::PermissionPreset::ReadOnly);
+            let parent =
+                crate::ConnectorPermissions::preset(provider, crate::PermissionPreset::ReadOnly);
             let mut policy = EffectPolicy::default();
-            assert!(policy.connector_blocker(provider, &parent, operation, &[]).is_none());
+            assert!(policy
+                .connector_blocker(provider, &parent, operation, &[])
+                .is_none());
             policy.effects = vec!["SecretStore".into()];
-            assert!(policy.connector_blocker(provider, &parent, operation, &[]).unwrap().contains("Effects"));
+            assert!(policy
+                .connector_blocker(provider, &parent, operation, &[])
+                .unwrap()
+                .contains("Effects"));
             policy = EffectPolicy::default();
             policy.providers.clear();
-            assert!(policy.connector_blocker(provider, &parent, operation, &[]).unwrap().contains("providers"));
+            assert!(policy
+                .connector_blocker(provider, &parent, operation, &[])
+                .unwrap()
+                .contains("providers"));
             policy = EffectPolicy::default();
-            policy.connector_ceilings.insert(provider.id().into(), crate::ConnectorPermissions::deny_all());
-            assert!(policy.connector_blocker(provider, &parent, operation, &[]).unwrap().contains("organization ceiling"));
+            policy.connector_ceilings.insert(
+                provider.id().into(),
+                crate::ConnectorPermissions::deny_all(),
+            );
+            assert!(policy
+                .connector_blocker(provider, &parent, operation, &[])
+                .unwrap()
+                .contains("organization ceiling"));
             policy.connector_ceilings.clear();
-            assert!(policy.connector_blocker(provider, &crate::ConnectorPermissions::deny_all(), operation, &[]).unwrap().contains("Connection permissions"));
+            assert!(policy
+                .connector_blocker(
+                    provider,
+                    &crate::ConnectorPermissions::deny_all(),
+                    operation,
+                    &[]
+                )
+                .unwrap()
+                .contains("Connection permissions"));
         }
     }
 
     #[test]
     fn renaming_updates_arguments_and_whole_prose_references() {
         let mut total = cell("total", 2, &["amount", "tax"]);
-        total.description = "Résumé: @amount plus @tax; @amount_old and me@amount stay. (@amount)".into();
+        total.description =
+            "Résumé: @amount plus @tax; @amount_old and me@amount stay. (@amount)".into();
         let changes = renamed_dependents(&[total], "amount", "price");
-        assert_eq!(changes[0].config.dependencies.as_ref().unwrap(), &["price", "tax"]);
-        assert_eq!(changes[0].description, "Résumé: @price plus @tax; @amount_old and me@amount stay. (@price)");
+        assert_eq!(
+            changes[0].config.dependencies.as_ref().unwrap(),
+            &["price", "tax"]
+        );
+        assert_eq!(
+            changes[0].description,
+            "Résumé: @price plus @tax; @amount_old and me@amount stay. (@price)"
+        );
     }
 }

@@ -25,16 +25,16 @@ pub use notebook::NotebookPage;
 mod settings;
 pub use settings::{AccountPage, OrgSettingsPage, ProjectSettingsPage};
 
+mod ai_models;
 mod channels;
-mod paired;
 mod connections;
 mod members;
+mod onboarding;
+mod paired;
+mod permission_check;
 mod render;
 mod slug_form;
-mod permission_check;
-mod ai_models;
-mod onboarding;
-pub use onboarding::{OnboardingPage, WorkspaceLanding, WorkspaceGuide};
+pub use onboarding::{OnboardingPage, WorkspaceGuide, WorkspaceLanding};
 mod shares;
 pub use shares::SharedNotebookPage;
 

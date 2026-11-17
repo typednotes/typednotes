@@ -5,14 +5,13 @@
 //! dependencies shown per cell.
 
 use api::{
-    abort_graph, add_cell, cell_code, cell_phase, current_user, delete_cell,
+    abort_graph, add_cell, cell_code, cell_dependencies, cell_phase, current_user, delete_cell,
     dependencies, describe_config, feed_cell, get_graph, graph_progress, implement_graph,
-    list_connections, mentions, move_cell, node_label, node_of, rebuild_graph,
+    list_connections, mentions, move_cell, node_label, node_of, ordered_cells, rebuild_graph,
     report_cell, restart_graph, rotate_endpoint, set_cell_secret, set_graph_model, update_cell,
-    validate_cell, widget_for, Cell, CellConfig, CellPhase, CellType, Channel, Connection,
-    FeedResult, Graph, GraphDetail, GraphNode, LodeEntry, Provider, Widget, UI_FORMATS,
-    CellOrder, cell_dependencies, ordered_cells, CellConnector, ConnectorPermissions,
-    PermissionPreset,
+    validate_cell, widget_for, Cell, CellConfig, CellConnector, CellOrder, CellPhase, CellType,
+    Channel, Connection, ConnectorPermissions, FeedResult, Graph, GraphDetail, GraphNode,
+    LodeEntry, PermissionPreset, Provider, Widget, UI_FORMATS,
 };
 use dioxus::prelude::*;
 use serde_json::Value;
@@ -25,9 +24,9 @@ use crate::components::label::Label;
 use crate::components::select::{use_selected, Select, SelectOption};
 use crate::components::textarea::Textarea;
 use crate::connections::{PermissionEditor, CONNECTIONS_CSS};
+use crate::error_message;
 use crate::orgs::ORGS_CSS;
 use crate::render::{pretty, JsonView, Output};
-use crate::error_message;
 
 pub(crate) const NOTEBOOK_CSS: Asset = asset!("/assets/styling/notebook.css");
 
@@ -71,14 +70,20 @@ pub fn NotebookPage(
     graph: ReadSignal<String>,
 ) -> Element {
     let me = use_server_future(current_user)?;
-    let mut detail = use_server_future(move || async move {if graph().is_empty(){api::get_project_notes(slug(),project()).await}else{get_graph(slug(), project(), graph()).await}})?;
+    let mut detail = use_server_future(move || async move {
+        if graph().is_empty() {
+            api::get_project_notes(slug(), project()).await
+        } else {
+            get_graph(slug(), project(), graph()).await
+        }
+    })?;
     let connections = use_server_future(move || list_connections(slug()))?;
 
     // lode's log and the notebook's live status, followed while it is
     // implementing: the server holds each request until lode has news.
     let mut log = use_signal(Vec::<LodeEntry>::new);
     let mut next = use_signal(|| 0u64);
-    let mut question=use_signal(||None::<api::WriterQuestion>);
+    let mut question = use_signal(|| None::<api::WriterQuestion>);
     let mut live = use_signal(|| None::<Graph>);
     // The nodes of the last feed, over the page's (keyed by the page's
     // `updated_at`, so a reload supersedes them): feeding an input updates
@@ -110,7 +115,12 @@ pub fn NotebookPage(
                     was_implementing = true;
                     // lode holds the request while it has nothing new; a
                     // floor all the same, and a longer one while lun builds.
-                    pause(if p.state == "running" || p.state=="queued" { 1000 } else { 4000 }).await;
+                    pause(if p.state == "running" || p.state == "queued" {
+                        1000
+                    } else {
+                        4000
+                    })
+                    .await;
                 }
                 Err(_) => pause(10_000).await,
             }
@@ -202,15 +212,22 @@ pub fn NotebookPage(
 }
 
 #[component]
-fn WriterQuestion(slug:String,project:String,pending:api::WriterQuestion,on_started:EventHandler<Graph>)->Element{
-    let mut value=use_signal(String::new);let mut error=use_signal(||None::<String>);let mut busy=use_signal(||false);
-    rsx!{Card{CardHeader{CardTitle{"The code writer needs your input"}CardDescription{"Work is paused. Your answer does not expand project permissions."}}
-        CardContent{p{"{pending.question.text}"}
-            div{class:"conn-actions",for option in &pending.question.options{Button{variant:ButtonVariant::Outline,disabled:busy(),onclick:{let option=option.clone();move |_|value.set(option.clone())},"{option}"}}}
-            if pending.question.free_text{Textarea{id:"writer-answer",value:value(),oninput:move |e:FormEvent|value.set(e.value()),rows:3}}
-            Button{disabled:busy()||value().trim().is_empty(),onclick:move |_|{let(slug,project,id)=(slug.clone(),project.clone(),pending.id.clone());async move{busy.set(true);match api::answer_project_question(slug,project,id,value()).await{Ok(g)=>on_started.call(g),Err(e)=>error.set(Some(error_message(&e)))}busy.set(false);}},"Answer and continue"}
-            if let Some(e)=error(){p{class:"orgs-error",role:"alert","{e}"}}
-        }}}
+fn WriterQuestion(
+    slug: String,
+    project: String,
+    pending: api::WriterQuestion,
+    on_started: EventHandler<Graph>,
+) -> Element {
+    let mut value = use_signal(String::new);
+    let mut error = use_signal(|| None::<String>);
+    let mut busy = use_signal(|| false);
+    rsx! {Card{CardHeader{CardTitle{"The code writer needs your input"}CardDescription{"Work is paused. Your answer does not expand project permissions."}}
+    CardContent{p{"{pending.question.text}"}
+        div{class:"conn-actions",for option in &pending.question.options{Button{variant:ButtonVariant::Outline,disabled:busy(),onclick:{let option=option.clone();move |_|value.set(option.clone())},"{option}"}}}
+        if pending.question.free_text{Textarea{id:"writer-answer",value:value(),oninput:move |e:FormEvent|value.set(e.value()),rows:3}}
+        Button{disabled:busy()||value().trim().is_empty(),onclick:move |_|{let(slug,project,id)=(slug.clone(),project.clone(),pending.id.clone());async move{busy.set(true);match api::answer_project_question(slug,project,id,value()).await{Ok(g)=>on_started.call(g),Err(e)=>error.set(Some(error_message(&e)))}busy.set(false);}},"Answer and continue"}
+        if let Some(e)=error(){p{class:"orgs-error",role:"alert","{e}"}}
+    }}}
 }
 
 #[component]
@@ -586,13 +603,21 @@ fn Cells(
 
 /// One lane per dependency depth. Every node links to its editable notebook cell.
 #[component]
-fn DependencyGraph(cells: Vec<Cell>, nodes: Vec<GraphNode>, on_select: EventHandler<String>) -> Element {
+fn DependencyGraph(
+    cells: Vec<Cell>,
+    nodes: Vec<GraphNode>,
+    on_select: EventHandler<String>,
+) -> Element {
     let sorted = ordered_cells(&cells, &nodes, CellOrder::Topological);
     let mut levels = std::collections::BTreeMap::<String, usize>::new();
     let mut rows = std::collections::BTreeMap::<usize, usize>::new();
     let mut positions = std::collections::BTreeMap::<String, (usize, usize)>::new();
     for cell in &sorted {
-        let depth = cell_dependencies(cell, &cells, &nodes).iter().filter_map(|name| levels.get(name)).max().map_or(0, |n| n + 1);
+        let depth = cell_dependencies(cell, &cells, &nodes)
+            .iter()
+            .filter_map(|name| levels.get(name))
+            .max()
+            .map_or(0, |n| n + 1);
         let row = rows.entry(depth).or_default();
         positions.insert(cell.name.clone(), (24 + depth * 236, 24 + *row * 100));
         *row += 1;
@@ -1262,10 +1287,18 @@ fn InputWidget(
         .and_then(|i| i.input_type.clone());
     // Draft choices must not turn a running numeric input into a string feed.
     // Keep using the adopted Lean input type until the replacement build lands.
-    let active_choices = if input_type.as_deref().is_some_and(|ty| ty.trim() != "String") {
+    let active_choices = if input_type
+        .as_deref()
+        .is_some_and(|ty| ty.trim() != "String")
+    {
         Vec::new()
-    } else { cell.config.choices.clone() };
-    let widget = widget_for(input_type.as_deref().or(cell.config.output_type.as_deref()), &active_choices);
+    } else {
+        cell.config.choices.clone()
+    };
+    let widget = widget_for(
+        input_type.as_deref().or(cell.config.output_type.as_deref()),
+        &active_choices,
+    );
     let initial = match (&widget, &cell.last_input) {
         (_, None) => String::new(),
         (Widget::Text | Widget::Select(_), Some(Value::String(s))) => s.clone(),
@@ -1570,7 +1603,12 @@ fn CellEditor(
             .unwrap_or_else(|| "0 * * * *".to_string())
     });
     let mut input = use_signal(|| field(&initial.input));
-    let mut dependency_names = use_signal(|| start.as_ref().map(|cell| cell_dependencies(cell, &cells, &nodes).join(", ")).unwrap_or_default());
+    let mut dependency_names = use_signal(|| {
+        start
+            .as_ref()
+            .map(|cell| cell_dependencies(cell, &cells, &nodes).join(", "))
+            .unwrap_or_default()
+    });
     let mut output_type = use_signal(|| field(&initial.output_type));
     let mut connectors = use_signal(|| initial.connectors.clone());
     let mut choices = use_signal(|| initial.choices.join(", "));
@@ -1615,7 +1653,15 @@ fn CellEditor(
         let opt = |s: String| Some(s.trim().to_string()).filter(|s| !s.is_empty());
         CellConfig {
             connectors: connectors(),
-            dependencies: Some(if cell_type().is_source() { Vec::new() } else { dependency_names().split([',', ' ', '\n']).filter(|s| !s.is_empty()).map(|s| s.trim_start_matches('@').to_string()).collect() }),
+            dependencies: Some(if cell_type().is_source() {
+                Vec::new()
+            } else {
+                dependency_names()
+                    .split([',', ' ', '\n'])
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.trim_start_matches('@').to_string())
+                    .collect()
+            }),
             output_type: opt(output_type()),
             url: opt(url()),
             schedule: opt(schedule()),
@@ -1657,13 +1703,13 @@ fn CellEditor(
             let result = match existing_id {
                 Some(id) => update_cell(slug, project, graph, id, n, d, c)
                     .await
-                    .map(|_| (None,None,None)),
+                    .map(|_| (None, None, None)),
                 None => add_cell(slug, project, graph, t, n, d, c)
                     .await
-                    .map(|s| (s.endpoint_url,s.generation,s.generation_notice)),
+                    .map(|s| (s.endpoint_url, s.generation, s.generation_notice)),
             };
             match result {
-                Ok((endpoint,generation,notice)) => {
+                Ok((endpoint, generation, notice)) => {
                     error.set(notice);
                     if !editing {
                         name.set(String::new());
@@ -1675,7 +1721,9 @@ fn CellEditor(
                     }
                     shown_url.set(endpoint);
                     on_saved.call(());
-                    if let(Some(g),Some(start))=(generation,on_started){start.call(g);}
+                    if let (Some(g), Some(start)) = (generation, on_started) {
+                        start.call(g);
+                    }
                 }
                 Err(e) => error.set(Some(error_message(&e))),
             }
@@ -1885,7 +1933,15 @@ fn CellEditor(
 }
 
 #[component]
-pub(crate) fn CellConnections(connections: Vec<Connection>, value: Vec<CellConnector>, id: String, disabled: bool, policy: Option<api::EffectPolicy>, storage_scope: Option<(String, String)>, on_change: EventHandler<Vec<CellConnector>>) -> Element {
+pub(crate) fn CellConnections(
+    connections: Vec<Connection>,
+    value: Vec<CellConnector>,
+    id: String,
+    disabled: bool,
+    policy: Option<api::EffectPolicy>,
+    storage_scope: Option<(String, String)>,
+    on_change: EventHandler<Vec<CellConnector>>,
+) -> Element {
     rsx! {
         details { class: "cell-connections",
             summary { "Project connections ({value.len()})" }

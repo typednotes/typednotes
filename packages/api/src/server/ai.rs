@@ -126,24 +126,51 @@ pub async fn pricing(provider: Provider, model: &str) -> TokenPricing {
 /// Only the advertised models.list adapter may use the stored credential.
 pub async fn models(org: &Org, user: &User, id: &str) -> Result<Vec<String>, ServerFnError> {
     let (connection, owner) = connections::get(org, user, id).await?;
-    if !connection.provider.is_ai() { return Err(errors::bad_request("choose an AI connection")); }
-    let bytes = connections::call_ok(org, user, &connection, &owner,
-        connections::ProviderCall::new("models.list", Vec::new(), serde_json::json!({}))).await?;
+    if !connection.provider.is_ai() {
+        return Err(errors::bad_request("choose an AI connection"));
+    }
+    let bytes = connections::call_ok(
+        org,
+        user,
+        &connection,
+        &owner,
+        connections::ProviderCall::new("models.list", Vec::new(), serde_json::json!({})),
+    )
+    .await?;
     model_ids(connection.provider, &bytes).map_err(errors::bad_gateway)
 }
 
 pub fn model_ids(provider: Provider, bytes: &[u8]) -> Result<Vec<String>, String> {
-    let data: Value = serde_json::from_slice(bytes).map_err(|_| "the provider returned no JSON model catalog")?;
-    if data.get("error").is_some_and(|error| !error.is_null()) { return Err("the provider returned an error instead of models".into()); }
-    let models = data.get("data").or_else(|| data.get("models")).unwrap_or(&data)
-        .as_array().ok_or("the provider returned no model list")?;
-    if models.len() > 4096 { return Err("the model catalog exceeds 4096 entries".into()); }
+    let data: Value =
+        serde_json::from_slice(bytes).map_err(|_| "the provider returned no JSON model catalog")?;
+    if data.get("error").is_some_and(|error| !error.is_null()) {
+        return Err("the provider returned an error instead of models".into());
+    }
+    let models = data
+        .get("data")
+        .or_else(|| data.get("models"))
+        .unwrap_or(&data)
+        .as_array()
+        .ok_or("the provider returned no model list")?;
+    if models.len() > 4096 {
+        return Err("the model catalog exceeds 4096 entries".into());
+    }
     let mut ids = std::collections::BTreeSet::new();
     for model in models {
-        let id = model.get("id").or_else(|| model.get("name")).and_then(Value::as_str)
-            .or_else(|| model.as_str()).ok_or("a model has no identifier")?;
-        let id = if provider == Provider::Gemini { id.strip_prefix("models/").unwrap_or(id) } else { id };
-        if id.len() > 256 || !crate::ConnectorPermissions::valid_resource(&crate::model_resource(provider, id)) {
+        let id = model
+            .get("id")
+            .or_else(|| model.get("name"))
+            .and_then(Value::as_str)
+            .or_else(|| model.as_str())
+            .ok_or("a model has no identifier")?;
+        let id = if provider == Provider::Gemini {
+            id.strip_prefix("models/").unwrap_or(id)
+        } else {
+            id
+        };
+        if id.len() > 256
+            || !crate::ConnectorPermissions::valid_resource(&crate::model_resource(provider, id))
+        {
             return Err("the model catalog contains an invalid identifier".into());
         }
         ids.insert(id.to_string());
@@ -174,9 +201,16 @@ pub async fn classify(
             "classification requires model, state and a nonempty questions object",
         ));
     }
-    let model = request.get("model").and_then(Value::as_str).unwrap().to_string();
+    let model = request
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap()
+        .to_string();
     let mut payload = request.clone();
-    payload.as_object_mut().ok_or_else(|| errors::bad_request("classification payload must be an object"))?.remove("model");
+    payload
+        .as_object_mut()
+        .ok_or_else(|| errors::bad_request("classification payload must be an object"))?
+        .remove("model");
     let body = payload.to_string();
     if body.len() > 1_000_000 {
         return Err(errors::bad_request("classification request is too large"));
@@ -215,13 +249,35 @@ mod tests {
     #[test]
     fn native_model_catalogs_normalize_sort_and_deduplicate() {
         for provider in Provider::AI {
-            for data in [json!({"data":[{"id":"b"},{"id":"a"},{"id":"a"}]}), json!({"models":[{"name":"a"},{"name":"b"}]}), json!([{"id":"a"},{"id":"b"}])] {
-                assert_eq!(model_ids(*provider, &serde_json::to_vec(&data).unwrap()).unwrap(), ["a", "b"]);
+            for data in [
+                json!({"data":[{"id":"b"},{"id":"a"},{"id":"a"}]}),
+                json!({"models":[{"name":"a"},{"name":"b"}]}),
+                json!([{"id":"a"},{"id":"b"}]),
+            ] {
+                assert_eq!(
+                    model_ids(*provider, &serde_json::to_vec(&data).unwrap()).unwrap(),
+                    ["a", "b"]
+                );
             }
         }
-        assert_eq!(model_ids(Provider::Gemini, br#"{"models":[{"name":"models/gemini-test"}]}"#).unwrap(), ["gemini-test"]);
-        assert_eq!(model_ids(Provider::Openrouter, br#"{"data":[{"id":"owner/model"}]}"#).unwrap(), ["owner/model"]);
-        for data in [json!({"error":"denied","data":[]}), json!({"data":[{}]}), json!({"data":[{"id":"../bad"}]}), json!({"ok":true})] {
+        assert_eq!(
+            model_ids(
+                Provider::Gemini,
+                br#"{"models":[{"name":"models/gemini-test"}]}"#
+            )
+            .unwrap(),
+            ["gemini-test"]
+        );
+        assert_eq!(
+            model_ids(Provider::Openrouter, br#"{"data":[{"id":"owner/model"}]}"#).unwrap(),
+            ["owner/model"]
+        );
+        for data in [
+            json!({"error":"denied","data":[]}),
+            json!({"data":[{}]}),
+            json!({"data":[{"id":"../bad"}]}),
+            json!({"ok":true}),
+        ] {
             assert!(model_ids(Provider::Baseten, &serde_json::to_vec(&data).unwrap()).is_err());
         }
     }

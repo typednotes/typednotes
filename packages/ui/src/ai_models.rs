@@ -1,18 +1,34 @@
+use crate::components::{
+    button::{Button, ButtonSize, ButtonVariant},
+    select::{Select, SelectOption},
+};
+use crate::error_message;
 use api::list_ai_models;
 use dioxus::prelude::*;
-use crate::components::{button::{Button, ButtonSize, ButtonVariant}, select::{Select, SelectOption}};
-use crate::error_message;
 
 /// Provider inventory is loaded through the existing models.list broker grant.
 /// Key this component by connection ID so late results cannot cross accounts.
 #[component]
-pub(crate) fn ModelPicker(slug: String, connection_id: String, mut value: Signal<String>, #[props(default = false)] disabled: bool, #[props(default = "provider-model".to_string())] id: String) -> Element {
+pub(crate) fn ModelPicker(
+    slug: String,
+    connection_id: String,
+    mut value: Signal<String>,
+    #[props(default = false)] disabled: bool,
+    #[props(default = "provider-model".to_string())] id: String,
+) -> Element {
     let mut models = use_resource(move || {
         let (slug, id) = (slug.clone(), connection_id.clone());
-        async move { list_ai_models(slug, id).await.map_err(|e| error_message(&e)) }
+        async move {
+            list_ai_models(slug, id)
+                .await
+                .map_err(|e| error_message(&e))
+        }
     });
     let selected = use_memo(move || {
-        models().and_then(Result::ok).filter(|ids| ids.contains(&value())).map(|_| value())
+        models()
+            .and_then(Result::ok)
+            .filter(|ids| ids.contains(&value()))
+            .map(|_| value())
     });
     rsx! {
         div { class: "conn-subform model-picker",

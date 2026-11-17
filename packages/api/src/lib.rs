@@ -91,8 +91,20 @@ pub async fn get_workspace() -> Result<UserWorkspace, ServerFnError> {
 }
 
 #[post("/api/workspace/defaults")]
-pub async fn set_workspace_defaults(slug: String, project: Option<String>, notebook: Option<String>, finish: bool) -> Result<UserWorkspace, ServerFnError> {
-    server::workspace::set(&session::require_user().await?, &slug, project.as_deref(), notebook.as_deref(), finish).await
+pub async fn set_workspace_defaults(
+    slug: String,
+    project: Option<String>,
+    notebook: Option<String>,
+    finish: bool,
+) -> Result<UserWorkspace, ServerFnError> {
+    server::workspace::set(
+        &session::require_user().await?,
+        &slug,
+        project.as_deref(),
+        notebook.as_deref(),
+        finish,
+    )
+    .await
 }
 
 /// The caller's account: profile, sign-in methods, sessions, orgs.
@@ -202,7 +214,10 @@ pub async fn set_org_settings(
 }
 
 #[post("/api/org/settings/permissions")]
-pub async fn set_notebook_permissions(slug: String, policy: EffectPolicy) -> Result<OrgSettings, ServerFnError> {
+pub async fn set_notebook_permissions(
+    slug: String,
+    policy: EffectPolicy,
+) -> Result<OrgSettings, ServerFnError> {
     let (_, org) = member_org(&slug).await?;
     db::set_effect_policy(&org, &policy).await
 }
@@ -215,7 +230,11 @@ pub async fn list_connections(slug: String) -> Result<Vec<Connection>, ServerFnE
 }
 
 #[post("/api/connections/permissions")]
-pub async fn set_connection_permissions(slug: String, connection_id: String, permissions: ConnectorPermissions) -> Result<Connection, ServerFnError> {
+pub async fn set_connection_permissions(
+    slug: String,
+    connection_id: String,
+    permissions: ConnectorPermissions,
+) -> Result<Connection, ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     connections::set_permissions(&org, &user, &connection_id, &permissions).await
 }
@@ -355,7 +374,10 @@ pub async fn ai_token_pricing(
 
 /// Live provider model inventory through the scoped models.list broker operation.
 #[post("/api/ai/models")]
-pub async fn list_ai_models(slug: String, connection_id: String) -> Result<Vec<String>, ServerFnError> {
+pub async fn list_ai_models(
+    slug: String,
+    connection_id: String,
+) -> Result<Vec<String>, ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     server::ai::models(&org, &user, &connection_id).await
 }
@@ -467,28 +489,49 @@ pub async fn test_connection(slug: String, id: String) -> Result<TestResult, Ser
 // ── Projects ────────────────────────────────────────────────────────────
 
 #[post("/api/notebook/share")]
-pub async fn create_notebook_share(slug: String, project: String, graph: String) -> Result<ShareCreated, ServerFnError> {
+pub async fn create_notebook_share(
+    slug: String,
+    project: String,
+    graph: String,
+) -> Result<ShareCreated, ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     server::shares::create(&org, &user, &project, &graph).await
 }
 
 #[post("/api/notebook/share/revoke")]
-pub async fn revoke_notebook_share(slug: String, project: String, graph: String, share: String) -> Result<(), ServerFnError> {
+pub async fn revoke_notebook_share(
+    slug: String,
+    project: String,
+    graph: String,
+    share: String,
+) -> Result<(), ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     server::shares::revoke(&org, &user, &project, &graph, &share).await
 }
 
 #[post("/api/notebook/shares")]
-pub async fn list_notebook_shares(slug: String, project: String, graph: String) -> Result<Vec<ShareInfo>, ServerFnError> {
+pub async fn list_notebook_shares(
+    slug: String,
+    project: String,
+    graph: String,
+) -> Result<Vec<ShareInfo>, ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     server::shares::list(&org, &user, &project, &graph).await
 }
 
 #[post("/api/shared-notebook")]
-pub async fn get_shared_notebook(token: String) -> Result<SharedNotebook, ServerFnError> { server::shares::get(&token).await }
+pub async fn get_shared_notebook(token: String) -> Result<SharedNotebook, ServerFnError> {
+    server::shares::get(&token).await
+}
 
 #[post("/api/shared-notebook/input")]
-pub async fn feed_shared_notebook(token: String, cell: String, value: serde_json::Value) -> Result<SharedNotebook, ServerFnError> { server::shares::feed(&token, &cell, value).await }
+pub async fn feed_shared_notebook(
+    token: String,
+    cell: String,
+    value: serde_json::Value,
+) -> Result<SharedNotebook, ServerFnError> {
+    server::shares::feed(&token, &cell, value).await
+}
 
 /// The org's projects, newest first.
 #[post("/api/projects")]
@@ -549,53 +592,104 @@ pub async fn list_repos(slug: String, connection: String) -> Result<Vec<Repo>, S
 }
 
 #[post("/api/repos/page")]
-pub async fn list_repo_page(slug: String, connection: String, page: u32) -> Result<RepoPage, ServerFnError> {
+pub async fn list_repo_page(
+    slug: String,
+    connection: String,
+    page: u32,
+) -> Result<RepoPage, ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     projects::repo_page(&org, &user, &connection, page).await
 }
 
 #[post("/api/project/code-writes")]
-pub async fn allow_project_code_writes(slug: String, project: String) -> Result<Connection, ServerFnError> {
-    let (user,org)=member_org(&slug).await?;
-    projects::allow_code_writes(&org,&user,&project).await
+pub async fn allow_project_code_writes(
+    slug: String,
+    project: String,
+) -> Result<Connection, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    projects::allow_code_writes(&org, &user, &project).await
 }
 
 #[get("/api/project/notes")]
-pub async fn get_project_notes(slug:String,project:String)->Result<GraphDetail,ServerFnError>{
-    let(user,org)=member_org(&slug).await?;
-    server::graphs::detail(&org,&user,&project,"").await
+pub async fn get_project_notes(
+    slug: String,
+    project: String,
+) -> Result<GraphDetail, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    server::graphs::detail(&org, &user, &project, "").await
 }
 
 #[post("/api/project/permissions")]
-pub async fn set_project_note_connections(slug:String,project:String,grants:Vec<CellConnector>)->Result<Project,ServerFnError>{
-    let(user,org)=member_org(&slug).await?;
-    server::projects::set_note_connections(&org,&user,&project,grants).await
+pub async fn set_project_note_connections(
+    slug: String,
+    project: String,
+    grants: Vec<CellConnector>,
+) -> Result<Project, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    server::projects::set_note_connections(&org, &user, &project, grants).await
 }
 
 #[post("/api/project/answer")]
-pub async fn answer_project_question(slug:String,project:String,question:String,answer:String)->Result<Graph,ServerFnError>{
-    let(user,org)=member_org(&slug).await?;
-    server::graphs::answer_question(&org,&user,&project,&question,&answer).await
+pub async fn answer_project_question(
+    slug: String,
+    project: String,
+    question: String,
+    answer: String,
+) -> Result<Graph, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    server::graphs::answer_question(&org, &user, &project, &question, &answer).await
 }
 
 #[post("/api/setup/begin")]
-pub async fn begin_repository_setup()->Result<Org,ServerFnError>{let user=session::require_user().await?;server::workspace::begin_setup(&user).await}
+pub async fn begin_repository_setup() -> Result<Org, ServerFnError> {
+    let user = session::require_user().await?;
+    server::workspace::begin_setup(&user).await
+}
 #[post("/api/setup/skip")]
-pub async fn skip_repository_setup()->Result<(),ServerFnError>{let user=session::require_user().await?;server::workspace::skip_setup(&user).await}
+pub async fn skip_repository_setup() -> Result<(), ServerFnError> {
+    let user = session::require_user().await?;
+    server::workspace::skip_setup(&user).await
+}
 #[post("/api/setup/repository")]
-pub async fn create_project_from_repository(slug:String,connection:String,repository:String)->Result<ProjectDetail,ServerFnError>{
-    let user=session::require_user().await?;let(org,project)=server::workspace::project_from_repo(&user,&slug,&connection,&repository).await?;Ok(ProjectDetail{org,project})
+pub async fn create_project_from_repository(
+    slug: String,
+    connection: String,
+    repository: String,
+) -> Result<ProjectDetail, ServerFnError> {
+    let user = session::require_user().await?;
+    let (org, project) =
+        server::workspace::project_from_repo(&user, &slug, &connection, &repository).await?;
+    Ok(ProjectDetail { org, project })
 }
 
 /// Optional PAT repair uses the same slot/authorization as OAuth reauthorization.
 #[post("/api/connections/code-token")]
-pub async fn replace_code_token(slug: String, connection: String, token: String) -> Result<Connection, ServerFnError> {
-    let (user,org)=member_org(&slug).await?;
-    let (current,_)=server::connections::get(&org,&user,&connection).await?;
-    if !current.provider.is_code() { return Err(errors::bad_request("choose a code-host connection")); }
+pub async fn replace_code_token(
+    slug: String,
+    connection: String,
+    token: String,
+) -> Result<Connection, ServerFnError> {
+    let (user, org) = member_org(&slug).await?;
+    let (current, _) = server::connections::get(&org, &user, &connection).await?;
+    if !current.provider.is_code() {
+        return Err(errors::bad_request("choose a code-host connection"));
+    }
     validate_api_key(&token).map_err(errors::bad_request)?;
-    server::connections::replace_credential(&org,&user,&connection,current.provider,&current.label,
-        server::vault::bearer(current.provider.fixed_base_url().expect("code host has fixed API"),token.trim())).await
+    server::connections::replace_credential(
+        &org,
+        &user,
+        &connection,
+        current.provider,
+        &current.label,
+        server::vault::bearer(
+            current
+                .provider
+                .fixed_base_url()
+                .expect("code host has fixed API"),
+            token.trim(),
+        ),
+    )
+    .await
 }
 
 /// Make a repository the project's primary one.
@@ -628,7 +722,11 @@ pub async fn pair_device(slug: String, provider: Provider) -> Result<DevicePairi
 
 /// Owner/admin-only pairing state; never exposes stored device credentials.
 #[post("/api/devices/status")]
-pub async fn paired_device_status(slug: String, connection: String, start: bool) -> Result<DevicePairing, ServerFnError> {
+pub async fn paired_device_status(
+    slug: String,
+    connection: String,
+    start: bool,
+) -> Result<DevicePairing, ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     paired::status(&org, &user, &connection, start).await
 }
@@ -670,7 +768,11 @@ pub async fn add_slack_channel(
 
 /// Reuse an existing WhatsApp or Signal sender as a project interface.
 #[post("/api/channels/existing")]
-pub async fn add_existing_interface(slug: String, project: String, connection: String) -> Result<Channel, ServerFnError> {
+pub async fn add_existing_interface(
+    slug: String,
+    project: String,
+    connection: String,
+) -> Result<Channel, ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     channels::add_existing(&org, &user, &project, &connection).await
 }
@@ -763,7 +865,11 @@ pub async fn remove_member(slug: String, user_id: String) -> Result<(), ServerFn
 
 /// Change a member's role, including transferring organization ownership.
 #[post("/api/members/role")]
-pub async fn set_member_role(slug: String, user_id: String, role: String) -> Result<(), ServerFnError> {
+pub async fn set_member_role(
+    slug: String,
+    user_id: String,
+    role: String,
+) -> Result<(), ServerFnError> {
     let (user, org) = member_org(&slug).await?;
     server::members::set_role(&org, &user, &user_id, &role).await
 }

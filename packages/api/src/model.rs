@@ -45,10 +45,16 @@ pub struct SharedNotebook {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ShareCreated { pub id: String, pub url: String }
+pub struct ShareCreated {
+    pub id: String,
+    pub url: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ShareInfo { pub id: String, pub created_at: String }
+pub struct ShareInfo {
+    pub id: String,
+    pub created_at: String,
+}
 
 /// An org, as a member sees it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -100,7 +100,10 @@ fn graph_of(row: &PgRow) -> GraphRow {
         project_id: row.get("project_id"),
         lode_session_id: row.get("lode_session_id"),
         lun_session_id,
-        runtime_state: row.get::<Option<String>, _>("runtime_state").map(|state| serde_json::from_str(&state).unwrap_or_else(|_| Value::String("invalid stored runtime state".into()))),
+        runtime_state: row.get::<Option<String>, _>("runtime_state").map(|state| {
+            serde_json::from_str(&state)
+                .unwrap_or_else(|_| Value::String("invalid stored runtime state".into()))
+        }),
         runtime_revision: row.get("runtime_revision"),
         session_user_id: row.get("session_user_id"),
         created_by: row.get("created_by"),
@@ -202,8 +205,16 @@ pub async fn cells_of(graph_id: &str) -> Result<Vec<CellRow>, ServerFnError> {
     .map_err(db_error)?;
     let project_grants=sqlx::query("select p.note_connections::text as grants from projects p join graphs g on g.project_id=p.id where g.id=$1::uuid")
         .bind(graph_id).fetch_one(pool()?).await.map_err(db_error)?.get::<String,_>("grants");
-    let grants:Vec<crate::CellConnector>=serde_json::from_str(&project_grants).map_err(|_|forbidden("invalid project connection permissions"))?;
-    Ok(rows.iter().filter_map(cell_of).map(|mut row|{row.cell.config.connectors=grants.clone();row}).collect())
+    let grants: Vec<crate::CellConnector> = serde_json::from_str(&project_grants)
+        .map_err(|_| forbidden("invalid project connection permissions"))?;
+    Ok(rows
+        .iter()
+        .filter_map(cell_of)
+        .map(|mut row| {
+            row.cell.config.connectors = grants.clone();
+            row
+        })
+        .collect())
 }
 
 async fn cell_by_id(graph_id: &str, cell_id: &str) -> Result<CellRow, ServerFnError> {
@@ -395,7 +406,7 @@ pub async fn create(
     let (project, _) = projects::get(org, project_slug).await?;
     // Compatibility for older clients: the runtime container already belongs
     // to the project. Creating another user-facing notebook is no longer valid.
-    let existing=graph_by_slug(&project.id,"").await?;
+    let existing = graph_by_slug(&project.id, "").await?;
     Ok(existing.graph)
 }
 
@@ -443,7 +454,9 @@ pub async fn set_model(
         ));
     }
     if connection.provider.ai_api(name) == Some(crate::AiApi::Classifier) {
-        return Err(bad_request("choose a generative model; Jev is a classifier"));
+        return Err(bad_request(
+            "choose a generative model; Jev is a classifier",
+        ));
     }
     sqlx::query(
         "update graphs set \
@@ -662,14 +675,26 @@ async fn check_cell_refs(
     let policy = super::db::org_settings(&ctx.org).await?.effect_policy;
     for grant in &config.connectors {
         if let Some(service) = crate::LocalService::from_selection(&grant.connection) {
-            if !policy.effects.iter().any(|effect| effect == service.effect()) {
-                return Err(forbidden("the organization does not permit this local service"));
+            if !policy
+                .effects
+                .iter()
+                .any(|effect| effect == service.effect())
+            {
+                return Err(forbidden(
+                    "the organization does not permit this local service",
+                ));
             }
             if let Some(permissions) = &grant.permissions {
                 let schema = compute::role_name(&ctx.org.slug, &ctx.org.id, &ctx.user.id);
                 let mut permissions = permissions.validate_local(service).map_err(bad_request)?;
-                if service==crate::LocalService::Postgres{for scope in &mut permissions.scopes{scope.root.insert(0,schema.clone());}}
-                super::local::parent(service, &schema).narrow(&permissions).map_err(bad_request)?;
+                if service == crate::LocalService::Postgres {
+                    for scope in &mut permissions.scopes {
+                        scope.root.insert(0, schema.clone());
+                    }
+                }
+                super::local::parent(service, &schema)
+                    .narrow(&permissions)
+                    .map_err(bad_request)?;
                 if let Some(organization) = policy.connector_ceilings.get(service.id()) {
                     organization.narrow(&permissions).map_err(bad_request)?;
                 }
@@ -677,27 +702,53 @@ async fn check_cell_refs(
             continue;
         }
         let (connection, _) = connections::get(&ctx.org, &ctx.user, &grant.connection).await?;
-        let object_store = matches!(connection.provider, Provider::S3 | Provider::Azure) && policy.effects.iter().any(|effect| effect == "ObjectStore");
-        if (!object_store && !policy.effects.iter().any(|effect| effect == "Connector")) || !policy.allows_provider(connection.provider) {
+        let object_store = matches!(connection.provider, Provider::S3 | Provider::Azure)
+            && policy.effects.iter().any(|effect| effect == "ObjectStore");
+        if (!object_store && !policy.effects.iter().any(|effect| effect == "Connector"))
+            || !policy.allows_provider(connection.provider)
+        {
             return Err(forbidden("the organization does not permit this connector"));
         }
-        let ceiling = connection.permissions.clone().unwrap_or_else(|| crate::ConnectorPermissions::preset(connection.provider, crate::PermissionPreset::ReadOnly));
+        let ceiling = connection.permissions.clone().unwrap_or_else(|| {
+            crate::ConnectorPermissions::preset(
+                connection.provider,
+                crate::PermissionPreset::ReadOnly,
+            )
+        });
         if let Some(requested) = &grant.permissions {
-            requested.validate(connection.provider).and_then(|requested| ceiling.narrow(&requested)).map_err(bad_request)?;
+            requested
+                .validate(connection.provider)
+                .and_then(|requested| ceiling.narrow(&requested))
+                .map_err(bad_request)?;
             if let Some(organization) = policy.connector_ceilings.get(connection.provider.id()) {
-                organization.narrow(requested).map_err(|_| bad_request("a cell cannot widen the organization's connector ceiling"))?;
+                organization.narrow(requested).map_err(|_| {
+                    bad_request("a cell cannot widen the organization's connector ceiling")
+                })?;
             }
         }
     }
     if let Some(url) = &config.url {
-        let host = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_ascii_lowercase)).unwrap_or_default();
-        if !policy.effects.iter().any(|e| e == "HTTP") || (!policy.configured_domains && !policy.domains.contains(&host)) {
+        let host = url::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+            .unwrap_or_default();
+        if !policy.effects.iter().any(|e| e == "HTTP")
+            || (!policy.configured_domains && !policy.domains.contains(&host))
+        {
             return Err(bad_request(format!("the organization has not allowed HTTP access to {host}; update its execution policy")));
         }
     }
     if let Some(channel_id) = &config.channel_id {
-        let channel = channels::list(&ctx.org, &ctx.project.slug).await?.into_iter().find(|c| c.id == *channel_id).ok_or_else(|| bad_request("no such interface"))?;
-        if !policy.allows_provider(channel.provider) { return Err(forbidden("this messaging provider is not allowed by the organization")); }
+        let channel = channels::list(&ctx.org, &ctx.project.slug)
+            .await?
+            .into_iter()
+            .find(|c| c.id == *channel_id)
+            .ok_or_else(|| bad_request("no such interface"))?;
+        if !policy.allows_provider(channel.provider) {
+            return Err(forbidden(
+                "this messaging provider is not allowed by the organization",
+            ));
+        }
     }
     if let Some(url) = &config.url {
         check_public_url(url).await.map_err(bad_request)?;
@@ -707,31 +758,76 @@ async fn check_cell_refs(
 
 /// Validate named dependencies before storing a declaration. Names are scoped to
 /// this notebook; no positional references or references to secret values.
-async fn check_declaration(ctx: &Ctx, name: &str, description: &str, config: &mut CellConfig, existing: Option<&str>, cell_type: CellType) -> Result<Vec<Cell>, ServerFnError> {
-    let mut cells: Vec<Cell> = cells_of(&ctx.row.graph.id).await?.into_iter().map(|row| row.cell).collect();
-    if cells.iter().any(|cell| cell.name == name && Some(cell.id.as_str()) != existing) {
-        return Err(conflict(format!("this project already has a note '{name}'")));
+async fn check_declaration(
+    ctx: &Ctx,
+    name: &str,
+    description: &str,
+    config: &mut CellConfig,
+    existing: Option<&str>,
+    cell_type: CellType,
+) -> Result<Vec<Cell>, ServerFnError> {
+    let mut cells: Vec<Cell> = cells_of(&ctx.row.graph.id)
+        .await?
+        .into_iter()
+        .map(|row| row.cell)
+        .collect();
+    if cells
+        .iter()
+        .any(|cell| cell.name == name && Some(cell.id.as_str()) != existing)
+    {
+        return Err(conflict(format!(
+            "this project already has a note '{name}'"
+        )));
     }
-    let renamed = cells.iter().find(|cell| Some(cell.id.as_str()) == existing).filter(|cell| cell.name != name)
-        .map(|cell| crate::renamed_dependents(&cells, &cell.name, name)).unwrap_or_default();
+    let renamed = cells
+        .iter()
+        .find(|cell| Some(cell.id.as_str()) == existing)
+        .filter(|cell| cell.name != name)
+        .map(|cell| crate::renamed_dependents(&cells, &cell.name, name))
+        .unwrap_or_default();
     for dependent in &renamed {
         crate::validate_description(&dependent.description).map_err(bad_request)?;
-        if let Some(cell) = cells.iter_mut().find(|cell| cell.id == dependent.id) { *cell = dependent.clone(); }
+        if let Some(cell) = cells.iter_mut().find(|cell| cell.id == dependent.id) {
+            *cell = dependent.clone();
+        }
     }
     let mut deps = config.dependencies.clone().unwrap_or_default();
     for reference in crate::cell_references(description) {
-        if !deps.contains(&reference) { deps.push(reference); }
+        if !deps.contains(&reference) {
+            deps.push(reference);
+        }
     }
     config.dependencies = Some(deps);
-    let candidate = Cell { id: existing.unwrap_or("new").into(), position: cells.len() as i32,
-        name: name.into(), description: description.into(), config: config.clone(), cell_type,
-        implementation: None, secret_set: false, has_endpoint: false, last_input: None,
-        next_due_at: None, last_check: None, writing: false, issue: None, stale: false };
-    if let Some(index) = cells.iter().position(|cell| Some(cell.id.as_str()) == existing) {
+    let candidate = Cell {
+        id: existing.unwrap_or("new").into(),
+        position: cells.len() as i32,
+        name: name.into(),
+        description: description.into(),
+        config: config.clone(),
+        cell_type,
+        implementation: None,
+        secret_set: false,
+        has_endpoint: false,
+        last_input: None,
+        next_due_at: None,
+        last_check: None,
+        writing: false,
+        issue: None,
+        stale: false,
+    };
+    if let Some(index) = cells
+        .iter()
+        .position(|cell| Some(cell.id.as_str()) == existing)
+    {
         cells[index] = candidate;
-    } else { cells.push(candidate); }
+    } else {
+        cells.push(candidate);
+    }
     crate::validate_dependencies(&cells).map_err(bad_request)?;
-    Ok(renamed.into_iter().filter(|cell| Some(cell.id.as_str()) != existing).collect())
+    Ok(renamed
+        .into_iter()
+        .filter(|cell| Some(cell.id.as_str()) != existing)
+        .collect())
 }
 
 /// The stored config: the client's fields, plus what the server keeps
@@ -783,8 +879,12 @@ pub async fn add_cell(
     let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
     let (name, description, mut config) =
         validate_cell(cell_type, form.name, form.description, form.config).map_err(bad_request)?;
-    if !config.connectors.is_empty()&&config.connectors!=ctx.project.note_connections{return Err(bad_request("Edit permissions in project settings, not on an individual note"));}
-    config.connectors=ctx.project.note_connections.clone();
+    if !config.connectors.is_empty() && config.connectors != ctx.project.note_connections {
+        return Err(bad_request(
+            "Edit permissions in project settings, not on an individual note",
+        ));
+    }
+    config.connectors = ctx.project.note_connections.clone();
     check_declaration(&ctx, &name, &description, &mut config, None, cell_type).await?;
     check_cell_refs(&ctx, cell_type, &config).await?;
     let mut stored = stored_config(&config, None);
@@ -796,9 +896,13 @@ pub async fn add_cell(
     }
     // Declaration insertion, queueing and build adoption share a graph lock.
     // A finishing older build must not mark a newly queued cell ready.
-    let mut guard=pool()?.begin().await.map_err(db_error)?;
-    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1,3))").bind(&ctx.row.graph.id).execute(&mut *guard).await.map_err(db_error)?;
-    super::connector::require_actor(&mut guard,&org.id,&user.id).await?;
+    let mut guard = pool()?.begin().await.map_err(db_error)?;
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1,3))")
+        .bind(&ctx.row.graph.id)
+        .execute(&mut *guard)
+        .await
+        .map_err(db_error)?;
+    super::connector::require_actor(&mut guard, &org.id, &user.id).await?;
     let inserted = sqlx::query(
         "insert into graph_cells (graph_id, position, name, kind, variant, description, config, next_due_at) \
          values ($1::uuid, \
@@ -824,25 +928,53 @@ pub async fn add_cell(
         }
         Err(e) => return Err(db_error(e)),
     };
-    sqlx::query("update graphs set updated_at=now() where id=$1::uuid").bind(&ctx.row.graph.id).execute(&mut *guard).await.map_err(db_error)?;
-    let missing=super::workspace::required(&ctx.project,Some(&ctx.row.graph),&connections::list(org,user).await?,&super::db::org_settings(org).await?.effect_policy);
-    let (generation,generation_notice)=if lode::configured()&&missing.is_empty(){
+    sqlx::query("update graphs set updated_at=now() where id=$1::uuid")
+        .bind(&ctx.row.graph.id)
+        .execute(&mut *guard)
+        .await
+        .map_err(db_error)?;
+    let missing = super::workspace::required(
+        &ctx.project,
+        Some(&ctx.row.graph),
+        &connections::list(org, user).await?,
+        &super::db::org_settings(org).await?.effect_policy,
+    );
+    let (generation, generation_notice) = if lode::configured() && missing.is_empty() {
         sqlx::query("insert into graph_generation_requests(graph_id,user_id) values($1::uuid,$2::uuid) \
             on conflict(graph_id) do update set user_id=excluded.user_id,revision=gen_random_uuid(),requested_at=now(),startup_attempts=0,retry_at=now()")
             .bind(&ctx.row.graph.id).bind(&user.id).execute(&mut *guard).await.map_err(db_error)?;
         sqlx::query("update graphs set status='implementing',status_detail='Preparing repository checkout',updated_at=now() where id=$1::uuid")
             .bind(&ctx.row.graph.id).execute(&mut *guard).await.map_err(db_error)?;
-        (true,None)
-    }else{
-        let notice=if !lode::configured(){"Code writing is not configured on this deployment.".into()}else{missing.join(" ")};
-        (false,Some(format!("Cell saved. Finish setup to start code generation: {notice}")))
+        (true, None)
+    } else {
+        let notice = if !lode::configured() {
+            "Code writing is not configured on this deployment.".into()
+        } else {
+            missing.join(" ")
+        };
+        (
+            false,
+            Some(format!(
+                "Cell saved. Finish setup to start code generation: {notice}"
+            )),
+        )
     };
     guard.commit().await.map_err(db_error)?;
-    let generation=if generation{Some(graph_by_id(&ctx.row.graph.id).await?.ok_or_else(||not_found("project notes were removed"))?.graph)}else{None};
+    let generation = if generation {
+        Some(
+            graph_by_id(&ctx.row.graph.id)
+                .await?
+                .ok_or_else(|| not_found("project notes were removed"))?
+                .graph,
+        )
+    } else {
+        None
+    };
     Ok(CellSaved {
         cell: cell_by_id(&ctx.row.graph.id, &id).await?.cell,
         endpoint_url,
-        generation,generation_notice,
+        generation,
+        generation_notice,
     })
 }
 
@@ -870,9 +1002,21 @@ pub async fn update_cell(
     let cell_type = old.cell.cell_type;
     let (name, description, mut config) =
         validate_cell(cell_type, form.name, form.description, form.config).map_err(bad_request)?;
-    if !config.connectors.is_empty()&&config.connectors!=ctx.project.note_connections{return Err(bad_request("Edit permissions in project settings, not on an individual note"));}
-    config.connectors=ctx.project.note_connections.clone();
-    let renamed = check_declaration(&ctx, &name, &description, &mut config, Some(&old.cell.id), cell_type).await?;
+    if !config.connectors.is_empty() && config.connectors != ctx.project.note_connections {
+        return Err(bad_request(
+            "Edit permissions in project settings, not on an individual note",
+        ));
+    }
+    config.connectors = ctx.project.note_connections.clone();
+    let renamed = check_declaration(
+        &ctx,
+        &name,
+        &description,
+        &mut config,
+        Some(&old.cell.id),
+        cell_type,
+    )
+    .await?;
     check_cell_refs(&ctx, cell_type, &config).await?;
     let mut keep = old.raw_config.clone();
     // A renamed secret is another vault path: the old value goes.
@@ -932,8 +1076,15 @@ pub async fn delete_cell(
 ) -> Result<(), ServerFnError> {
     let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
     let old = cell_by_id(&ctx.row.graph.id, cell_id).await?;
-    let remaining: Vec<Cell> = cells_of(&ctx.row.graph.id).await?.into_iter().map(|row| row.cell).filter(|c| c.id != old.cell.id).collect();
-    crate::validate_dependencies(&remaining).map_err(|_| conflict("remove this note's named references from its dependents before deleting it"))?;
+    let remaining: Vec<Cell> = cells_of(&ctx.row.graph.id)
+        .await?
+        .into_iter()
+        .map(|row| row.cell)
+        .filter(|c| c.id != old.cell.id)
+        .collect();
+    crate::validate_dependencies(&remaining).map_err(|_| {
+        conflict("remove this note's named references from its dependents before deleting it")
+    })?;
     if old.cell.cell_type == CellType::Secret && old.cell.secret_set {
         delete_secret_value(&ctx, &old.cell).await?;
     }
@@ -991,13 +1142,15 @@ pub fn secret_path(org_id: &str, graph_id: &str, name: &str) -> String {
     format!("graph/{org_id}/{graph_id}/{name}")
 }
 
-async fn secret_target(ctx:&Ctx,cell:&Cell)->Result<(String,String),ServerFnError>{
+async fn secret_target(ctx: &Ctx, cell: &Cell) -> Result<(String, String), ServerFnError> {
     let row=sqlx::query("select coalesce(o.graph_id,c.graph_id)::text as namespace,coalesce(o.original_config->>'name',c.config->>'name') as name from graph_cells c \
         left join note_origins o on o.note_id=c.id join graphs current on current.id=c.graph_id join graphs original on original.id=coalesce(o.graph_id,c.graph_id) \
         join projects p on p.id=current.project_id where c.id=$1::uuid and current.id=$2::uuid and p.org_id=$3::uuid and original.project_id=current.project_id")
         .bind(&cell.id).bind(&ctx.row.graph.id).bind(&ctx.org.id).fetch_optional(pool()?).await.map_err(db_error)?.ok_or_else(||forbidden("secret namespace leaves this project"))?;
-    let name=row.get::<Option<String>,_>("name").ok_or_else(||bad_request("this source note has no secret name"))?;
-    Ok((row.get("namespace"),name))
+    let name = row
+        .get::<Option<String>, _>("name")
+        .ok_or_else(|| bad_request("this source note has no secret name"))?;
+    Ok((row.get("namespace"), name))
 }
 
 /// Delete the vault values of every secret cell of a project's notebooks,
@@ -1006,8 +1159,13 @@ pub async fn delete_project_secrets(org_id: &str, project_id: &str) -> Result<()
     retire_project_runs(org_id, project_id).await?;
     let mut tx = super::connector::lock(org_id).await?;
     let graphs = sqlx::query("select id::text as id from graphs where project_id=$1::uuid")
-        .bind(project_id).fetch_all(&mut *tx).await.map_err(db_error)?;
-    for graph in graphs { super::connector::revoke_graph(&mut tx, org_id, &graph.get::<String,_>("id")).await?; }
+        .bind(project_id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    for graph in graphs {
+        super::connector::revoke_graph(&mut tx, org_id, &graph.get::<String, _>("id")).await?;
+    }
     tx.commit().await.map_err(db_error)?;
     let rows = sqlx::query(
         "select coalesce(o.graph_id,g.id)::text as graph_id,coalesce(o.original_config->>'name',c.config->>'name') as name from graph_cells c left join note_origins o on o.note_id=c.id \
@@ -1035,7 +1193,7 @@ async fn delete_secret_value(ctx: &Ctx, cell: &Cell) -> Result<(), ServerFnError
     let Some(_name) = &cell.config.name else {
         return Ok(());
     };
-    let(namespace,name)=secret_target(ctx,cell).await?;
+    let (namespace, name) = secret_target(ctx, cell).await?;
     vault::delete(&secret_path(&ctx.org.id, &namespace, &name))
         .await
         .map_err(|e| {
@@ -1075,7 +1233,10 @@ pub async fn set_secret(
         .clone()
         .ok_or_else(|| bad_request("the secret has no name"))?;
     vault::write(
-        &{let(namespace,physical)=secret_target(&ctx,&cell.cell).await?;secret_path(&org.id,&namespace,&physical)},
+        &{
+            let (namespace, physical) = secret_target(&ctx, &cell.cell).await?;
+            secret_path(&org.id, &namespace, &physical)
+        },
         &json!({ "kind": "secret", "value": value }),
     )
     .await
@@ -1121,7 +1282,8 @@ pub async fn rotate_endpoint(
     Ok(CellSaved {
         cell: cell_by_id(&ctx.row.graph.id, &cell.cell.id).await?.cell,
         endpoint_url: Some(url),
-        generation:None,generation_notice:None,
+        generation: None,
+        generation_notice: None,
     })
 }
 
@@ -1253,7 +1415,9 @@ async fn repo_connection(ctx: &Ctx) -> Result<(Connection, String, crate::RepoRe
     })?;
     let (connection, owner) = connections::get(&ctx.org, &ctx.user, &id).await?;
     if repo.full_name.split('/').count() != 2 {
-        return Err(bad_request("nested GitLab namespaces require a native repository-selector adapter"));
+        return Err(bad_request(
+            "nested GitLab namespaces require a native repository-selector adapter",
+        ));
     }
     Ok((connection, owner, repo))
 }
@@ -1269,32 +1433,96 @@ async fn lode_credentials(ctx: &Ctx) -> Result<(Value, Connection), ServerFnErro
         .clone()
         .ok_or_else(|| bad_request("choose the AI connection the code is written with"))?;
     let (model, model_owner) = connections::get(&ctx.org, &ctx.user, &model_id).await?;
-    if !super::db::org_settings(&ctx.org).await?.effect_policy.allows_provider(model.provider) {
-        return Err(forbidden("this AI provider is not allowed by the organization"));
+    if !super::db::org_settings(&ctx.org)
+        .await?
+        .effect_policy
+        .allows_provider(model.provider)
+    {
+        return Err(forbidden(
+            "this AI provider is not allowed by the organization",
+        ));
     }
-    let name = ctx.row.graph.model_name.as_deref().or_else(|| default_model(model.provider)).unwrap_or("");
-    if !model.provider.can_generate() || model.provider.ai_api(name) == Some(crate::AiApi::Classifier) {
-        return Err(bad_request("choose a generative model before implementing this project"));
+    let name = ctx
+        .row
+        .graph
+        .model_name
+        .as_deref()
+        .or_else(|| default_model(model.provider))
+        .unwrap_or("");
+    if !model.provider.can_generate()
+        || model.provider.ai_api(name) == Some(crate::AiApi::Classifier)
+    {
+        return Err(bad_request(
+            "choose a generative model before implementing this project",
+        ));
     }
     let cost = config::model_call_cost();
     let repo_root: Vec<String> = source.full_name.split('/').map(str::to_string).collect();
     let mut write_root = repo_root.clone();
-    write_root.extend(project_path(&ctx.row.graph.slug).split('/').map(str::to_string));
-    let mut write_permissions = super::connector::scoped(&repo, "repositories.write", write_root.clone(), true);
+    write_root.extend(
+        project_path(&ctx.row.graph.slug)
+            .split('/')
+            .map(str::to_string),
+    );
+    let mut write_permissions =
+        super::connector::scoped(&repo, "repositories.write", write_root.clone(), true);
     // Publication plans may remove files only when independently requested by
     // the connection/admin ceiling. The read/write preset never adds deletion.
-    let delete_permissions = super::connector::scoped(&repo, "repositories.delete", write_root, true);
+    let delete_permissions =
+        super::connector::scoped(&repo, "repositories.delete", write_root, true);
     write_permissions.scopes.extend(delete_permissions.scopes);
-    let repo_read = super::connector::mint(&ctx.org, &ctx.user, &repo, &repo_owner, "repositories.read",
-        &super::connector::scoped(&repo, "repositories.read", repo_root.clone(), true), 0).await?.grant;
-    let repo_write = super::connector::mint(&ctx.org, &ctx.user, &repo, &repo_owner, "repositories.write",
-        &write_permissions, 0).await?.grant;
-    let model_grant = super::connector::mint(&ctx.org, &ctx.user, &model, &model_owner, "inference.generate",
-        &super::connector::scoped(&model, "inference.generate", crate::model_resource(model.provider, name), false), cost).await?.grant;
-    let lun_read = super::connector::mint(&ctx.org, &ctx.user, &repo, &repo_owner, "repositories.read",
-        &super::connector::scoped(&repo, "repositories.read", repo_root, true), 0).await?.grant;
+    let repo_read = super::connector::mint(
+        &ctx.org,
+        &ctx.user,
+        &repo,
+        &repo_owner,
+        "repositories.read",
+        &super::connector::scoped(&repo, "repositories.read", repo_root.clone(), true),
+        0,
+    )
+    .await?
+    .grant;
+    let repo_write = super::connector::mint(
+        &ctx.org,
+        &ctx.user,
+        &repo,
+        &repo_owner,
+        "repositories.write",
+        &write_permissions,
+        0,
+    )
+    .await?
+    .grant;
+    let model_grant = super::connector::mint(
+        &ctx.org,
+        &ctx.user,
+        &model,
+        &model_owner,
+        "inference.generate",
+        &super::connector::scoped(
+            &model,
+            "inference.generate",
+            crate::model_resource(model.provider, name),
+            false,
+        ),
+        cost,
+    )
+    .await?
+    .grant;
+    let lun_read = super::connector::mint(
+        &ctx.org,
+        &ctx.user,
+        &repo,
+        &repo_owner,
+        "repositories.read",
+        &super::connector::scoped(&repo, "repositories.read", repo_root, true),
+        0,
+    )
+    .await?
+    .grant;
     let mut repo_credentials = warrant::credentials_json(&repo_read, &repo_owner, &repo.id, None);
-    repo_credentials["operations"] = json!([{ "operation": "repositories.write", "warrant": repo_write.warrant.to_json() }]);
+    repo_credentials["operations"] =
+        json!([{ "operation": "repositories.write", "warrant": repo_write.warrant.to_json() }]);
     Ok((
         json!({
             "repo": repo_credentials,
@@ -1314,65 +1542,146 @@ pub fn project_path(graph_slug: &str) -> String {
 
 /// Serialized durable launches. Re-read actor/membership and all live ceilings;
 /// a newer revision remains queued, and failures leave the saved cells intact.
-async fn run_queued(graph_id:&str)->Result<bool,ServerFnError>{
-    let mut tx=pool()?.begin().await.map_err(db_error)?;
-    let locked=sqlx::query("select pg_try_advisory_xact_lock(hashtextextended($1,3)) as locked")
-        .bind(graph_id).fetch_one(&mut *tx).await.map_err(db_error)?.get::<bool,_>("locked");
-    if !locked{return Ok(true);}
+async fn run_queued(graph_id: &str) -> Result<bool, ServerFnError> {
+    let mut tx = pool()?.begin().await.map_err(db_error)?;
+    let locked = sqlx::query("select pg_try_advisory_xact_lock(hashtextextended($1,3)) as locked")
+        .bind(graph_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(db_error)?
+        .get::<bool, _>("locked");
+    if !locked {
+        return Ok(true);
+    }
     let request=sqlx::query("select user_id::text as actor,revision::text as revision,startup_attempts from graph_generation_requests where graph_id=$1::uuid and retry_at<=now()")
         .bind(graph_id).fetch_optional(&mut *tx).await.map_err(db_error)?;
-    let Some(request)=request else{return Ok(false);};
-    let actor:String=request.get("actor");let revision:String=request.get("revision");
-    let startup_attempts:i32=request.get("startup_attempts");
-    let row=graph_by_id(graph_id).await?.ok_or_else(||not_found("project notes were removed"))?;
-    let parent=sqlx::query("select org_id::text as org from projects where id=$1::uuid").bind(&row.project_id)
-        .fetch_one(pool()?).await.map_err(db_error)?.get::<String,_>("org");
+    let Some(request) = request else {
+        return Ok(false);
+    };
+    let actor: String = request.get("actor");
+    let revision: String = request.get("revision");
+    let startup_attempts: i32 = request.get("startup_attempts");
+    let row = graph_by_id(graph_id)
+        .await?
+        .ok_or_else(|| not_found("project notes were removed"))?;
+    let parent = sqlx::query("select org_id::text as org from projects where id=$1::uuid")
+        .bind(&row.project_id)
+        .fetch_one(pool()?)
+        .await
+        .map_err(db_error)?
+        .get::<String, _>("org");
     let user=sqlx::query("select email::text as email,display_name from users where id=$1::uuid and deleted_at is null")
         .bind(&actor).fetch_optional(pool()?).await.map_err(db_error)?;
-    let result=async{
-        let user=user.ok_or_else(||forbidden("generation actor was removed"))?;
-        let user=User{id:actor,email:user.get("email"),display_name:user.get("display_name")};
-        let org=sqlx::query("select slug::text as slug from orgs where id=$1::uuid").bind(parent).fetch_one(pool()?).await.map_err(db_error)?.get::<String,_>("slug");
-        let org=super::db::org_for_member(&org,&user.id).await?.ok_or_else(||forbidden("generation actor no longer belongs to this organization"))?;
-        let(project,_)=super::projects::get(&org,&sqlx::query("select slug::text as slug from projects where id=$1::uuid").bind(&row.project_id).fetch_one(pool()?).await.map_err(db_error)?.get::<String,_>("slug")).await?;
-        let ctx=Ctx{org,project,row,user};
-        let cells=cells_of(graph_id).await?.into_iter().map(|r|r.cell).collect::<Vec<_>>();
-        let text=lode_message(&ctx.row.graph.name,&cells,None);
-        launch(&ctx,&text,Writing::All,LaunchedBy::Member,"Writing project note code").await
-    }.await;
-    let retryable=result.as_ref().err().is_some_and(|e|err_text(e).contains("the code writer: timed out")||err_text(e).contains("the code writer: unreachable"));
-    if retryable && startup_attempts<5 {
+    let result = async {
+        let user = user.ok_or_else(|| forbidden("generation actor was removed"))?;
+        let user = User {
+            id: actor,
+            email: user.get("email"),
+            display_name: user.get("display_name"),
+        };
+        let org = sqlx::query("select slug::text as slug from orgs where id=$1::uuid")
+            .bind(parent)
+            .fetch_one(pool()?)
+            .await
+            .map_err(db_error)?
+            .get::<String, _>("slug");
+        let org = super::db::org_for_member(&org, &user.id)
+            .await?
+            .ok_or_else(|| forbidden("generation actor no longer belongs to this organization"))?;
+        let (project, _) = super::projects::get(
+            &org,
+            &sqlx::query("select slug::text as slug from projects where id=$1::uuid")
+                .bind(&row.project_id)
+                .fetch_one(pool()?)
+                .await
+                .map_err(db_error)?
+                .get::<String, _>("slug"),
+        )
+        .await?;
+        let ctx = Ctx {
+            org,
+            project,
+            row,
+            user,
+        };
+        let cells = cells_of(graph_id)
+            .await?
+            .into_iter()
+            .map(|r| r.cell)
+            .collect::<Vec<_>>();
+        let text = lode_message(&ctx.row.graph.name, &cells, None);
+        launch(
+            &ctx,
+            &text,
+            Writing::All,
+            LaunchedBy::Member,
+            "Writing project note code",
+        )
+        .await
+    }
+    .await;
+    let retryable = result.as_ref().err().is_some_and(|e| {
+        err_text(e).contains("the code writer: timed out")
+            || err_text(e).contains("the code writer: unreachable")
+    });
+    if retryable && startup_attempts < 5 {
         sqlx::query("update graph_generation_requests set startup_attempts=startup_attempts+1,retry_at=now()+interval '30 seconds' where graph_id=$1::uuid and revision=$2::uuid")
             .bind(graph_id).bind(&revision).execute(&mut *tx).await.map_err(db_error)?;
         sqlx::query("update graphs set status_detail='Waiting for the code writer; repository preparation will be retried safely' where id=$1::uuid").bind(graph_id).execute(&mut *tx).await.map_err(db_error)?;
         tx.commit().await.map_err(db_error)?;
         return Ok(true);
     }
-    let removed=sqlx::query("delete from graph_generation_requests where graph_id=$1::uuid and revision=$2::uuid")
-        .bind(graph_id).bind(revision).execute(&mut *tx).await.map_err(db_error)?.rows_affected();
-    if let Err(e)=result {if removed!=0{fail_writing(graph_id,&format!("Automatic code generation could not start: {}",err_text(&e))).await?;}}
+    let removed = sqlx::query(
+        "delete from graph_generation_requests where graph_id=$1::uuid and revision=$2::uuid",
+    )
+    .bind(graph_id)
+    .bind(revision)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_error)?
+    .rows_affected();
+    if let Err(e) = result {
+        if removed != 0 {
+            fail_writing(
+                graph_id,
+                &format!(
+                    "Automatic code generation could not start: {}",
+                    err_text(&e)
+                ),
+            )
+            .await?;
+        }
+    }
     tx.commit().await.map_err(db_error)?;
     Ok(true)
 }
 
-pub async fn tick_queued(){
-    let Ok(pool)=pool() else{return;};
+pub async fn tick_queued() {
+    let Ok(pool) = pool() else {
+        return;
+    };
     let Ok(rows)=sqlx::query("select graph_id::text as id from graph_generation_requests where retry_at<=now() order by requested_at limit 8").fetch_all(pool).await else{return;};
-    for row in rows{let _=run_queued(&row.get::<String,_>("id")).await;}
+    for row in rows {
+        let _ = run_queued(&row.get::<String, _>("id")).await;
+    }
 }
 
 /// New declarations need a fresh proof-bounded service ceiling. Never extend
 /// an existing session's permitted function names or connector grants in place.
-async fn retire_writer(ctx:&mut Ctx)->Result<(),ServerFnError>{
-    if let Some(id)=ctx.row.lode_session_id.clone(){
-        lode::narrow(&id,&[]).await.map_err(bad_gateway)?;
+async fn retire_writer(ctx: &mut Ctx) -> Result<(), ServerFnError> {
+    if let Some(id) = ctx.row.lode_session_id.clone() {
+        lode::narrow(&id, &[]).await.map_err(bad_gateway)?;
         lode::abort(&id).await.map_err(bad_gateway)?;
-        let mut tx=super::connector::lock(&ctx.org.id).await?;
-        super::connector::require_actor(&mut tx,&ctx.org.id,&ctx.user.id).await?;
-        super::connector::revoke_graph(&mut tx,&ctx.org.id,&ctx.row.graph.id).await?;
-        sqlx::query("update graphs set lode_session_id=null where id=$1::uuid").bind(&ctx.row.graph.id).execute(&mut *tx).await.map_err(db_error)?;
+        let mut tx = super::connector::lock(&ctx.org.id).await?;
+        super::connector::require_actor(&mut tx, &ctx.org.id, &ctx.user.id).await?;
+        super::connector::revoke_graph(&mut tx, &ctx.org.id, &ctx.row.graph.id).await?;
+        sqlx::query("update graphs set lode_session_id=null where id=$1::uuid")
+            .bind(&ctx.row.graph.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_error)?;
         tx.commit().await.map_err(db_error)?;
-        ctx.row.lode_session_id=None;
+        ctx.row.lode_session_id = None;
     }
     Ok(())
 }
@@ -1411,31 +1720,67 @@ async fn launch(
             "project notes cannot be implemented: code writing is not configured",
         ));
     }
-    let mut current=ctx.clone();
-    let request_key=sqlx::query("select revision::text as key from graph_generation_requests where graph_id=$1::uuid")
-        .bind(&ctx.row.graph.id).fetch_optional(pool()?).await.map_err(db_error)?.map(|row|row.get::<String,_>("key"));
-    let reuse=if let (Some(id),Some(key))=(&current.row.lode_session_id,&request_key){
+    let mut current = ctx.clone();
+    let request_key = sqlx::query(
+        "select revision::text as key from graph_generation_requests where graph_id=$1::uuid",
+    )
+    .bind(&ctx.row.graph.id)
+    .fetch_optional(pool()?)
+    .await
+    .map_err(db_error)?
+    .map(|row| row.get::<String, _>("key"));
+    let reuse = if let (Some(id), Some(key)) = (&current.row.lode_session_id, &request_key) {
         matches!(lode::status(id).await.map_err(bad_gateway)?,lode::Reply::Ok(ref status) if status.get("requestKey").and_then(Value::as_str)==Some(key.as_str()) && status.get("checkout").and_then(Value::as_str)!=Some("failed"))
-    }else{false};
-    if !matches!(writing,Writing::Unchanged)&&!reuse{retire_writer(&mut current).await?;}
-    let ctx=&current;
+    } else {
+        false
+    };
+    if !matches!(writing, Writing::Unchanged) && !reuse {
+        retire_writer(&mut current).await?;
+    }
+    let ctx = &current;
     let (credentials, model) = lode_credentials(ctx).await?;
-    let mut policy = super::db::org_settings(&ctx.org).await?.effect_policy.validate().map_err(bad_request)?;
+    let mut policy = super::db::org_settings(&ctx.org)
+        .await?
+        .effect_policy
+        .validate()
+        .map_err(bad_request)?;
     let cells = cells_of(&ctx.row.graph.id).await?;
     let mut execution = writer_execution(ctx, &cells).await.map_err(bad_gateway)?;
     let mut writer_text = text.to_string();
-    if cells.iter().any(|row| row.cell.cell_type == CellType::DbSink || row.cell.config.connectors.iter().any(|grant| grant.connection == "compute")) {
-        if !policy.effects.iter().any(|effect| effect == "PostgreSQL") { return Err(forbidden("organization PostgreSQL effect denied")); }
-        let schema = compute::ensure(&ctx.org.id, &ctx.org.slug, &ctx.user.id).await.map_err(bad_gateway)?;
+    if cells.iter().any(|row| {
+        row.cell.cell_type == CellType::DbSink
+            || row
+                .cell
+                .config
+                .connectors
+                .iter()
+                .any(|grant| grant.connection == "compute")
+    }) {
+        if !policy.effects.iter().any(|effect| effect == "PostgreSQL") {
+            return Err(forbidden("organization PostgreSQL effect denied"));
+        }
+        let schema = compute::ensure(&ctx.org.id, &ctx.org.slug, &ctx.user.id)
+            .await
+            .map_err(bad_gateway)?;
         let target = compute::public_target(&schema).map_err(bad_gateway)?;
         writer_text.push_str(&format!("\nTrusted non-secret compute target: {target}. Use a statically matching PostgreSQL capability, schema-qualified structured query AST and only the declared tables/operations. The runtime resolves the password; never embed or request it.\n"));
     }
-    for row in cells.iter().filter(|row| row.cell.cell_type == CellType::StorageSink) {
-        let id = row.cell.config.connection_id.as_deref().ok_or_else(|| bad_request("storage cell has no connection"))?;
+    for row in cells
+        .iter()
+        .filter(|row| row.cell.cell_type == CellType::StorageSink)
+    {
+        let id = row
+            .cell
+            .config
+            .connection_id
+            .as_deref()
+            .ok_or_else(|| bad_request("storage cell has no connection"))?;
         let (connection, _) = connections::get(&ctx.org, &ctx.user, id).await?;
         let instruction = if connection.provider == Provider::Dropbox {
             "Use the scoped Connector effect with files.create and a UTF-8 contents payload; Dropbox is not an ObjectStore bucket."
-        } else { "Use the scoped ObjectStore effect; putString options must be empty (no content-type/metadata overrides)." };
+        } else {
+            "Use the scoped ObjectStore effect; putString options must be empty (no content-type/metadata overrides)."
+        };
         writer_text.push_str(&format!("\nTrusted non-secret storage target: {}. {instruction}\n", json!({
             "cell": row.cell.name, "provider": connection.provider.id(), "connection": connection.id,
             "bucket": super::connector::bucket(&connection), "resource": row.cell.config.path.as_deref().unwrap_or("").trim_start_matches('/').split('/').collect::<Vec<_>>() })));
@@ -1452,17 +1797,34 @@ async fn launch(
                 }
             }
             let status = match lode::status(id).await.map_err(bad_gateway)? {
-                lode::Reply::Ok(status) => Some(status), lode::Reply::Gone => None,
+                lode::Reply::Ok(status) => Some(status),
+                lode::Reply::Gone => None,
             };
             if let Some(status) = &status {
                 let tools = lode::narrowing_tools(status, &policy.tools).map_err(bad_gateway)?;
-                let binding = super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, id, &credentials, &tools).await?;
-                policy.tools.retain(|tool| binding.policy.tools.contains(tool));
+                let binding = super::connector::bind_writer(
+                    &ctx.org,
+                    &ctx.row.graph.id,
+                    id,
+                    &credentials,
+                    &tools,
+                )
+                .await?;
+                policy
+                    .tools
+                    .retain(|tool| binding.policy.tools.contains(tool));
                 execution = lode::bind_execution(&execution, &binding).map_err(bad_gateway)?;
             }
-            lode::message_once(id, &writer_text, credentials.clone(), &policy.tools, &execution,request_key.as_deref())
-                .await
-                .map_err(bad_gateway)?
+            lode::message_once(
+                id,
+                &writer_text,
+                credentials.clone(),
+                &policy.tools,
+                &execution,
+                request_key.as_deref(),
+            )
+            .await
+            .map_err(bad_gateway)?
         }
         None => lode::Reply::Gone,
     };
@@ -1475,7 +1837,9 @@ async fn launch(
                 ));
             }
             let (_, _, repo) = repo_connection(ctx).await?;
-            let request_key=request_key.clone().unwrap_or_else(||uuid::Uuid::new_v4().to_string());
+            let request_key = request_key
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let body = json!({
                 "background":true,
                 "requestKey":request_key,
@@ -1505,11 +1869,37 @@ async fn launch(
             let id = lode::open(&body).await.map_err(bad_gateway)?;
             // Persist the accepted session before any later RPC can time out.
             // Retrying checkout uses the same request key, not a second agent.
-            sqlx::query("update graphs set lode_session_id=$2 where id=$1::uuid").bind(&ctx.row.graph.id).bind(&id).execute(pool()?).await.map_err(db_error)?;
-            let binding = super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, &id, &credentials, &policy.tools).await?;
-            policy.tools.retain(|tool| binding.policy.tools.contains(tool));
+            sqlx::query("update graphs set lode_session_id=$2 where id=$1::uuid")
+                .bind(&ctx.row.graph.id)
+                .bind(&id)
+                .execute(pool()?)
+                .await
+                .map_err(db_error)?;
+            let binding = super::connector::bind_writer(
+                &ctx.org,
+                &ctx.row.graph.id,
+                &id,
+                &credentials,
+                &policy.tools,
+            )
+            .await?;
+            policy
+                .tools
+                .retain(|tool| binding.policy.tools.contains(tool));
             execution = lode::bind_execution(&execution, &binding).map_err(bad_gateway)?;
-            if !matches!(lode::message_once(&id, &writer_text, credentials.clone(), &policy.tools, &execution,Some(&request_key)).await.map_err(bad_gateway)?, lode::Reply::Ok(())) {
+            if !matches!(
+                lode::message_once(
+                    &id,
+                    &writer_text,
+                    credentials.clone(),
+                    &policy.tools,
+                    &execution,
+                    Some(&request_key)
+                )
+                .await
+                .map_err(bad_gateway)?,
+                lode::Reply::Ok(())
+            ) {
                 return Err(bad_gateway("writer session disappeared before starting"));
             }
             id
@@ -1822,10 +2212,18 @@ pub async fn abort(
     graph_slug: &str,
 ) -> Result<Graph, ServerFnError> {
     let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
-    let mut guard=pool()?.begin().await.map_err(db_error)?;
-    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1,3))").bind(&ctx.row.graph.id).execute(&mut *guard).await.map_err(db_error)?;
-    sqlx::query("delete from graph_generation_requests where graph_id=$1::uuid").bind(&ctx.row.graph.id).execute(&mut *guard).await.map_err(db_error)?;
-    let ctx=member_ctx(org,user,project_slug,graph_slug).await?;
+    let mut guard = pool()?.begin().await.map_err(db_error)?;
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1,3))")
+        .bind(&ctx.row.graph.id)
+        .execute(&mut *guard)
+        .await
+        .map_err(db_error)?;
+    sqlx::query("delete from graph_generation_requests where graph_id=$1::uuid")
+        .bind(&ctx.row.graph.id)
+        .execute(&mut *guard)
+        .await
+        .map_err(db_error)?;
+    let ctx = member_ctx(org, user, project_slug, graph_slug).await?;
     if let Some(id) = &ctx.row.lode_session_id {
         lode::abort(id).await.map_err(bad_gateway)?;
     }
@@ -1849,20 +2247,30 @@ pub async fn progress(
     wait: u64,
 ) -> Result<LodeProgress, ServerFnError> {
     let mut ctx = member_ctx(org, user, project_slug, graph_slug).await?;
-    let queued=sqlx::query("select 1 from graph_generation_requests where graph_id=$1::uuid").bind(&ctx.row.graph.id)
-        .fetch_optional(pool()?).await.map_err(db_error)?.is_some();
+    let queued = sqlx::query("select 1 from graph_generation_requests where graph_id=$1::uuid")
+        .bind(&ctx.row.graph.id)
+        .fetch_optional(pool()?)
+        .await
+        .map_err(db_error)?
+        .is_some();
     if queued {
-        let id=ctx.row.graph.id.clone();
+        let id = ctx.row.graph.id.clone();
         // Launch independently of request cancellation so navigation cannot lose
         // checkout progress. SQL serialization prevents duplicate paid runs.
         spawn_generation(id.clone());
         reload(&mut ctx).await?;
-        return Ok(LodeProgress{graph:ctx.row.graph,state:"queued".into(),entries:Vec::new(),next:after,question:None});
+        return Ok(LodeProgress {
+            graph: ctx.row.graph,
+            state: "queued".into(),
+            entries: Vec::new(),
+            next: after,
+            question: None,
+        });
     }
     let mut entries = Vec::new();
     let mut next = after;
     let mut state = "none".to_string();
-    let mut question=None;
+    let mut question = None;
     if let (Some(id), true) = (ctx.row.lode_session_id.clone(), lode::configured()) {
         let wait = if ctx.row.graph.status == "implementing" {
             wait
@@ -1894,10 +2302,19 @@ pub async fn progress(
             }
         }
     }
-    if let Some(id)=&ctx.row.lode_session_id{if let lode::Reply::Ok(status)=lode::status(id).await.map_err(bad_gateway)?{
-        question=status.get("question").filter(|q|!q.is_null()).map(|q|serde_json::from_value(q.clone())).transpose().map_err(|_|bad_gateway("invalid writer question"))?;
-        if question.is_some(){state="waiting".into();}
-    }}
+    if let Some(id) = &ctx.row.lode_session_id {
+        if let lode::Reply::Ok(status) = lode::status(id).await.map_err(bad_gateway)? {
+            question = status
+                .get("question")
+                .filter(|q| !q.is_null())
+                .map(|q| serde_json::from_value(q.clone()))
+                .transpose()
+                .map_err(|_| bad_gateway("invalid writer question"))?;
+            if question.is_some() {
+                state = "waiting".into();
+            }
+        }
+    }
     if ctx.row.graph.status == "implementing" {
         if let Err(e) = advance(&mut ctx, state == "running").await {
             eprintln!(
@@ -1918,7 +2335,11 @@ pub async fn progress(
     })
 }
 
-fn spawn_generation(graph:String){tokio::spawn(async move{let _=run_queued(&graph).await;});}
+fn spawn_generation(graph: String) {
+    tokio::spawn(async move {
+        let _ = run_queued(&graph).await;
+    });
+}
 
 /// Close migrated writers and protected authority before exposing new execution.
 /// The queue is deleted only after every external step acknowledges retirement.
@@ -1928,7 +2349,11 @@ pub(super) async fn retire_project_runs(org: &str, project: &str) -> Result<(), 
     tx.commit().await.map_err(db_error)
 }
 
-pub(super) async fn retire_project_runs_locked(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, org: &str, project: &str) -> Result<(), ServerFnError> {
+pub(super) async fn retire_project_runs_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    org: &str,
+    project: &str,
+) -> Result<(), ServerFnError> {
     let rows = sqlx::query("select r.graph_id::text as graph,r.lode_session_id,r.lun_session_ids from project_note_retirements r join graphs g on g.id=r.graph_id join projects p on p.id=g.project_id where p.id=$1::uuid and p.org_id=$2::uuid for update of r")
         .bind(project).bind(org).fetch_all(&mut **tx).await.map_err(db_error)?;
     for row in rows {
@@ -1941,29 +2366,64 @@ pub(super) async fn retire_project_runs_locked(tx: &mut sqlx::Transaction<'_, sq
             lun::end_checked(&runtime).await.map_err(bad_gateway)?;
         }
         sqlx::query("delete from project_note_retirements where graph_id=$1::uuid")
-            .bind(row.get::<String, _>("graph")).execute(&mut **tx).await.map_err(db_error)?;
+            .bind(row.get::<String, _>("graph"))
+            .execute(&mut **tx)
+            .await
+            .map_err(db_error)?;
     }
     Ok(())
 }
 
 pub(super) async fn tick_retirements() {
-    let Ok(pool) = pool() else { return; };
+    let Ok(pool) = pool() else {
+        return;
+    };
     let Ok(rows) = sqlx::query("select distinct p.id::text as project,p.org_id::text as org from project_note_retirements r join graphs g on g.id=r.graph_id join projects p on p.id=g.project_id limit 8").fetch_all(pool).await else { return; };
     for row in rows {
-        if let Err(e) = retire_project_runs(&row.get::<String, _>("org"), &row.get::<String, _>("project")).await {
+        if let Err(e) = retire_project_runs(
+            &row.get::<String, _>("org"),
+            &row.get::<String, _>("project"),
+        )
+        .await
+        {
             eprintln!("scheduler: retiring pre-merge authority: {}", err_text(&e));
         }
     }
 }
 
-pub async fn answer_question(org:&Org,user:&User,project:&str,id:&str,answer:&str)->Result<Graph,ServerFnError>{
-    let ctx=member_ctx(org,user,project,"").await?;
-    let writer=ctx.row.lode_session_id.as_deref().ok_or_else(||conflict("the writer session was removed; regenerate this project"))?;
-    let status=match lode::status(writer).await.map_err(bad_gateway)?{lode::Reply::Ok(v)=>v,lode::Reply::Gone=>return Err(conflict("the writer restarted; regenerate this project"))};
-    if status.pointer("/execution/execution/binding/user_id").and_then(Value::as_str)!=Some(user.id.as_str()){return Err(forbidden("only the user who started this bounded run can answer; start a new run as yourself"));}
-    if answer.is_empty()||answer.len()>4096{return Err(bad_request("answer must contain 1–4096 UTF-8 bytes"));}
-    refresh_warrants_checked(&ctx,writer).await?;
-    lode::answer(writer,id,answer).await.map_err(bad_gateway)?;
+pub async fn answer_question(
+    org: &Org,
+    user: &User,
+    project: &str,
+    id: &str,
+    answer: &str,
+) -> Result<Graph, ServerFnError> {
+    let ctx = member_ctx(org, user, project, "").await?;
+    let writer = ctx
+        .row
+        .lode_session_id
+        .as_deref()
+        .ok_or_else(|| conflict("the writer session was removed; regenerate this project"))?;
+    let status = match lode::status(writer).await.map_err(bad_gateway)? {
+        lode::Reply::Ok(v) => v,
+        lode::Reply::Gone => return Err(conflict("the writer restarted; regenerate this project")),
+    };
+    if status
+        .pointer("/execution/execution/binding/user_id")
+        .and_then(Value::as_str)
+        != Some(user.id.as_str())
+    {
+        return Err(forbidden(
+            "only the user who started this bounded run can answer; start a new run as yourself",
+        ));
+    }
+    if answer.is_empty() || answer.len() > 4096 {
+        return Err(bad_request("answer must contain 1–4096 UTF-8 bytes"));
+    }
+    refresh_warrants_checked(&ctx, writer).await?;
+    lode::answer(writer, id, answer)
+        .await
+        .map_err(bad_gateway)?;
     Ok(ctx.row.graph)
 }
 
@@ -1971,7 +2431,11 @@ pub async fn answer_question(org:&Org,user:&User,project:&str,id:&str,answer:&st
 /// longer (§5), and lode keeps them in memory only.
 async fn refresh_warrants(ctx: &Ctx, lode_session: &str) {
     if let Err(e) = refresh_warrants_checked(ctx, lode_session).await {
-        eprintln!("could not refresh lode's warrants for {}: {}", ctx.row.graph.id, err_text(&e));
+        eprintln!(
+            "could not refresh lode's warrants for {}: {}",
+            ctx.row.graph.id,
+            err_text(&e)
+        );
     }
 }
 
@@ -1982,17 +2446,36 @@ async fn refresh_warrants_checked(ctx: &Ctx, lode_session: &str) -> Result<(), S
     let tools = super::db::org_settings(&ctx.org).await?.effect_policy.tools;
     let status = match lode::status(lode_session).await.map_err(bad_gateway)? {
         lode::Reply::Ok(status) => status,
-        lode::Reply::Gone => return Err(conflict("the writer session was removed; regenerate this project")),
+        lode::Reply::Gone => {
+            return Err(conflict(
+                "the writer session was removed; regenerate this project",
+            ))
+        }
     };
     let tools = lode::narrowing_tools(&status, &tools).map_err(bad_gateway)?;
     let cells = cells_of(&ctx.row.graph.id).await?;
     let execution = writer_execution(ctx, &cells).await.map_err(bad_gateway)?;
-    let binding = super::connector::bind_writer(&ctx.org, &ctx.row.graph.id, lode_session, &credentials, &tools).await?;
-    let tools: Vec<_> = tools.into_iter().filter(|tool| binding.policy.tools.contains(tool)).collect();
+    let binding = super::connector::bind_writer(
+        &ctx.org,
+        &ctx.row.graph.id,
+        lode_session,
+        &credentials,
+        &tools,
+    )
+    .await?;
+    let tools: Vec<_> = tools
+        .into_iter()
+        .filter(|tool| binding.policy.tools.contains(tool))
+        .collect();
     let execution = lode::bind_execution(&execution, &binding).map_err(bad_gateway)?;
-    match lode::refresh(lode_session, credentials, &tools, &execution).await.map_err(bad_gateway)? {
+    match lode::refresh(lode_session, credentials, &tools, &execution)
+        .await
+        .map_err(bad_gateway)?
+    {
         lode::Reply::Ok(()) => Ok(()),
-        lode::Reply::Gone => Err(conflict("the writer session was removed; regenerate this project")),
+        lode::Reply::Gone => Err(conflict(
+            "the writer session was removed; regenerate this project",
+        )),
     }
 }
 
@@ -2048,12 +2531,29 @@ pub async fn tick_implementing() {
 /// One step of the implementing state: wait for lode, then submit the
 /// published commit to lun, then adopt the ready build.
 async fn advance(ctx: &mut Ctx, lode_running: bool) -> Result<(), ServerFnError> {
-    let mut guard=pool()?.begin().await.map_err(db_error)?;
-    let locked=sqlx::query("select pg_try_advisory_xact_lock(hashtextextended($1,3)) as locked").bind(&ctx.row.graph.id).fetch_one(&mut *guard).await.map_err(db_error)?.get::<bool,_>("locked");
-    if !locked{return Ok(());}
+    let mut guard = pool()?.begin().await.map_err(db_error)?;
+    let locked = sqlx::query("select pg_try_advisory_xact_lock(hashtextextended($1,3)) as locked")
+        .bind(&ctx.row.graph.id)
+        .fetch_one(&mut *guard)
+        .await
+        .map_err(db_error)?
+        .get::<bool, _>("locked");
+    if !locked {
+        return Ok(());
+    }
     reload(ctx).await?;
-    if ctx.row.graph.status!="implementing"{return Ok(());}
-    if sqlx::query("select 1 from graph_generation_requests where graph_id=$1::uuid").bind(&ctx.row.graph.id).fetch_optional(pool()?).await.map_err(db_error)?.is_some(){return Ok(());}
+    if ctx.row.graph.status != "implementing" {
+        return Ok(());
+    }
+    if sqlx::query("select 1 from graph_generation_requests where graph_id=$1::uuid")
+        .bind(&ctx.row.graph.id)
+        .fetch_optional(pool()?)
+        .await
+        .map_err(db_error)?
+        .is_some()
+    {
+        return Ok(());
+    }
     if lode_running {
         return Ok(());
     }
@@ -2068,9 +2568,14 @@ async fn advance(ctx: &mut Ctx, lode_running: bool) -> Result<(), ServerFnError>
     if status.as_ref().is_some_and(lode::running) {
         return Ok(());
     }
-    if let Some(status)=&status {
-        if status.get("checkout").and_then(Value::as_str)==Some("failed") {
-            return Err(bad_gateway(status.get("error").and_then(Value::as_str).unwrap_or("Repository preparation failed. Retry generation.")));
+    if let Some(status) = &status {
+        if status.get("checkout").and_then(Value::as_str) == Some("failed") {
+            return Err(bad_gateway(
+                status
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Repository preparation failed. Retry generation."),
+            ));
         }
     }
     let head = match status.as_ref().and_then(lode::head) {
@@ -2186,9 +2691,7 @@ pub async fn rebuild(
     }
     let mut ctx = member_ctx(org, user, project_slug, graph_slug).await?;
     if ctx.row.graph.status == "implementing" {
-        return Err(conflict(
-            "the project's code is being written; wait for it",
-        ));
+        return Err(conflict("the project's code is being written; wait for it"));
     }
     let head = branch_head(&ctx).await?;
     sqlx::query(
@@ -2215,15 +2718,49 @@ pub async fn rebuild(
 
 /// Single trusted definition used for both writer trials and final adoption.
 /// Generated signatures do not become user pins; only configuration does.
-fn build_contracts(cells:&[Cell])->Value{
-    let outputs:Map<String,Value>=cells.iter().filter(|c|c.cell_type.has_function())
-        .filter_map(|c|c.config.output_type.as_ref().map(|t|(c.name.clone(),json!(t)))).collect();
-    let inputs:Map<String,Value>=cells.iter().filter(|c|c.cell_type.has_input())
-        .filter_map(|c|c.config.output_type.as_ref().map(|t|(c.config.input.clone().unwrap_or_else(||c.name.clone()),json!(t)))).collect();
-    let dependencies:Map<String,Value>=cells.iter().filter(|c|c.cell_type.in_graph()).filter_map(|c|c.config.dependencies.as_ref().map(|deps|{
-        let args=deps.iter().map(|name|cells.iter().find(|p|p.name==*name).filter(|p|p.cell_type.has_input()).and_then(|p|p.config.input.clone()).unwrap_or_else(||name.clone())).collect::<Vec<_>>();
-        (c.name.clone(),json!(args))
-    })).collect();
+fn build_contracts(cells: &[Cell]) -> Value {
+    let outputs: Map<String, Value> = cells
+        .iter()
+        .filter(|c| c.cell_type.has_function())
+        .filter_map(|c| {
+            c.config
+                .output_type
+                .as_ref()
+                .map(|t| (c.name.clone(), json!(t)))
+        })
+        .collect();
+    let inputs: Map<String, Value> = cells
+        .iter()
+        .filter(|c| c.cell_type.has_input())
+        .filter_map(|c| {
+            c.config.output_type.as_ref().map(|t| {
+                (
+                    c.config.input.clone().unwrap_or_else(|| c.name.clone()),
+                    json!(t),
+                )
+            })
+        })
+        .collect();
+    let dependencies: Map<String, Value> = cells
+        .iter()
+        .filter(|c| c.cell_type.in_graph())
+        .filter_map(|c| {
+            c.config.dependencies.as_ref().map(|deps| {
+                let args = deps
+                    .iter()
+                    .map(|name| {
+                        cells
+                            .iter()
+                            .find(|p| p.name == *name)
+                            .filter(|p| p.cell_type.has_input())
+                            .and_then(|p| p.config.input.clone())
+                            .unwrap_or_else(|| name.clone())
+                    })
+                    .collect::<Vec<_>>();
+                (c.name.clone(), json!(args))
+            })
+        })
+        .collect();
     json!({"outputs":outputs,"inputs":inputs,"dependencies":dependencies,"graph":GRAPH_NAME})
 }
 
@@ -2234,13 +2771,21 @@ async fn branch_head(ctx: &Ctx) -> Result<String, ServerFnError> {
         .default_branch
         .clone()
         .unwrap_or_else(|| "main".to_string());
-    let pointer = if connection.provider == Provider::Gitlab { "/commit/id" } else { "/commit/sha" };
+    let pointer = if connection.provider == Provider::Gitlab {
+        "/commit/id"
+    } else {
+        "/commit/sha"
+    };
     let body = connections::call_ok(
         &ctx.org,
         &ctx.user,
         &connection,
         &owner,
-        ProviderCall::new("repositories.read", repo.full_name.split('/').map(str::to_string).collect(), json!({"view": "branch", "ref": branch})),
+        ProviderCall::new(
+            "repositories.read",
+            repo.full_name.split('/').map(str::to_string).collect(),
+            json!({"view": "branch", "ref": branch}),
+        ),
     )
     .await?;
     let json: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
@@ -2255,7 +2800,12 @@ async fn branch_head(ctx: &Ctx) -> Result<String, ServerFnError> {
 async fn read_repo_file(ctx: &Ctx, path: &str, commit: &str) -> Result<Vec<u8>, ServerFnError> {
     let (connection, owner, repo) = repo_connection(ctx).await?;
     let file = format!("{}/{path}", project_path(&ctx.row.graph.slug));
-    let resource = repo.full_name.split('/').chain(file.split('/')).map(str::to_string).collect();
+    let resource = repo
+        .full_name
+        .split('/')
+        .chain(file.split('/'))
+        .map(str::to_string)
+        .collect();
     let body = connections::call_ok(
         &ctx.org,
         &ctx.user,
@@ -2278,13 +2828,22 @@ async fn read_repo_file(ctx: &Ctx, path: &str, commit: &str) -> Result<Vec<u8>, 
 /// content. No download_url is ever followed with or without credentials.
 fn decode_repository_file(body: &[u8]) -> Result<Vec<u8>, ServerFnError> {
     use base64::Engine;
-    let value: Value = serde_json::from_slice(body).map_err(|_| bad_gateway("unreadable native repository file"))?;
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|_| bad_gateway("unreadable native repository file"))?;
     if value.get("encoding").and_then(Value::as_str) != Some("base64") {
         return Err(bad_gateway("native repository file is not base64 encoded"));
     }
-    let content = value.get("content").and_then(Value::as_str).ok_or_else(|| bad_gateway("native repository file has no content"))?;
-    let content: String = content.chars().filter(|ch| *ch != '\n' && *ch != '\r').collect();
-    base64::engine::general_purpose::STANDARD.decode(content).map_err(|_| bad_gateway("invalid base64 repository file"))
+    let content = value
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad_gateway("native repository file has no content"))?;
+    let content: String = content
+        .chars()
+        .filter(|ch| *ch != '\n' && *ch != '\r')
+        .collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(content)
+        .map_err(|_| bad_gateway("invalid base64 repository file"))
 }
 
 /// The notebook's `lun.json` at `commit`.
@@ -2340,26 +2899,59 @@ pub async fn cell_code(
 async fn build_request(ctx: &Ctx, commit: &str) -> Result<(Value, LunJson), ServerFnError> {
     let lun_json = read_lun_json(ctx, commit).await?;
     let (connection, owner, repo) = repo_connection(ctx).await?;
-    let read = super::connector::mint(&ctx.org, &ctx.user, &connection, &owner, "repositories.read",
-        &super::connector::scoped(&connection, "repositories.read", repo.full_name.split('/').map(str::to_string).collect(), true), 0).await?.grant;
-    let cells: Vec<Cell> = cells_of(&ctx.row.graph.id).await?.into_iter().map(|row| row.cell).collect();
-    let contracts=build_contracts(&cells);
+    let read = super::connector::mint(
+        &ctx.org,
+        &ctx.user,
+        &connection,
+        &owner,
+        "repositories.read",
+        &super::connector::scoped(
+            &connection,
+            "repositories.read",
+            repo.full_name.split('/').map(str::to_string).collect(),
+            true,
+        ),
+        0,
+    )
+    .await?
+    .grant;
+    let cells: Vec<Cell> = cells_of(&ctx.row.graph.id)
+        .await?
+        .into_iter()
+        .map(|row| row.cell)
+        .collect();
+    let contracts = build_contracts(&cells);
     for function in &lun_json.functions {
-        if function.producer && cells.iter().any(|cell| cell.name == function.name && matches!(cell.cell_type,CellType::Scheduled | CellType::Watch)) {
+        if function.producer
+            && cells.iter().any(|cell| {
+                cell.name == function.name
+                    && matches!(cell.cell_type, CellType::Scheduled | CellType::Watch)
+            })
+        {
             return Err(bad_request("Scheduled/watch source notes use ordinary fetch functions. Put graph-internal waits and yields in a calculation note declared producer:true."));
         }
     }
-    let mut functions = serde_json::to_value(&lun_json.functions).map_err(|_| bad_request("invalid function declarations"))?;
+    let mut functions = serde_json::to_value(&lun_json.functions)
+        .map_err(|_| bad_request("invalid function declarations"))?;
     if let Some(functions) = functions.as_array_mut() {
         for function in functions {
-            if let Some(cell) = cells.iter().find(|cell| function.get("name").and_then(Value::as_str) == Some(&cell.name)) {
-                if let Some(ty) = contracts["outputs"].get(&cell.name) { function["outputType"] = ty.clone(); }
+            if let Some(cell) = cells
+                .iter()
+                .find(|cell| function.get("name").and_then(Value::as_str) == Some(&cell.name))
+            {
+                if let Some(ty) = contracts["outputs"].get(&cell.name) {
+                    function["outputType"] = ty.clone();
+                }
             }
         }
     }
-    let mut graphs = serde_json::to_value(&lun_json.graphs).map_err(|_| bad_request("invalid graph declarations"))?;
+    let mut graphs = serde_json::to_value(&lun_json.graphs)
+        .map_err(|_| bad_request("invalid graph declarations"))?;
     if let Some(graphs) = graphs.as_array_mut() {
-        for graph in graphs.iter_mut().filter(|g| g.get("name").and_then(Value::as_str) == Some(GRAPH_NAME)) {
+        for graph in graphs
+            .iter_mut()
+            .filter(|g| g.get("name").and_then(Value::as_str) == Some(GRAPH_NAME))
+        {
             graph["dependencies"] = contracts["dependencies"].clone();
             graph["inputTypes"] = contracts["inputs"].clone();
         }
@@ -2477,13 +3069,44 @@ async fn storage_warrants(ctx: &Ctx, cells: &[CellRow]) -> Result<Vec<Value>, St
             Provider::Dropbox => "files.create",
             _ => return Err("this storage sink has no native contents-upload adapter".into()),
         };
-        let path = c.cell.config.path.as_deref().ok_or("storage sink has no path")?;
-        let mut requested = super::connector::scoped(&connection, operation, path.trim_start_matches('/').split('/').map(str::to_string).collect(), false);
-        if let Some(permissions) = c.cell.config.connectors.iter().find(|grant| grant.connection == connection.id).and_then(|grant| grant.permissions.as_ref()) {
+        let path = c
+            .cell
+            .config
+            .path
+            .as_deref()
+            .ok_or("storage sink has no path")?;
+        let mut requested = super::connector::scoped(
+            &connection,
+            operation,
+            path.trim_start_matches('/')
+                .split('/')
+                .map(str::to_string)
+                .collect(),
+            false,
+        );
+        if let Some(permissions) = c
+            .cell
+            .config
+            .connectors
+            .iter()
+            .find(|grant| grant.connection == connection.id)
+            .and_then(|grant| grant.permissions.as_ref())
+        {
             requested = requested.intersect(permissions);
         }
-        let grant = super::connector::mint_for_cell(&ctx.org, &ctx.user, &connection, &owner, operation, &requested, cost, Some(&c.cell.id)).await
-            .map_err(|e| err_text(&e))?.grant;
+        let grant = super::connector::mint_for_cell(
+            &ctx.org,
+            &ctx.user,
+            &connection,
+            &owner,
+            operation,
+            &requested,
+            cost,
+            Some(&c.cell.id),
+        )
+        .await
+        .map_err(|e| err_text(&e))?
+        .grant;
         out.push(json!({
             "cell": c.cell.name,
             "provider": connection.provider.id(),
@@ -2499,47 +3122,114 @@ async fn storage_warrants(ctx: &Ctx, cells: &[CellRow]) -> Result<Vec<Value>, St
 /// This metadata is assembled from authenticated rows, never from `lun.json`.
 async fn connector_grants(ctx: &Ctx, cells: &[CellRow]) -> Result<Value, String> {
     let text = |e: ServerFnError| err_text(&e);
-    let policy = super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy;
+    let policy = super::db::org_settings(&ctx.org)
+        .await
+        .map_err(text)?
+        .effect_policy;
     let mut functions = Map::new();
     for cell in cells.iter().filter(|row| row.cell.cell_type.has_function()) {
         let mut grants = Vec::new();
         let mut selected_connections = cell.cell.config.connectors.clone();
         if cell.cell.cell_type == CellType::StorageSink {
             if let Some(id) = &cell.cell.config.connection_id {
-                if !selected_connections.iter().any(|grant| grant.connection == *id) {
-                    selected_connections.push(crate::CellConnector { connection: id.clone(), permissions: None });
+                if !selected_connections
+                    .iter()
+                    .any(|grant| grant.connection == *id)
+                {
+                    selected_connections.push(crate::CellConnector {
+                        connection: id.clone(),
+                        permissions: None,
+                    });
                 }
             }
         }
         for selected in &selected_connections {
-            if crate::LocalService::from_selection(&selected.connection).is_some() { continue; }
-            let (connection, owner) = connections::get(&ctx.org, &ctx.user, &selected.connection).await.map_err(text)?;
+            if crate::LocalService::from_selection(&selected.connection).is_some() {
+                continue;
+            }
+            let (connection, owner) = connections::get(&ctx.org, &ctx.user, &selected.connection)
+                .await
+                .map_err(text)?;
             let object_store = matches!(connection.provider, Provider::S3 | Provider::Azure)
                 && policy.effects.iter().any(|effect| effect == "ObjectStore");
-            if (!object_store && !policy.effects.iter().any(|effect| effect == "Connector")) || !policy.allows_provider(connection.provider) {
-                return Err(format!("organization permission denied: {}", connection.provider.name()));
+            if (!object_store && !policy.effects.iter().any(|effect| effect == "Connector"))
+                || !policy.allows_provider(connection.provider)
+            {
+                return Err(format!(
+                    "organization permission denied: {}",
+                    connection.provider.name()
+                ));
             }
-            let mut parent = connection.permissions.clone().unwrap_or_else(|| crate::ConnectorPermissions::preset(connection.provider, crate::PermissionPreset::ReadOnly));
-            let mut organization = policy.connector_ceilings.get(connection.provider.id()).cloned().unwrap_or_else(|| parent.clone());
-            let mut requested = selected.permissions.clone().unwrap_or_else(|| parent.clone());
-            if cell.cell.cell_type == CellType::StorageSink && cell.cell.config.connection_id.as_ref() == Some(&selected.connection) {
+            let mut parent = connection.permissions.clone().unwrap_or_else(|| {
+                crate::ConnectorPermissions::preset(
+                    connection.provider,
+                    crate::PermissionPreset::ReadOnly,
+                )
+            });
+            let mut organization = policy
+                .connector_ceilings
+                .get(connection.provider.id())
+                .cloned()
+                .unwrap_or_else(|| parent.clone());
+            let mut requested = selected
+                .permissions
+                .clone()
+                .unwrap_or_else(|| parent.clone());
+            if cell.cell.cell_type == CellType::StorageSink
+                && cell.cell.config.connection_id.as_ref() == Some(&selected.connection)
+            {
                 let operation = match connection.provider {
                     Provider::S3 | Provider::Azure => "objects.write",
                     Provider::Dropbox => "files.create",
-                    _ => return Err("this storage sink has no native contents-upload adapter".into()),
+                    _ => {
+                        return Err("this storage sink has no native contents-upload adapter".into())
+                    }
                 };
-                let path = cell.cell.config.path.as_deref().ok_or("storage sink has no path")?;
-                requested = requested.intersect(&super::connector::scoped(&connection, operation,
-                    path.trim_start_matches('/').split('/').map(str::to_string).collect(), false));
+                let path = cell
+                    .cell
+                    .config
+                    .path
+                    .as_deref()
+                    .ok_or("storage sink has no path")?;
+                requested = requested.intersect(&super::connector::scoped(
+                    &connection,
+                    operation,
+                    path.trim_start_matches('/')
+                        .split('/')
+                        .map(str::to_string)
+                        .collect(),
+                    false,
+                ));
             }
             requested.validate(connection.provider)?;
             parent.narrow(&requested)?;
             let mut effective = requested.intersect(&organization);
-            let operations: std::collections::BTreeSet<_> = effective.scopes.iter().map(|scope| scope.operation.clone()).collect();
+            let operations: std::collections::BTreeSet<_> = effective
+                .scopes
+                .iter()
+                .map(|scope| scope.operation.clone())
+                .collect();
             let mut warrants = Vec::new();
             for operation in operations {
-                let cost = if operation == "inference.generate" || operation == "classification.evaluate" { config::model_call_cost() } else { 0 };
-                let minted = super::connector::mint_for_cell(&ctx.org, &ctx.user, &connection, &owner, &operation, &effective, cost, Some(&cell.cell.id)).await.map_err(text)?;
+                let cost = if operation == "inference.generate"
+                    || operation == "classification.evaluate"
+                {
+                    config::model_call_cost()
+                } else {
+                    0
+                };
+                let minted = super::connector::mint_for_cell(
+                    &ctx.org,
+                    &ctx.user,
+                    &connection,
+                    &owner,
+                    &operation,
+                    &effective,
+                    cost,
+                    Some(&cell.cell.id),
+                )
+                .await
+                .map_err(text)?;
                 parent = parent.intersect(&minted.connection);
                 organization = organization.intersect(&minted.organization);
                 effective = effective.intersect(&minted.cell);
@@ -2557,20 +3247,60 @@ async fn connector_grants(ctx: &Ctx, cells: &[CellRow]) -> Result<Value, String>
             }));
         }
         for service in [crate::LocalService::Postgres, crate::LocalService::Vault] {
-            let explicit = cell.cell.config.connectors.iter().any(|grant| grant.connection == service.selection());
-            let secrets: Vec<String> = cells.iter().filter(|row| row.cell.cell_type == CellType::Secret && row.cell.secret_set)
-                .filter_map(|row| row.cell.config.name.clone()).collect();
-            let needed = explicit || (service == crate::LocalService::Postgres && cell.cell.cell_type == CellType::DbSink)
+            let explicit = cell
+                .cell
+                .config
+                .connectors
+                .iter()
+                .any(|grant| grant.connection == service.selection());
+            let secrets: Vec<String> = cells
+                .iter()
+                .filter(|row| row.cell.cell_type == CellType::Secret && row.cell.secret_set)
+                .filter_map(|row| row.cell.config.name.clone())
+                .collect();
+            let needed = explicit
+                || (service == crate::LocalService::Postgres
+                    && cell.cell.cell_type == CellType::DbSink)
                 || (service == crate::LocalService::Vault && !secrets.is_empty());
-            if !needed || !policy.effects.iter().any(|effect| effect == service.effect()) { continue; }
+            if !needed
+                || !policy
+                    .effects
+                    .iter()
+                    .any(|effect| effect == service.effect())
+            {
+                continue;
+            }
             let schema = if service == crate::LocalService::Postgres {
                 if cell.cell.cell_type == CellType::DbSink {
-                    compute::ensure_sink_table(&ctx.org.id, &ctx.org.slug, &ctx.user.id,
-                        cell.cell.config.table.as_deref().ok_or("database sink has no table")?).await?
-                } else { compute::ensure(&ctx.org.id, &ctx.org.slug, &ctx.user.id).await? }
-            } else { String::new() };
-            let requested = super::local::declared(service, &cell.cell.config, cell.cell.cell_type, &schema, &secrets)?;
-            grants.push(super::local::mint(&ctx.org, &ctx.user, &cell.cell, service, &requested).await.map_err(text)?);
+                    compute::ensure_sink_table(
+                        &ctx.org.id,
+                        &ctx.org.slug,
+                        &ctx.user.id,
+                        cell.cell
+                            .config
+                            .table
+                            .as_deref()
+                            .ok_or("database sink has no table")?,
+                    )
+                    .await?
+                } else {
+                    compute::ensure(&ctx.org.id, &ctx.org.slug, &ctx.user.id).await?
+                }
+            } else {
+                String::new()
+            };
+            let requested = super::local::declared(
+                service,
+                &cell.cell.config,
+                cell.cell.cell_type,
+                &schema,
+                &secrets,
+            )?;
+            grants.push(
+                super::local::mint(&ctx.org, &ctx.user, &cell.cell, service, &requested)
+                    .await
+                    .map_err(text)?,
+            );
         }
         functions.insert(cell.cell.name.clone(), json!(grants));
     }
@@ -2581,8 +3311,12 @@ async fn connector_grants(ctx: &Ctx, cells: &[CellRow]) -> Result<Value, String>
 /// execution. Only the actor comes from Ctx; external accounts retain their real
 /// credential owners. Transport and private runtime configuration remain Lun's.
 async fn writer_execution(ctx: &Ctx, cells: &[CellRow]) -> Result<Value, String> {
-    let policy = super::db::org_settings(&ctx.org).await.map_err(|e| err_text(&e))?
-        .effect_policy.validate()?.for_cells(&cells.iter().map(|row| row.cell.clone()).collect::<Vec<_>>());
+    let policy = super::db::org_settings(&ctx.org)
+        .await
+        .map_err(|e| err_text(&e))?
+        .effect_policy
+        .validate()?
+        .for_cells(&cells.iter().map(|row| row.cell.clone()).collect::<Vec<_>>());
     Ok(json!({
         "binding": {"org_id": ctx.org.id, "user_id": ctx.user.id, "graph_id": ctx.row.graph.id},
         "policy": {"effects": policy.effects, "domains": policy.domains},
@@ -2597,9 +3331,19 @@ async fn writer_execution(ctx: &Ctx, cells: &[CellRow]) -> Result<Value, String>
 pub async fn source_execution(ctx: &Ctx, function: &str) -> Result<Value, String> {
     let text = |e: ServerFnError| err_text(&e);
     let cells = cells_of(&ctx.row.graph.id).await.map_err(text)?;
-    let cell = cells.iter().find(|row| row.cell.implementation.as_ref().and_then(|i| i.function.as_deref()) == Some(function))
+    let cell = cells
+        .iter()
+        .find(|row| {
+            row.cell
+                .implementation
+                .as_ref()
+                .and_then(|i| i.function.as_deref())
+                == Some(function)
+        })
         .ok_or("source function is not declared in this project")?;
-    check_cell_refs(ctx, cell.cell.cell_type, &cell.cell.config).await.map_err(text)?;
+    check_cell_refs(ctx, cell.cell.cell_type, &cell.cell.config)
+        .await
+        .map_err(text)?;
     Ok(json!({
         "binding": {"org_id": ctx.org.id, "user_id": ctx.user.id, "graph_id": ctx.row.graph.id},
         "policy": super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.for_cells(&cells.iter().map(|row| row.cell.clone()).collect::<Vec<_>>()),
@@ -2611,33 +3355,52 @@ pub async fn source_execution(ctx: &Ctx, function: &str) -> Result<Value, String
 /// Register the graph as a lun session, with the last value recorded for
 /// each of its inputs: first registration and re-registration alike.
 async fn register(ctx: &mut Ctx) -> Result<lun::GraphAnswer, String> {
-    retire_project_runs(&ctx.org.id, &ctx.project.id).await.map_err(|e| err_text(&e))?;
+    retire_project_runs(&ctx.org.id, &ctx.project.id)
+        .await
+        .map_err(|e| err_text(&e))?;
     let mut tx = runtime_lock(&ctx.row.graph.id).await?;
     reload(ctx).await.map_err(|e| err_text(&e))?;
-    scheduling_clear(&ctx.row.graph.id,None).await?;
+    scheduling_clear(&ctx.row.graph.id, None).await?;
     let answer = register_locked(ctx, &mut tx).await?;
-    tx.commit().await.map_err(|e| format!("database error: {e}"))?;
+    tx.commit()
+        .await
+        .map_err(|e| format!("database error: {e}"))?;
     drain_deliveries(&ctx.row.graph.id).await;
     Ok(answer)
 }
 
 /// Serialize app-owned state across feeds, registrations and producer wake-ups.
 /// Lun still validates the state against the exact compiled graph before effects.
-pub(super) async fn runtime_lock(graph: &str) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, String> {
-    let mut tx = pool().map_err(|e| err_text(&e))?.begin().await.map_err(|e| format!("database error: {e}"))?;
-    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1,4))").bind(graph)
-        .execute(&mut *tx).await.map_err(|e| format!("database error: {e}"))?;
+pub(super) async fn runtime_lock(
+    graph: &str,
+) -> Result<sqlx::Transaction<'static, sqlx::Postgres>, String> {
+    let mut tx = pool()
+        .map_err(|e| err_text(&e))?
+        .begin()
+        .await
+        .map_err(|e| format!("database error: {e}"))?;
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1,4))")
+        .bind(graph)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("database error: {e}"))?;
     Ok(tx)
 }
 
-async fn scheduling_clear(graph:&str,current:Option<&str>)->Result<(),String>{
+async fn scheduling_clear(graph: &str, current: Option<&str>) -> Result<(), String> {
     let busy=sqlx::query("select 1 from scheduled_runs where graph_id=$1::uuid and state in ('running','uncertain') and ($2::text is null or id::text<>$2) limit 1")
         .bind(graph).bind(current).fetch_optional(pool().map_err(|e|err_text(&e))?).await.map_err(|e|e.to_string())?.is_some();
-    if busy{return Err("A scheduled occurrence is still running or its outcome is uncertain. Inspect run history and reconcile effects before explicitly restarting the project.".into());}
+    if busy {
+        return Err("A scheduled occurrence is still running or its outcome is uncertain. Inspect run history and reconcile effects before explicitly restarting the project.".into());
+    }
     Ok(())
 }
 
-async fn store_runtime(ctx: &mut Ctx, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, answer: &lun::GraphAnswer) -> Result<(), String> {
+async fn store_runtime(
+    ctx: &mut Ctx,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    answer: &lun::GraphAnswer,
+) -> Result<(), String> {
     let saved=sqlx::query("update graphs set runtime_state=$2::jsonb,runtime_due_at=to_timestamp($3::double precision/1000),runtime_revision=runtime_revision+1,lun_session_id=null,session_user_id=$4::uuid,last_nodes=$5::jsonb,updated_at=now() where id=$1::uuid returning runtime_revision")
         .bind(&ctx.row.graph.id).bind(answer.state.to_string()).bind(answer.next_call_at.map(|n| n as f64)).bind(&ctx.user.id)
         .bind(serde_json::to_string(&answer.nodes).map_err(|e| e.to_string())?)
@@ -2667,7 +3430,14 @@ async fn initial_step(ctx: &Ctx) -> Result<lun::GraphAnswer, String> {
         .collect();
     let cells = cells_of(&ctx.row.graph.id).await.map_err(text)?;
     if cells.iter().any(|c| c.cell.cell_type == CellType::DbSink) {
-        if !super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.effects.iter().any(|effect| effect == "PostgreSQL") {
+        if !super::db::org_settings(&ctx.org)
+            .await
+            .map_err(text)?
+            .effect_policy
+            .effects
+            .iter()
+            .any(|effect| effect == "PostgreSQL")
+        {
             return Err("organization PostgreSQL effect denied".into());
         }
         compute::ensure(&ctx.org.id, &ctx.org.slug, &ctx.user.id).await?;
@@ -2700,9 +3470,14 @@ async fn initial_step(ctx: &Ctx) -> Result<lun::GraphAnswer, String> {
     lun::step(&build, GRAPH_NAME, &body).await
 }
 
-async fn register_locked(ctx: &mut Ctx, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<lun::GraphAnswer, String> {
-    let answer=initial_step(ctx).await?;
-    let cells=cells_of(&ctx.row.graph.id).await.map_err(|e|err_text(&e))?;
+async fn register_locked(
+    ctx: &mut Ctx,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<lun::GraphAnswer, String> {
+    let answer = initial_step(ctx).await?;
+    let cells = cells_of(&ctx.row.graph.id)
+        .await
+        .map_err(|e| err_text(&e))?;
     store_runtime(ctx, tx, &answer).await?;
     let update=sqlx::query(
         "insert into graph_updates (graph_id, fed_by, changed,runtime_revision) values ($1::uuid, 'register', $2::jsonb,$3) returning id::text as id",
@@ -2713,7 +3488,14 @@ async fn register_locked(ctx: &mut Ctx, tx: &mut sqlx::Transaction<'_, sqlx::Pos
     .fetch_one(&mut **tx)
     .await
     .map_err(|e| format!("database error: {e}"))?;
-    enqueue_deliveries(ctx,&cells,&answer.changed,&update.get::<String,_>("id"),tx).await?;
+    enqueue_deliveries(
+        ctx,
+        &cells,
+        &answer.changed,
+        &update.get::<String, _>("id"),
+        tx,
+    )
+    .await?;
     Ok(answer)
 }
 
@@ -2727,22 +3509,43 @@ pub async fn feed(
     fed_by: &str,
     cell_id: Option<&str>,
 ) -> Result<FeedResult, String> {
-    feed_impl(ctx,input,value,fed_by,cell_id,None).await
+    feed_impl(ctx, input, value, fed_by, cell_id, None).await
 }
 
-pub(super) async fn feed_scheduled(ctx:Ctx,input:&str,value:Value,cell:&str,run:&str,build:&str)->Result<FeedResult,String>{
-    feed_impl(ctx,input,value,"check",Some(cell),Some((run,build))).await
+pub(super) async fn feed_scheduled(
+    ctx: Ctx,
+    input: &str,
+    value: Value,
+    cell: &str,
+    run: &str,
+    build: &str,
+) -> Result<FeedResult, String> {
+    feed_impl(ctx, input, value, "check", Some(cell), Some((run, build))).await
 }
 
-async fn feed_impl(mut ctx:Ctx,input:&str,value:Value,fed_by:&str,cell_id:Option<&str>,scheduled:Option<(&str,&str)>)->Result<FeedResult,String>{
+async fn feed_impl(
+    mut ctx: Ctx,
+    input: &str,
+    value: Value,
+    fed_by: &str,
+    cell_id: Option<&str>,
+    scheduled: Option<(&str, &str)>,
+) -> Result<FeedResult, String> {
     let text = |e: ServerFnError| err_text(&e);
-    retire_project_runs(&ctx.org.id, &ctx.project.id).await.map_err(text)?;
+    retire_project_runs(&ctx.org.id, &ctx.project.id)
+        .await
+        .map_err(text)?;
     let mut tx = runtime_lock(&ctx.row.graph.id).await?;
     reload(&mut ctx).await.map_err(text)?;
-    scheduling_clear(&ctx.row.graph.id,scheduled.map(|s|s.0)).await?;
-    if let Some((run,build))=scheduled {
-        if ctx.row.session_build_id.as_deref()!=Some(build){
-            super::scheduler::finish_run(run,super::scheduler::RunResult::Cancelled,"build changed before scheduled input dispatch").await;
+    scheduling_clear(&ctx.row.graph.id, scheduled.map(|s| s.0)).await?;
+    if let Some((run, build)) = scheduled {
+        if ctx.row.session_build_id.as_deref() != Some(build) {
+            super::scheduler::finish_run(
+                run,
+                super::scheduler::RunResult::Cancelled,
+                "build changed before scheduled input dispatch",
+            )
+            .await;
             return Err("scheduled input cancelled because its build changed".into());
         }
     }
@@ -2775,16 +3578,30 @@ async fn feed_impl(mut ctx:Ctx,input:&str,value:Value,fed_by:&str,cell_id:Option
     .map_err(|e| format!("database error: {e}"))?;
 
     let cells = cells_of(&ctx.row.graph.id).await.map_err(text)?;
-    let updated = match ctx.row.runtime_state.clone().filter(|_| ctx.row.session_user_id.as_deref() == Some(ctx.user.id.as_str())) {
+    let updated = match ctx
+        .row
+        .runtime_state
+        .clone()
+        .filter(|_| ctx.row.session_user_id.as_deref() == Some(ctx.user.id.as_str()))
+    {
         Some(state) => {
             let mut inputs = Map::new();
             inputs.insert(input.to_string(), value);
-            let body =
-                json!({ "inputs": inputs, "state": state, "warrants": storage_warrants(&ctx, &cells).await?,
+            let body = json!({ "inputs": inputs, "state": state, "warrants": storage_warrants(&ctx, &cells).await?,
                     "binding": { "org_id": ctx.org.id, "user_id": ctx.user.id, "graph_id": ctx.row.graph.id },
                     "policy": super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.for_cells(&cells.iter().map(|c| c.cell.clone()).collect::<Vec<_>>()),
                     "connectors": connector_grants(&ctx, &cells).await?, "liaisonUrl": config::runtime_liaison_url() });
-            Some(lun::step(ctx.row.session_build_id.as_deref().ok_or("project notes are not built")?, GRAPH_NAME, &body).await?)
+            Some(
+                lun::step(
+                    ctx.row
+                        .session_build_id
+                        .as_deref()
+                        .ok_or("project notes are not built")?,
+                    GRAPH_NAME,
+                    &body,
+                )
+                .await?,
+            )
         }
         None => None,
     };
@@ -2807,12 +3624,21 @@ async fn feed_impl(mut ctx:Ctx,input:&str,value:Value,fed_by:&str,cell_id:Option
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| format!("database error: {e}"))?;
-    enqueue_deliveries(&ctx,&cells,&answer.changed,&update.get::<String,_>("id"),&mut tx).await?;
-    if let Some((run,_))=scheduled {
+    enqueue_deliveries(
+        &ctx,
+        &cells,
+        &answer.changed,
+        &update.get::<String, _>("id"),
+        &mut tx,
+    )
+    .await?;
+    if let Some((run, _)) = scheduled {
         sqlx::query("update scheduled_runs set state='completed',finished_at=now(),detail='source result fed; graph state persisted' where id=$1::uuid and state='running' and phase='graph'")
             .bind(run).execute(&mut *tx).await.map_err(|e|e.to_string())?;
     }
-    tx.commit().await.map_err(|e| format!("database error: {e}"))?;
+    tx.commit()
+        .await
+        .map_err(|e| format!("database error: {e}"))?;
     drain_deliveries(&ctx.row.graph.id).await;
     let repair = auto_repair_errors(&ctx, &cells, &answer.changed, &answer.nodes).await;
     Ok(FeedResult {
@@ -2826,7 +3652,9 @@ async fn feed_impl(mut ctx:Ctx,input:&str,value:Value,fed_by:&str,cell_id:Option
 /// Consume the due marker before effects so an ambiguous failure is not replayed
 /// automatically. A later explicit input or regeneration can resume the project.
 pub(super) async fn tick_runtime() {
-    let Ok(pool) = pool() else { return; };
+    let Ok(pool) = pool() else {
+        return;
+    };
     // Moving a deadline and creating its stable occurrence are one transaction.
     // A crash leaves a queued record; it does not lose or implicitly replay work.
     let _ = sqlx::query("with due as (select g.id,g.runtime_due_at,g.runtime_revision,g.session_build_id,g.session_user_id from graphs g where g.archived_at is null and g.runtime_state is not null and g.runtime_due_at<=now() and g.session_build_id is not null and not exists(select 1 from scheduled_runs r where r.graph_id=g.id and r.kind='producer' and r.state in ('queued','running','uncertain')) order by g.runtime_due_at limit 8 for update skip locked), queued as (insert into scheduled_runs(occurrence_key,graph_id,actor_id,kind,due_at,build_id,runtime_revision,phase) select 'producer:'||id::text||':'||runtime_revision::text,id,session_user_id,'producer',runtime_due_at,session_build_id,runtime_revision,'graph' from due on conflict do nothing returning graph_id) update graphs g set runtime_due_at=null from queued q where g.id=q.graph_id")
@@ -2835,21 +3663,45 @@ pub(super) async fn tick_runtime() {
     for row in rows {
         let id = row.get::<String, _>("id");
         let run = row.get::<String, _>("run");
-        if let Err(e) = resume_runtime(&id,&run,row.get("runtime_revision"),&row.get::<String,_>("build_id"),row.get::<Option<String>,_>("actor").as_deref()).await {
-            super::scheduler::finish_run(&run,super::scheduler::RunResult::Uncertain,&e).await;
+        if let Err(e) = resume_runtime(
+            &id,
+            &run,
+            row.get("runtime_revision"),
+            &row.get::<String, _>("build_id"),
+            row.get::<Option<String>, _>("actor").as_deref(),
+        )
+        .await
+        {
+            super::scheduler::finish_run(&run, super::scheduler::RunResult::Uncertain, &e).await;
             eprintln!("scheduler: project producer {id}: {e}");
         }
     }
 }
 
-async fn resume_runtime(graph: &str,run:&str,revision:i64,build:&str,actor:Option<&str>) -> Result<(), String> {
+async fn resume_runtime(
+    graph: &str,
+    run: &str,
+    revision: i64,
+    build: &str,
+    actor: Option<&str>,
+) -> Result<(), String> {
     let text = |e: ServerFnError| err_text(&e);
     let mut ctx = background_ctx(graph).await?;
-    retire_project_runs(&ctx.org.id, &ctx.project.id).await.map_err(text)?;
+    retire_project_runs(&ctx.org.id, &ctx.project.id)
+        .await
+        .map_err(text)?;
     let mut tx = runtime_lock(graph).await?;
     reload(&mut ctx).await.map_err(text)?;
-    if ctx.row.runtime_revision!=revision || ctx.row.session_build_id.as_deref()!=Some(build) || actor!=Some(ctx.user.id.as_str()) {
-        super::scheduler::finish_run(run,super::scheduler::RunResult::Cancelled,"superseded by an input, build or actor change").await;
+    if ctx.row.runtime_revision != revision
+        || ctx.row.session_build_id.as_deref() != Some(build)
+        || actor != Some(ctx.user.id.as_str())
+    {
+        super::scheduler::finish_run(
+            run,
+            super::scheduler::RunResult::Cancelled,
+            "superseded by an input, build or actor change",
+        )
+        .await;
         return Ok(());
     }
     let cells = cells_of(graph).await.map_err(text)?;
@@ -2857,17 +3709,34 @@ async fn resume_runtime(graph: &str,run:&str,revision:i64,build:&str,actor:Optio
         "binding":{"org_id":ctx.org.id,"user_id":ctx.user.id,"graph_id":graph},
         "policy":super::db::org_settings(&ctx.org).await.map_err(text)?.effect_policy.for_cells(&cells.iter().map(|c|c.cell.clone()).collect::<Vec<_>>()),
         "connectors":connector_grants(&ctx,&cells).await?,"warrants":storage_warrants(&ctx,&cells).await?});
-    if !super::scheduler::begin_run(run,"queued","graph").await? { return Ok(()); }
-    let answer = lun::step(ctx.row.session_build_id.as_deref().ok_or("project is not built")?, GRAPH_NAME, &body).await?;
-    store_runtime(&mut ctx,&mut tx,&answer).await?;
+    if !super::scheduler::begin_run(run, "queued", "graph").await? {
+        return Ok(());
+    }
+    let answer = lun::step(
+        ctx.row
+            .session_build_id
+            .as_deref()
+            .ok_or("project is not built")?,
+        GRAPH_NAME,
+        &body,
+    )
+    .await?;
+    store_runtime(&mut ctx, &mut tx, &answer).await?;
     let update=sqlx::query("insert into graph_updates(graph_id,fed_by,changed,scheduled_run_id,runtime_revision) values($1::uuid,'producer',$2::jsonb,$3::uuid,$4) returning id::text as id")
         .bind(graph).bind(serde_json::to_string(&answer.changed).map_err(|e|e.to_string())?).bind(run).bind(ctx.row.runtime_revision).fetch_one(&mut *tx).await.map_err(|e|e.to_string())?;
-    enqueue_deliveries(&ctx,&cells,&answer.changed,&update.get::<String,_>("id"),&mut tx).await?;
+    enqueue_deliveries(
+        &ctx,
+        &cells,
+        &answer.changed,
+        &update.get::<String, _>("id"),
+        &mut tx,
+    )
+    .await?;
     sqlx::query("update scheduled_runs set state='completed',finished_at=now(),detail='bounded graph step returned' where id=$1::uuid and state='running'")
         .bind(run).execute(&mut *tx).await.map_err(|e|e.to_string())?;
-    tx.commit().await.map_err(|e|e.to_string())?;
+    tx.commit().await.map_err(|e| e.to_string())?;
     drain_deliveries(graph).await;
-    auto_repair_errors(&ctx,&cells,&answer.changed,&answer.nodes).await;
+    auto_repair_errors(&ctx, &cells, &answer.changed, &answer.nodes).await;
     Ok(())
 }
 
@@ -2886,13 +3755,34 @@ pub fn sink_text(output: &Value) -> Option<String> {
 
 /// Preserve every emission in runtime order, including repeated node IDs in a
 /// producer burst. Outbox rows and graph state commit in the same transaction.
-async fn enqueue_deliveries(ctx:&Ctx,cells:&[CellRow],changed:&[GraphNode],update:&str,tx:&mut sqlx::Transaction<'_,sqlx::Postgres>)->Result<(),String>{
-    for (index,node) in changed.iter().enumerate(){
-        if node.function.is_none(){continue;}
-        let Some(output)=node.outcome.as_ref().and_then(|o|o.output.as_ref())else{continue;};
-        let Some(text)=sink_text(output)else{continue;};
-        for row in cells.iter().filter(|c|c.cell.cell_type==CellType::ChannelSink && c.cell.implementation.as_ref().and_then(|i|i.function.as_deref())==node.function.as_deref()){
-            let Some(channel)=row.cell.config.channel_id.as_deref()else{continue;};
+async fn enqueue_deliveries(
+    ctx: &Ctx,
+    cells: &[CellRow],
+    changed: &[GraphNode],
+    update: &str,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<(), String> {
+    for (index, node) in changed.iter().enumerate() {
+        if node.function.is_none() {
+            continue;
+        }
+        let Some(output) = node.outcome.as_ref().and_then(|o| o.output.as_ref()) else {
+            continue;
+        };
+        let Some(text) = sink_text(output) else {
+            continue;
+        };
+        for row in cells.iter().filter(|c| {
+            c.cell.cell_type == CellType::ChannelSink
+                && c.cell
+                    .implementation
+                    .as_ref()
+                    .and_then(|i| i.function.as_deref())
+                    == node.function.as_deref()
+        }) {
+            let Some(channel) = row.cell.config.channel_id.as_deref() else {
+                continue;
+            };
             sqlx::query("insert into graph_delivery_outbox(graph_id,update_id,emission_index,cell_id,actor_id,channel_id,recipient,body,runtime_revision) values($1::uuid,$2::uuid,$3,$4::uuid,$5::uuid,$6::uuid,$7,$8,$9) on conflict do nothing")
                 .bind(&ctx.row.graph.id).bind(update).bind(index as i32).bind(&row.cell.id).bind(&ctx.user.id).bind(channel)
                 .bind(row.cell.config.recipient.as_deref().unwrap_or("")).bind(&text).bind(ctx.row.runtime_revision).execute(&mut **tx).await.map_err(|e|e.to_string())?;
@@ -2901,26 +3791,42 @@ async fn enqueue_deliveries(ctx:&Ctx,cells:&[CellRow],changed:&[GraphNode],updat
     Ok(())
 }
 
-pub(super) async fn tick_deliveries(){
-    let Ok(pool)=pool()else{return;};
+pub(super) async fn tick_deliveries() {
+    let Ok(pool) = pool() else {
+        return;
+    };
     let _=sqlx::query("update graph_delivery_outbox set state='uncertain',finished_at=now(),detail='Delivery response was not recorded; reconcile before an explicit restart. No automatic resend.' where state='sending' and started_at<now()-interval '15 minutes'").execute(pool).await;
     let Ok(rows)=sqlx::query("select distinct graph_id::text as graph from graph_delivery_outbox where state='pending' limit 8").fetch_all(pool).await else{return;};
-    for row in rows{drain_deliveries(&row.get::<String,_>("graph")).await;}
+    for row in rows {
+        drain_deliveries(&row.get::<String, _>("graph")).await;
+    }
 }
 
-async fn drain_deliveries(graph:&str){
-    if let Err(e)=drain_deliveries_checked(graph).await{eprintln!("outbox: project {graph}: {e}");}
+async fn drain_deliveries(graph: &str) {
+    if let Err(e) = drain_deliveries_checked(graph).await {
+        eprintln!("outbox: project {graph}: {e}");
+    }
 }
 
-async fn drain_deliveries_checked(graph:&str)->Result<(),String>{
-    let pool=pool().map_err(|e|err_text(&e))?;
-    let mut guard=pool.begin().await.map_err(|e|e.to_string())?;
-    if !sqlx::query("select pg_try_advisory_xact_lock(hashtextextended($1,6)) as held").bind(graph).fetch_one(&mut *guard).await.map_err(|e|e.to_string())?.get::<bool,_>("held"){return Ok(());}
+async fn drain_deliveries_checked(graph: &str) -> Result<(), String> {
+    let pool = pool().map_err(|e| err_text(&e))?;
+    let mut guard = pool.begin().await.map_err(|e| e.to_string())?;
+    if !sqlx::query("select pg_try_advisory_xact_lock(hashtextextended($1,6)) as held")
+        .bind(graph)
+        .fetch_one(&mut *guard)
+        .await
+        .map_err(|e| e.to_string())?
+        .get::<bool, _>("held")
+    {
+        return Ok(());
+    }
     let blocked=sqlx::query("select 1 from graph_delivery_outbox where graph_id=$1::uuid and state in ('sending','uncertain') limit 1").bind(graph).fetch_optional(pool).await.map_err(|e|e.to_string())?.is_some();
-    if blocked{return Ok(());}
+    if blocked {
+        return Ok(());
+    }
     let rows=sqlx::query("select id::text as id,cell_id::text as cell,actor_id::text as actor,channel_id::text as channel,recipient,body from graph_delivery_outbox where graph_id=$1::uuid and state='pending' order by runtime_revision,emission_index,id limit 256").bind(graph).fetch_all(pool).await.map_err(|e|e.to_string())?;
-    for row in rows{
-        let id=row.get::<String,_>("id");
+    for row in rows {
+        let id = row.get::<String, _>("id");
         let result=async{
             let ctx=background_ctx(graph).await?;
             let cells=cells_of(graph).await.map_err(|e|err_text(&e))?;
@@ -2933,11 +3839,16 @@ async fn drain_deliveries_checked(graph:&str)->Result<(),String>{
             channels::send_scoped(&ctx.org,&ctx.user,&ctx.project.slug,&channel,&recipient,&row.get::<String,_>("body"),&current.cell.config.connectors,Some(&cell)).await.map_err(|e|err_text(&e))?;
             Ok::<_,String>(())
         }.await;
-        let (state,detail)=match result{Ok(())=>("sent",String::new()),Err(e)=>("uncertain",e)};
+        let (state, detail) = match result {
+            Ok(()) => ("sent", String::new()),
+            Err(e) => ("uncertain", e),
+        };
         sqlx::query("update graph_delivery_outbox set state=case when state='pending' and $2='uncertain' then 'cancelled' else $2 end,detail=$3,finished_at=now() where id=$1::uuid and state in ('pending','sending')").bind(&id).bind(state).bind(&detail).execute(pool).await.map_err(|e|e.to_string())?;
-        if state=="uncertain"{break;}
+        if state == "uncertain" {
+            break;
+        }
     }
-    guard.commit().await.map_err(|e|e.to_string())
+    guard.commit().await.map_err(|e| e.to_string())
 }
 
 /// A `ui` source's widget changed: feed it.
@@ -2995,13 +3906,19 @@ pub async fn restart_session(
     }
     // This is an explicit member action, not an automatic retry of an uncertain
     // effect. Keep the old run history and deliberately abandon its continuation.
-    let mut tx=runtime_lock(&ctx.row.graph.id).await.map_err(bad_gateway)?;
-    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1,6))").bind(&ctx.row.graph.id).execute(&mut *tx).await.map_err(db_error)?;
+    let mut tx = runtime_lock(&ctx.row.graph.id).await.map_err(bad_gateway)?;
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1,6))")
+        .bind(&ctx.row.graph.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
     reload(&mut ctx).await?;
     sqlx::query("update scheduled_runs set state='cancelled',finished_at=now(),detail='Explicit member restart abandoned this occurrence; prior effects require caller reconciliation' where graph_id=$1::uuid and state in ('queued','running','input_ready','uncertain')")
         .bind(&ctx.row.graph.id).execute(&mut *tx).await.map_err(db_error)?;
     sqlx::query("update graph_delivery_outbox set state='cancelled',finished_at=now(),detail='Explicit member restart abandoned pending deliveries; prior sends require caller reconciliation' where graph_id=$1::uuid and state in ('pending','sending','uncertain')").bind(&ctx.row.graph.id).execute(&mut *tx).await.map_err(db_error)?;
-    let answer = register_locked(&mut ctx,&mut tx).await.map_err(bad_gateway)?;
+    let answer = register_locked(&mut ctx, &mut tx)
+        .await
+        .map_err(bad_gateway)?;
     tx.commit().await.map_err(db_error)?;
     drain_deliveries(&ctx.row.graph.id).await;
     if ctx.row.graph.status == "ready" {

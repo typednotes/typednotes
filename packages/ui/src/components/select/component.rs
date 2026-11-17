@@ -18,11 +18,28 @@ pub fn use_selected<T: Clone + PartialEq + 'static>(value: ReadSignal<T>) -> Rea
 
 #[component]
 pub fn Select<T: Clone + PartialEq + 'static>(props: SelectProps<T>) -> Element {
-    let trigger_attributes: Vec<_> = props.attributes.iter().filter(|attribute|
-        matches!(attribute.name, "id" | "aria-label" | "aria-labelledby" | "aria-describedby" | "aria-invalid"))
-        .cloned().collect();
-    let base = attributes!(div { class: Styles::dx_select });
-    let merged = merge_attributes(vec![base, props.attributes.into_iter().filter(|attribute| attribute.name != "id").collect()]);
+    let trigger_attributes: Vec<_> = props
+        .attributes
+        .iter()
+        .filter(|attribute| {
+            matches!(
+                attribute.name,
+                "id" | "aria-label" | "aria-labelledby" | "aria-describedby" | "aria-invalid"
+            )
+        })
+        .cloned()
+        .collect();
+    let base = attributes!(div {
+        class: Styles::dx_select
+    });
+    let merged = merge_attributes(vec![
+        base,
+        props
+            .attributes
+            .into_iter()
+            .filter(|attribute| attribute.name != "id")
+            .collect(),
+    ]);
 
     rsx! {
         select::Select {
@@ -57,11 +74,28 @@ pub fn Select<T: Clone + PartialEq + 'static>(props: SelectProps<T>) -> Element 
 
 #[component]
 pub fn SelectMulti<T: Clone + PartialEq + 'static>(props: SelectMultiProps<T>) -> Element {
-    let trigger_attributes: Vec<_> = props.attributes.iter().filter(|attribute|
-        matches!(attribute.name, "id" | "aria-label" | "aria-labelledby" | "aria-describedby" | "aria-invalid"))
-        .cloned().collect();
-    let base = attributes!(div { class: Styles::dx_select });
-    let merged = merge_attributes(vec![base, props.attributes.into_iter().filter(|attribute| attribute.name != "id").collect()]);
+    let trigger_attributes: Vec<_> = props
+        .attributes
+        .iter()
+        .filter(|attribute| {
+            matches!(
+                attribute.name,
+                "id" | "aria-label" | "aria-labelledby" | "aria-describedby" | "aria-invalid"
+            )
+        })
+        .cloned()
+        .collect();
+    let base = attributes!(div {
+        class: Styles::dx_select
+    });
+    let merged = merge_attributes(vec![
+        base,
+        props
+            .attributes
+            .into_iter()
+            .filter(|attribute| attribute.name != "id")
+            .collect(),
+    ]);
 
     rsx! {
         select::SelectMulti {
@@ -96,7 +130,9 @@ pub fn SelectMulti<T: Clone + PartialEq + 'static>(props: SelectMultiProps<T>) -
 
 #[component]
 pub fn SelectGroupLabel(props: SelectGroupLabelProps) -> Element {
-    let base = attributes!(div { class: Styles::dx_select_group_label });
+    let base = attributes!(div {
+        class: Styles::dx_select_group_label
+    });
     let merged = merge_attributes(vec![base, props.attributes]);
 
     rsx! {
@@ -110,7 +146,9 @@ pub fn SelectGroupLabel(props: SelectGroupLabelProps) -> Element {
 
 #[component]
 pub fn SelectOption<T: Clone + PartialEq + 'static>(props: SelectOptionProps<T>) -> Element {
-    let base = attributes!(div { class: Styles::dx_select_option });
+    let base = attributes!(div {
+        class: Styles::dx_select_option
+    });
     let merged = merge_attributes(vec![base, props.attributes]);
 
     rsx! {

@@ -12,9 +12,7 @@ use sqlx::Row;
 use super::connections::{self, ProviderCall};
 use super::db::{pool, slug_check};
 use super::errors::{bad_gateway, bad_request, conflict, db_error, forbidden, not_found};
-use crate::{
-    validate_org, Org, Project, Provider, Repo, RepoRef, SlugCheck, User,
-};
+use crate::{validate_org, Org, Project, Provider, Repo, RepoRef, SlugCheck, User};
 
 macro_rules! project_columns {
     () => {
@@ -43,7 +41,8 @@ fn project_of(row: &PgRow) -> Project {
         name: row.get("name"),
         created_at: row.get("created_at"),
         repo,
-        note_connections: serde_json::from_str(&row.get::<String,_>("note_connections")).unwrap_or_default(),
+        note_connections: serde_json::from_str(&row.get::<String, _>("note_connections"))
+            .unwrap_or_default(),
     }
 }
 
@@ -166,41 +165,88 @@ pub async fn rename(
 
 /// Project-wide operation/resource scopes. Changing them closes the existing
 /// writer and runtime grants; generated notes cannot restore removed authority.
-pub async fn set_note_connections(org:&Org,user:&User,slug:&str,grants:Vec<crate::CellConnector>)->Result<Project,ServerFnError>{
-    let(project,creator)=get(org,slug).await?;
-    if creator.as_deref()!=Some(&user.id)&&!matches!(org.role.as_str(),"owner"|"admin"){return Err(forbidden("only the project's creator or an org admin can edit project permissions"));}
-    super::graphs::retire_project_runs(&org.id,&project.id).await?;
-    let mut seen=std::collections::BTreeSet::new();
-    if grants.len()>64{return Err(bad_request("at most 64 project connections"));}
-    for grant in &grants{
-        if !seen.insert(&grant.connection){return Err(bad_request("duplicate project connection"));}
-        if let Some(service)=crate::LocalService::from_selection(&grant.connection){
-            if let Some(p)=&grant.permissions{
+pub async fn set_note_connections(
+    org: &Org,
+    user: &User,
+    slug: &str,
+    grants: Vec<crate::CellConnector>,
+) -> Result<Project, ServerFnError> {
+    let (project, creator) = get(org, slug).await?;
+    if creator.as_deref() != Some(&user.id) && !matches!(org.role.as_str(), "owner" | "admin") {
+        return Err(forbidden(
+            "only the project's creator or an org admin can edit project permissions",
+        ));
+    }
+    super::graphs::retire_project_runs(&org.id, &project.id).await?;
+    let mut seen = std::collections::BTreeSet::new();
+    if grants.len() > 64 {
+        return Err(bad_request("at most 64 project connections"));
+    }
+    for grant in &grants {
+        if !seen.insert(&grant.connection) {
+            return Err(bad_request("duplicate project connection"));
+        }
+        if let Some(service) = crate::LocalService::from_selection(&grant.connection) {
+            if let Some(p) = &grant.permissions {
                 p.validate_local(service).map_err(bad_request)?;
-                if service==crate::LocalService::Postgres&&p.scopes.iter().any(|s|s.root.len()>1){return Err(bad_request("project database scopes use table names; actor schemas are bound by the runtime"));}
+                if service == crate::LocalService::Postgres
+                    && p.scopes.iter().any(|s| s.root.len() > 1)
+                {
+                    return Err(bad_request("project database scopes use table names; actor schemas are bound by the runtime"));
+                }
             }
-        }else{
-            let(c,_)=connections::get(org,user,&grant.connection).await?;
-            if let Some(p)=&grant.permissions{
-                let p=p.validate(c.provider).map_err(bad_request)?;
-                c.permissions.clone().unwrap_or_else(||crate::ConnectorPermissions::preset(c.provider,crate::PermissionPreset::ReadOnly)).narrow(&p).map_err(forbidden)?;
+        } else {
+            let (c, _) = connections::get(org, user, &grant.connection).await?;
+            if let Some(p) = &grant.permissions {
+                let p = p.validate(c.provider).map_err(bad_request)?;
+                c.permissions
+                    .clone()
+                    .unwrap_or_else(|| {
+                        crate::ConnectorPermissions::preset(
+                            c.provider,
+                            crate::PermissionPreset::ReadOnly,
+                        )
+                    })
+                    .narrow(&p)
+                    .map_err(forbidden)?;
             }
         }
     }
-    let mut tx=super::connector::lock(&org.id).await?;
-    super::connector::require_actor(&mut tx,&org.id,&user.id).await?;
+    let mut tx = super::connector::lock(&org.id).await?;
+    super::connector::require_actor(&mut tx, &org.id, &user.id).await?;
     let live=sqlx::query("select p.created_by::text as creator,m.role from projects p join memberships m on m.org_id=p.org_id and m.user_id=$3::uuid where p.id=$1::uuid and p.org_id=$2::uuid for update of p")
         .bind(&project.id).bind(&org.id).bind(&user.id).fetch_one(&mut *tx).await.map_err(db_error)?;
-    if live.get::<Option<String>,_>("creator").as_deref()!=Some(&user.id)&&!matches!(live.get::<String,_>("role").as_str(),"owner"|"admin"){return Err(forbidden("your project management role changed"));}
-    let roots=sqlx::query("select id::text as id,lode_session_id from graphs where project_id=$1::uuid").bind(&project.id).fetch_all(&mut *tx).await.map_err(db_error)?;
-    for root in roots{
-        let id:String=root.get("id");
-        if let Some(writer)=root.get::<Option<String>,_>("lode_session_id"){super::lode::narrow(&writer,&[]).await.map_err(bad_gateway)?;}
-        super::connector::revoke_graph(&mut tx,&org.id,&id).await?;
+    if live.get::<Option<String>, _>("creator").as_deref() != Some(&user.id)
+        && !matches!(live.get::<String, _>("role").as_str(), "owner" | "admin")
+    {
+        return Err(forbidden("your project management role changed"));
     }
-    sqlx::query("update projects set note_connections=$2::jsonb where id=$1::uuid").bind(&project.id).bind(serde_json::to_string(&grants).map_err(|_|bad_request("invalid project permissions"))?).execute(&mut *tx).await.map_err(db_error)?;
+    let roots =
+        sqlx::query("select id::text as id,lode_session_id from graphs where project_id=$1::uuid")
+            .bind(&project.id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(db_error)?;
+    for root in roots {
+        let id: String = root.get("id");
+        if let Some(writer) = root.get::<Option<String>, _>("lode_session_id") {
+            super::lode::narrow(&writer, &[])
+                .await
+                .map_err(bad_gateway)?;
+        }
+        super::connector::revoke_graph(&mut tx, &org.id, &id).await?;
+    }
+    sqlx::query("update projects set note_connections=$2::jsonb where id=$1::uuid")
+        .bind(&project.id)
+        .bind(
+            serde_json::to_string(&grants)
+                .map_err(|_| bad_request("invalid project permissions"))?,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
-    Ok(get(org,slug).await?.0)
+    Ok(get(org, slug).await?.0)
 }
 
 // ── Repositories ────────────────────────────────────────────────────────
@@ -303,23 +349,58 @@ pub async fn list_repos(
     Ok(repo_page(org, user, connection_id, 1).await?.repos)
 }
 
-pub async fn repo_page(org: &Org, user: &User, connection_id: &str, page: u32) -> Result<crate::RepoPage, ServerFnError> {
-    if !(1..=100).contains(&page) { return Err(bad_request("repository page: 1 to 100")); }
+pub async fn repo_page(
+    org: &Org,
+    user: &User,
+    connection_id: &str,
+    page: u32,
+) -> Result<crate::RepoPage, ServerFnError> {
+    if !(1..=100).contains(&page) {
+        return Err(bad_request("repository page: 1 to 100"));
+    }
     let (connection, owner) = code_connection(org, user, connection_id).await?;
-    let request = ProviderCall::new("repositories.list", Vec::new(), serde_json::json!({"page": page.to_string()}));
+    let request = ProviderCall::new(
+        "repositories.list",
+        Vec::new(),
+        serde_json::json!({"page": page.to_string()}),
+    );
     let body = connections::call_ok(org, user, &connection, &owner, request).await?;
     let repos = parse_repos(connection.provider, &body).map_err(bad_gateway)?;
-    if repos.len() > 100 { return Err(bad_gateway("the provider exceeded the bounded repository page size")); }
+    if repos.len() > 100 {
+        return Err(bad_gateway(
+            "the provider exceeded the bounded repository page size",
+        ));
+    }
     let full = repos.len() == 100;
-    Ok(crate::RepoPage { repos, next_page: (full && page < 100).then_some(page + 1), truncated: full && page == 100 })
+    Ok(crate::RepoPage {
+        repos,
+        next_page: (full && page < 100).then_some(page + 1),
+        truncated: full && page == 100,
+    })
 }
 
 /// Make `full_name` the project's primary repository, after reading it
-pub async fn verify_selection(org:&Org,user:&User,connection_id:&str,full_name:&str)->Result<Repo,ServerFnError>{
-    let(connection,owner)=code_connection(org,user,connection_id).await?;
-    let full_name=crate::repository_name(connection.provider,full_name).map_err(bad_request)?;
-    let body=connections::call_ok(org,user,&connection,&owner,ProviderCall::new("repositories.read",full_name.split('/').map(str::to_string).collect(),serde_json::json!({"view":"metadata"}))).await?;
-    checked_repo(connection.provider,&full_name,&body).map_err(bad_gateway)
+pub async fn verify_selection(
+    org: &Org,
+    user: &User,
+    connection_id: &str,
+    full_name: &str,
+) -> Result<Repo, ServerFnError> {
+    let (connection, owner) = code_connection(org, user, connection_id).await?;
+    let full_name = crate::repository_name(connection.provider, full_name).map_err(bad_request)?;
+    let body = connections::call_ok(
+        org,
+        user,
+        &connection,
+        &owner,
+        ProviderCall::new(
+            "repositories.read",
+            full_name.split('/').map(str::to_string).collect(),
+            serde_json::json!({"view":"metadata"}),
+        ),
+    )
+    .await?;
+    checked_repo(connection.provider, &full_name, &body).map_err(bad_gateway)
 }
 
 /// Make `full_name` the project's primary repository, after reading it
@@ -335,8 +416,18 @@ pub async fn set_repo(
     let (project, _) = get(org, project_slug).await?;
     let (connection, owner) = code_connection(org, user, connection_id).await?;
     let full_name = crate::repository_name(connection.provider, full_name).map_err(bad_request)?;
-    let body = connections::call_ok(org, user, &connection, &owner,
-        ProviderCall::new("repositories.read", full_name.split('/').map(str::to_string).collect(), serde_json::json!({"view":"metadata"}))).await?;
+    let body = connections::call_ok(
+        org,
+        user,
+        &connection,
+        &owner,
+        ProviderCall::new(
+            "repositories.read",
+            full_name.split('/').map(str::to_string).collect(),
+            serde_json::json!({"view":"metadata"}),
+        ),
+    )
+    .await?;
     let repo = checked_repo(connection.provider, &full_name, &body).map_err(bad_gateway)?;
     sqlx::query(
         "update projects set repo_connection_id = $2::uuid, repo_provider = $3, \
@@ -357,8 +448,16 @@ pub async fn set_repo(
 fn checked_repo(provider: Provider, expected: &str, body: &[u8]) -> Result<Repo, String> {
     let repo = parse_repo(provider, body)?;
     crate::repository_name(provider, &repo.full_name)?;
-    let matches = if provider == Provider::Github { repo.full_name.eq_ignore_ascii_case(expected) } else { repo.full_name == expected };
-    let host = if provider == Provider::Github { "https://github.com" } else { "https://gitlab.com" };
+    let matches = if provider == Provider::Github {
+        repo.full_name.eq_ignore_ascii_case(expected)
+    } else {
+        repo.full_name == expected
+    };
+    let host = if provider == Provider::Github {
+        "https://github.com"
+    } else {
+        "https://gitlab.com"
+    };
     if !matches || repo.web_url.trim_end_matches('/') != format!("{host}/{}", repo.full_name) {
         return Err("repository metadata does not match the selected provider and resource".into());
     }
@@ -367,20 +466,49 @@ fn checked_repo(provider: Provider, expected: &str, body: &[u8]) -> Result<Repo,
 
 /// An explicit creator/admin action adds only the selected repository's
 /// notebook subtree. It cannot change the organization ceiling or add delete.
-pub async fn allow_code_writes(org: &Org, user: &User, project_slug: &str) -> Result<crate::Connection, ServerFnError> {
-    let (project,_) = get(org,project_slug).await?;
-    let repo=project.repo.ok_or_else(||bad_request("select the repository first"))?;
-    let id=repo.connection_id.ok_or_else(||bad_request("reconnect the repository account first"))?;
-    let (connection,_)=code_connection(org,user,&id).await?;
-    let mut permissions=connection.permissions.clone().unwrap_or_else(||crate::ConnectorPermissions::preset(connection.provider,crate::PermissionPreset::ReadOnly));
-    let mut root=repo.full_name.split('/').map(str::to_string).collect::<Vec<_>>();root.push("typednotes".into());
-    let policy=super::db::org_settings(org).await?.effect_policy;
-    if policy.connector_blocker(connection.provider,&crate::ConnectorPermissions::scoped("repositories.write",root.clone(),true),"repositories.write",&root).is_some() {
+pub async fn allow_code_writes(
+    org: &Org,
+    user: &User,
+    project_slug: &str,
+) -> Result<crate::Connection, ServerFnError> {
+    let (project, _) = get(org, project_slug).await?;
+    let repo = project
+        .repo
+        .ok_or_else(|| bad_request("select the repository first"))?;
+    let id = repo
+        .connection_id
+        .ok_or_else(|| bad_request("reconnect the repository account first"))?;
+    let (connection, _) = code_connection(org, user, &id).await?;
+    let mut permissions = connection.permissions.clone().unwrap_or_else(|| {
+        crate::ConnectorPermissions::preset(connection.provider, crate::PermissionPreset::ReadOnly)
+    });
+    let mut root = repo
+        .full_name
+        .split('/')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    root.push("typednotes".into());
+    let policy = super::db::org_settings(org).await?.effect_policy;
+    if policy
+        .connector_blocker(
+            connection.provider,
+            &crate::ConnectorPermissions::scoped("repositories.write", root.clone(), true),
+            "repositories.write",
+            &root,
+        )
+        .is_some()
+    {
         return Err(forbidden("organization execution policy does not allow code writing here; an owner/admin must enable that operation first"));
     }
-    let grant=crate::ConnectorScope{operation:"repositories.write".into(),root,descendants:true};
-    if !permissions.scopes.contains(&grant) { permissions.scopes.push(grant); }
-    connections::set_permissions(org,user,&id,&permissions).await
+    let grant = crate::ConnectorScope {
+        operation: "repositories.write".into(),
+        root,
+        descendants: true,
+    };
+    if !permissions.scopes.contains(&grant) {
+        permissions.scopes.push(grant);
+    }
+    connections::set_permissions(org, user, &id, &permissions).await
 }
 
 pub async fn clear_repo(org: &Org, project_slug: &str) -> Result<Project, ServerFnError> {
@@ -446,15 +574,32 @@ mod tests {
 
     #[test]
     fn direct_names_and_metadata_are_bound_to_the_selected_provider() {
-        assert_eq!(crate::repository_name(Provider::Github, " https://github.com/Org/Repo.git ").unwrap(), "Org/Repo");
-        assert_eq!(crate::repository_name(Provider::Gitlab, "group/repo").unwrap(), "group/repo");
-        for bad in ["https://evil.example/owner/repo", "https://github.com.evil.example/owner/repo", "https://github.com/owner/repo?ref=main", "owner/../repo", "https://gitlab.com/group/repo"] {
+        assert_eq!(
+            crate::repository_name(Provider::Github, " https://github.com/Org/Repo.git ").unwrap(),
+            "Org/Repo"
+        );
+        assert_eq!(
+            crate::repository_name(Provider::Gitlab, "group/repo").unwrap(),
+            "group/repo"
+        );
+        for bad in [
+            "https://evil.example/owner/repo",
+            "https://github.com.evil.example/owner/repo",
+            "https://github.com/owner/repo?ref=main",
+            "owner/../repo",
+            "https://gitlab.com/group/repo",
+        ] {
             assert!(crate::repository_name(Provider::Github, bad).is_err());
         }
         assert!(crate::repository_name(Provider::Gitlab, "group/sub/repo").is_err());
         let good = br#"{"full_name":"Org/Repo","html_url":"https://github.com/Org/Repo","default_branch":"main"}"#;
         assert!(checked_repo(Provider::Github, "org/repo", good).is_ok());
         assert!(checked_repo(Provider::Github, "other/repo", good).is_err());
-        assert!(checked_repo(Provider::Github, "Org/Repo", br#"{"full_name":"Org/Repo","html_url":"javascript:alert(1)"}"#).is_err());
+        assert!(checked_repo(
+            Provider::Github,
+            "Org/Repo",
+            br#"{"full_name":"Org/Repo","html_url":"javascript:alert(1)"}"#
+        )
+        .is_err());
     }
 }

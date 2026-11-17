@@ -20,97 +20,205 @@ pub fn authority_path(org: &str, run: &str, warrant: &str) -> String {
 pub async fn lock(org: &str) -> Result<Transaction<'static, Postgres>, ServerFnError> {
     let mut tx = db::pool()?.begin().await.map_err(errors::db_error)?;
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(org).execute(&mut *tx).await.map_err(errors::db_error)?;
+        .bind(org)
+        .execute(&mut *tx)
+        .await
+        .map_err(errors::db_error)?;
     Ok(tx)
 }
 
 /// Authentication can precede waiting on a deletion transaction. Revalidate the
 /// executing member after the lock, not just the (possibly shared) key's owner.
-pub async fn require_actor(tx: &mut Transaction<'_, Postgres>, org: &str, user: &str) -> Result<(), ServerFnError> {
-    let member = sqlx::query("select 1 from memberships m join users u on u.id=m.user_id \
-        where m.org_id=$1::uuid and m.user_id=$2::uuid and u.deleted_at is null")
-        .bind(org).bind(user).fetch_optional(&mut **tx).await.map_err(errors::db_error)?;
-    if member.is_none() { return Err(errors::forbidden("the executing account no longer belongs to this organization")); }
+pub async fn require_actor(
+    tx: &mut Transaction<'_, Postgres>,
+    org: &str,
+    user: &str,
+) -> Result<(), ServerFnError> {
+    let member = sqlx::query(
+        "select 1 from memberships m join users u on u.id=m.user_id \
+        where m.org_id=$1::uuid and m.user_id=$2::uuid and u.deleted_at is null",
+    )
+    .bind(org)
+    .bind(user)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(errors::db_error)?;
+    if member.is_none() {
+        return Err(errors::forbidden(
+            "the executing account no longer belongs to this organization",
+        ));
+    }
     Ok(())
 }
 
-pub async fn policy(tx: &mut Transaction<'_, Postgres>, org: &str) -> Result<EffectPolicy, ServerFnError> {
+pub async fn policy(
+    tx: &mut Transaction<'_, Postgres>,
+    org: &str,
+) -> Result<EffectPolicy, ServerFnError> {
     let row = sqlx::query("select effect_policy::text as policy from orgs where id = $1::uuid")
-        .bind(org).fetch_one(&mut **tx).await.map_err(errors::db_error)?;
-    let policy = row.get::<Option<String>, _>("policy").map(|s| serde_json::from_str::<EffectPolicy>(&s))
-        .transpose().map_err(|_| errors::forbidden("invalid organization connector policy"))?.unwrap_or_default();
+        .bind(org)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(errors::db_error)?;
+    let policy = row
+        .get::<Option<String>, _>("policy")
+        .map(|s| serde_json::from_str::<EffectPolicy>(&s))
+        .transpose()
+        .map_err(|_| errors::forbidden("invalid organization connector policy"))?
+        .unwrap_or_default();
     policy.validate().map_err(errors::forbidden)
 }
 
-pub fn ceiling(policy: &EffectPolicy, connection: &Connection, parent: &ConnectorPermissions) -> ConnectorPermissions {
+pub fn ceiling(
+    policy: &EffectPolicy,
+    connection: &Connection,
+    parent: &ConnectorPermissions,
+) -> ConnectorPermissions {
     if !policy.allows_connector(connection.provider) {
         return ConnectorPermissions::deny_all();
     }
-    policy.connector_ceilings.get(connection.provider.id()).cloned().unwrap_or_else(|| parent.clone())
+    policy
+        .connector_ceilings
+        .get(connection.provider.id())
+        .cloned()
+        .unwrap_or_else(|| parent.clone())
 }
 
-pub async fn publish_ceiling(org: &str, provider: &str, connection: &str, ceiling: &ConnectorPermissions) -> Result<(), ServerFnError> {
-    vault::write(&organization_path(org, provider, connection), &json!(ceiling))
-        .await.map_err(|_| errors::bad_gateway("could not provision the trusted organization connector policy"))
+pub async fn publish_ceiling(
+    org: &str,
+    provider: &str,
+    connection: &str,
+    ceiling: &ConnectorPermissions,
+) -> Result<(), ServerFnError> {
+    vault::write(
+        &organization_path(org, provider, connection),
+        &json!(ceiling),
+    )
+    .await
+    .map_err(|_| {
+        errors::bad_gateway("could not provision the trusted organization connector policy")
+    })
 }
 
 /// Revoke all known projections before a connection/org edit is acknowledged.
 /// Deleting an authority is deny-all at the broker, never a default grant.
-pub async fn revoke(tx: &mut Transaction<'_, Postgres>, org: &str, connection: Option<&str>) -> Result<(), ServerFnError> {
-    let rows = sqlx::query("select warrant_id::text as warrant, run_id::text as run from connector_authorities \
-        where org_id = $1::uuid and ($2::text is null or connection_id::text = $2)")
-        .bind(org).bind(connection).fetch_all(&mut **tx).await.map_err(errors::db_error)?;
+pub async fn revoke(
+    tx: &mut Transaction<'_, Postgres>,
+    org: &str,
+    connection: Option<&str>,
+) -> Result<(), ServerFnError> {
+    let rows = sqlx::query(
+        "select warrant_id::text as warrant, run_id::text as run from connector_authorities \
+        where org_id = $1::uuid and ($2::text is null or connection_id::text = $2)",
+    )
+    .bind(org)
+    .bind(connection)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(errors::db_error)?;
     for row in rows {
-        vault::delete(&authority_path(org, &row.get::<String, _>("run"), &row.get::<String, _>("warrant")))
-            .await.map_err(|_| errors::bad_gateway("could not revoke the trusted connector authority"))?;
+        vault::delete(&authority_path(
+            org,
+            &row.get::<String, _>("run"),
+            &row.get::<String, _>("warrant"),
+        ))
+        .await
+        .map_err(|_| errors::bad_gateway("could not revoke the trusted connector authority"))?;
     }
     sqlx::query("delete from connector_authorities where org_id = $1::uuid and ($2::text is null or connection_id::text = $2)")
         .bind(org).bind(connection).execute(&mut **tx).await.map_err(errors::db_error)?;
     Ok(())
 }
 
-pub async fn revoke_cell(tx: &mut Transaction<'_, Postgres>, org: &str, cell: &str) -> Result<(), ServerFnError> {
-    let graph = sqlx::query("select g.id::text as graph from graph_cells c join graphs g on g.id=c.graph_id \
-        join projects p on p.id=g.project_id where c.id=$1::uuid and p.org_id=$2::uuid")
-        .bind(cell).bind(org).fetch_optional(&mut **tx).await.map_err(errors::db_error)?;
+pub async fn revoke_cell(
+    tx: &mut Transaction<'_, Postgres>,
+    org: &str,
+    cell: &str,
+) -> Result<(), ServerFnError> {
+    let graph = sqlx::query(
+        "select g.id::text as graph from graph_cells c join graphs g on g.id=c.graph_id \
+        join projects p on p.id=g.project_id where c.id=$1::uuid and p.org_id=$2::uuid",
+    )
+    .bind(cell)
+    .bind(org)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(errors::db_error)?;
     if let Some(graph) = graph {
         revoke_writer(tx, org, &graph.get::<String, _>("graph")).await?;
     }
     let rows = sqlx::query("select warrant_id::text as warrant, run_id::text as run from connector_authorities where org_id = $1::uuid and cell_id = $2::uuid")
         .bind(org).bind(cell).fetch_all(&mut **tx).await.map_err(errors::db_error)?;
     for row in rows {
-        vault::delete(&authority_path(org, &row.get::<String, _>("run"), &row.get::<String, _>("warrant")))
-            .await.map_err(|_| errors::bad_gateway("could not revoke cell connector authority"))?;
+        vault::delete(&authority_path(
+            org,
+            &row.get::<String, _>("run"),
+            &row.get::<String, _>("warrant"),
+        ))
+        .await
+        .map_err(|_| errors::bad_gateway("could not revoke cell connector authority"))?;
     }
     sqlx::query("delete from connector_authorities where org_id = $1::uuid and cell_id = $2::uuid")
-        .bind(org).bind(cell).execute(&mut **tx).await.map_err(errors::db_error)?;
+        .bind(org)
+        .bind(cell)
+        .execute(&mut **tx)
+        .await
+        .map_err(errors::db_error)?;
     Ok(())
 }
 
-pub async fn revoke_graph(tx: &mut Transaction<'_, Postgres>, org: &str, graph: &str) -> Result<(), ServerFnError> {
+pub async fn revoke_graph(
+    tx: &mut Transaction<'_, Postgres>,
+    org: &str,
+    graph: &str,
+) -> Result<(), ServerFnError> {
     revoke_writer(tx, org, graph).await?;
     let rows = sqlx::query("select warrant_id::text as warrant, run_id::text as run from connector_authorities where org_id = $1::uuid and graph_id = $2::uuid")
         .bind(org).bind(graph).fetch_all(&mut **tx).await.map_err(errors::db_error)?;
     for row in rows {
-        vault::delete(&authority_path(org, &row.get::<String, _>("run"), &row.get::<String, _>("warrant")))
-            .await.map_err(|_| errors::bad_gateway("could not revoke graph authority"))?;
+        vault::delete(&authority_path(
+            org,
+            &row.get::<String, _>("run"),
+            &row.get::<String, _>("warrant"),
+        ))
+        .await
+        .map_err(|_| errors::bad_gateway("could not revoke graph authority"))?;
     }
-    sqlx::query("delete from connector_authorities where org_id = $1::uuid and graph_id = $2::uuid")
-        .bind(org).bind(graph).execute(&mut **tx).await.map_err(errors::db_error)?;
+    sqlx::query(
+        "delete from connector_authorities where org_id = $1::uuid and graph_id = $2::uuid",
+    )
+    .bind(org)
+    .bind(graph)
+    .execute(&mut **tx)
+    .await
+    .map_err(errors::db_error)?;
     Ok(())
 }
 
 /// Cell/graph declaration edits also revoke anonymous HTTP/files authority,
 /// which has no warrant-keyed broker row. The same org transaction serializes
 /// edits with minting; Lode serializes this narrowing with actual tool effects.
-async fn revoke_writer(tx: &mut Transaction<'_, Postgres>, org: &str, graph: &str) -> Result<(), ServerFnError> {
-    let row = sqlx::query("select g.lode_session_id as session from graphs g join projects p on p.id=g.project_id \
-        where g.id=$1::uuid and p.org_id=$2::uuid and g.lode_session_id is not null")
-        .bind(graph).bind(org).fetch_optional(&mut **tx).await.map_err(errors::db_error)?;
+async fn revoke_writer(
+    tx: &mut Transaction<'_, Postgres>,
+    org: &str,
+    graph: &str,
+) -> Result<(), ServerFnError> {
+    let row = sqlx::query(
+        "select g.lode_session_id as session from graphs g join projects p on p.id=g.project_id \
+        where g.id=$1::uuid and p.org_id=$2::uuid and g.lode_session_id is not null",
+    )
+    .bind(graph)
+    .bind(org)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(errors::db_error)?;
     if let Some(row) = row {
         let tools = policy(tx, org).await?.tools;
-        super::lode::narrow(&row.get::<String, _>("session"), &tools).await
-            .map_err(|_| errors::bad_gateway("could not revoke the writer's cell/graph effect authority"))?;
+        super::lode::narrow(&row.get::<String, _>("session"), &tools)
+            .await
+            .map_err(|_| {
+                errors::bad_gateway("could not revoke the writer's cell/graph effect authority")
+            })?;
     }
     Ok(())
 }
@@ -124,54 +232,113 @@ pub struct Minted {
 
 /// Server-derived selectors inherit byte ceilings and intersect resource grants;
 /// this is attenuation, not a user-requested policy edit.
-pub fn scoped(connection: &Connection, operation: &str, root: Vec<String>, descendants: bool) -> ConnectorPermissions {
-    let parent = connection.permissions.clone().unwrap_or_else(|| ConnectorPermissions::preset(connection.provider, PermissionPreset::ReadOnly));
+pub fn scoped(
+    connection: &Connection,
+    operation: &str,
+    root: Vec<String>,
+    descendants: bool,
+) -> ConnectorPermissions {
+    let parent = connection.permissions.clone().unwrap_or_else(|| {
+        ConnectorPermissions::preset(connection.provider, PermissionPreset::ReadOnly)
+    });
     parent.intersect(&ConnectorPermissions::scoped(operation, root, descendants))
 }
 
 /// ObjectStore's logical bucket is non-secret metadata, not a credential or a
 /// caller-selected URL. Legacy path-style bases have one bucket/container path.
 pub fn bucket(connection: &Connection) -> Option<String> {
-    if !matches!(connection.provider, crate::Provider::S3 | crate::Provider::Azure) { return None; }
+    if !matches!(
+        connection.provider,
+        crate::Provider::S3 | crate::Provider::Azure
+    ) {
+        return None;
+    }
     let bucket = connection.external_id.clone().or_else(|| {
         let url = url::Url::parse(&connection.base_url).ok()?;
-        let parts: Vec<_> = url.path_segments()?.filter(|part| !part.is_empty()).collect();
+        let parts: Vec<_> = url
+            .path_segments()?
+            .filter(|part| !part.is_empty())
+            .collect();
         match parts.as_slice() {
             [bucket] => Some((*bucket).to_string()),
-            [] if connection.provider == crate::Provider::S3 && url.host_str()?.contains(".s3.") =>
-                Some(url.host_str()?.split('.').next()?.to_string()),
+            [] if connection.provider == crate::Provider::S3
+                && url.host_str()?.contains(".s3.") =>
+            {
+                Some(url.host_str()?.split('.').next()?.to_string())
+            }
             _ => None,
         }
     })?;
-    ConnectorPermissions::valid_resource(&[bucket.clone()]).then_some(bucket)
+    ConnectorPermissions::valid_resource(std::slice::from_ref(&bucket)).then_some(bucket)
 }
 
 /// The request can attenuate, never replace, a fresh connection ceiling.
 /// Stale DTOs cannot re-publish authority after an admin's policy change.
-pub async fn mint(org: &Org, user: &User, connection: &Connection, owner: &str, operation: &str,
-    requested: &ConnectorPermissions, cost: u64) -> Result<Minted, ServerFnError> {
-    mint_for_cell(org, user, connection, owner, operation, requested, cost, None).await
+pub async fn mint(
+    org: &Org,
+    user: &User,
+    connection: &Connection,
+    owner: &str,
+    operation: &str,
+    requested: &ConnectorPermissions,
+    cost: u64,
+) -> Result<Minted, ServerFnError> {
+    mint_for_cell(
+        org, user, connection, owner, operation, requested, cost, None,
+    )
+    .await
 }
 
 /// A cell mint reads its declaration under the same lock used by declaration
 /// edits. A stale request cannot restore a removed/wider cell permission.
-pub async fn mint_for_cell(org: &Org, user: &User, connection: &Connection, owner: &str, operation: &str,
-    requested: &ConnectorPermissions, cost: u64, cell_id: Option<&str>) -> Result<Minted, ServerFnError> {
-    requested.validate(connection.provider).map_err(errors::bad_request)?;
+// Each argument is a separate authority input (org, actor, connection, owner,
+// operation, requested ceiling, cost, cell) that is intersected or checked
+// here; bundling them would hide at call sites which bound is being passed.
+#[allow(clippy::too_many_arguments)]
+pub async fn mint_for_cell(
+    org: &Org,
+    user: &User,
+    connection: &Connection,
+    owner: &str,
+    operation: &str,
+    requested: &ConnectorPermissions,
+    cost: u64,
+    cell_id: Option<&str>,
+) -> Result<Minted, ServerFnError> {
+    requested
+        .validate(connection.provider)
+        .map_err(errors::bad_request)?;
     let root = warrant::root_key().map_err(errors::unavailable)?;
     let mut tx = lock(&org.id).await?;
     require_actor(&mut tx, &org.id, &user.id).await?;
-    let row = sqlx::query("select permissions::text as permissions, user_id::text as owner, provider, status \
-        from connections where org_id = $1::uuid and id = $2::uuid")
-        .bind(&org.id).bind(&connection.id).fetch_one(&mut *tx).await.map_err(errors::db_error)?;
-    if row.get::<String, _>("owner") != owner || row.get::<String, _>("provider") != connection.provider.id()
-        || !["active", "failed"].contains(&row.get::<String, _>("status").as_str()) {
-        return Err(errors::forbidden("connection identity or provisioning state changed"));
+    let row = sqlx::query(
+        "select permissions::text as permissions, user_id::text as owner, provider, status \
+        from connections where org_id = $1::uuid and id = $2::uuid",
+    )
+    .bind(&org.id)
+    .bind(&connection.id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(errors::db_error)?;
+    if row.get::<String, _>("owner") != owner
+        || row.get::<String, _>("provider") != connection.provider.id()
+        || !["active", "failed"].contains(&row.get::<String, _>("status").as_str())
+    {
+        return Err(errors::forbidden(
+            "connection identity or provisioning state changed",
+        ));
     }
-    let parent = row.get::<Option<String>, _>("permissions").map(|s| serde_json::from_str::<ConnectorPermissions>(&s))
-        .transpose().map_err(|_| errors::forbidden("invalid connection permissions"))?
-        .unwrap_or_else(|| ConnectorPermissions::preset(connection.provider, PermissionPreset::ReadOnly));
-    parent.validate(connection.provider).map_err(errors::forbidden)?;
+    let parent = row
+        .get::<Option<String>, _>("permissions")
+        .map(|s| serde_json::from_str::<ConnectorPermissions>(&s))
+        .transpose()
+        .map_err(|_| errors::forbidden("invalid connection permissions"))?
+        .unwrap_or_else(|| {
+            ConnectorPermissions::preset(connection.provider, PermissionPreset::ReadOnly)
+        });
+    parent
+        .validate(connection.provider)
+        .map_err(errors::forbidden)?;
     let mut graph_id = None;
     if let Some(cell_id) = cell_id {
         let row = sqlx::query("select c.config::text as config,p.note_connections::text as grants, g.id::text as graph from graph_cells c join graphs g on g.id = c.graph_id \
@@ -179,11 +346,20 @@ pub async fn mint_for_cell(org: &Org, user: &User, connection: &Connection, owne
             .bind(cell_id).bind(&org.id).fetch_optional(&mut *tx).await.map_err(errors::db_error)?
             .ok_or_else(|| errors::forbidden("the connector cell is gone or belongs to another organization"))?;
         graph_id = Some(row.get::<String, _>("graph"));
-        let mut config: crate::CellConfig = serde_json::from_str(&row.get::<String, _>("config"))
-            .map_err(|_| errors::forbidden("invalid stored cell connector declaration"))?;
-        config.connectors=serde_json::from_str(&row.get::<String,_>("grants")).map_err(|_|errors::forbidden("invalid project connection permissions"))?;
-        let selected = config.connectors.iter().find(|grant| grant.connection == connection.id);
-        if selected.is_none(){return Err(errors::forbidden("enable this connection and operation in project note permissions"));}
+        let mut config: crate::CellConfig =
+            serde_json::from_str(&row.get::<String, _>("config"))
+                .map_err(|_| errors::forbidden("invalid stored cell connector declaration"))?;
+        config.connectors = serde_json::from_str(&row.get::<String, _>("grants"))
+            .map_err(|_| errors::forbidden("invalid project connection permissions"))?;
+        let selected = config
+            .connectors
+            .iter()
+            .find(|grant| grant.connection == connection.id);
+        if selected.is_none() {
+            return Err(errors::forbidden(
+                "enable this connection and operation in project note permissions",
+            ));
+        }
         let mut declared = match selected {
             Some(grant) => grant.permissions.clone().unwrap_or_else(|| parent.clone()),
             None if config.connection_id.as_deref() == Some(connection.id.as_str()) => {
@@ -192,23 +368,44 @@ pub async fn mint_for_cell(org: &Org, user: &User, connection: &Connection, owne
                     crate::Provider::Dropbox => "files.create",
                     _ => return Err(errors::forbidden("unsupported native storage declaration")),
                 };
-                scoped(connection, expected, config.path.as_deref().ok_or_else(|| errors::forbidden("storage cell has no path"))?
-                    .trim_start_matches('/').split('/').map(str::to_string).collect(), false)
-            },
+                scoped(
+                    connection,
+                    expected,
+                    config
+                        .path
+                        .as_deref()
+                        .ok_or_else(|| errors::forbidden("storage cell has no path"))?
+                        .trim_start_matches('/')
+                        .split('/')
+                        .map(str::to_string)
+                        .collect(),
+                    false,
+                )
+            }
             None if config.channel_id.is_some() => {
                 let channel = sqlx::query("select ch.external_id, ch.external_channel from channels ch join projects p on p.id = ch.project_id \
                     where ch.id = $1::uuid and ch.connection_id = $2::uuid and p.org_id = $3::uuid")
                     .bind(&config.channel_id).bind(&connection.id).bind(&org.id).fetch_optional(&mut *tx).await.map_err(errors::db_error)?
                     .ok_or_else(|| errors::forbidden("cell interface connection changed"))?;
                 let resource = if connection.provider == crate::Provider::Slack {
-                    vec![channel.get::<Option<String>, _>("external_channel").ok_or_else(|| errors::forbidden("interface has no channel"))?]
+                    vec![channel
+                        .get::<Option<String>, _>("external_channel")
+                        .ok_or_else(|| errors::forbidden("interface has no channel"))?]
                 } else {
-                    let peer = crate::validate_recipient(connection.provider, config.recipient.as_deref().unwrap_or("")).map_err(errors::forbidden)?;
+                    let peer = crate::validate_recipient(
+                        connection.provider,
+                        config.recipient.as_deref().unwrap_or(""),
+                    )
+                    .map_err(errors::forbidden)?;
                     vec![channel.get("external_id"), peer]
                 };
                 scoped(connection, "messages.send", resource, false)
-            },
-            None => return Err(errors::forbidden("the project no longer selects this note's connection")),
+            }
+            None => {
+                return Err(errors::forbidden(
+                    "the project no longer selects this note's connection",
+                ))
+            }
         };
         // Legacy sink selectors remain upper bounds even when that cell also
         // selects an advanced grant for the same connection.
@@ -218,42 +415,98 @@ pub async fn mint_for_cell(org: &Org, user: &User, connection: &Connection, owne
                 crate::Provider::Dropbox => "files.create",
                 _ => return Err(errors::forbidden("unsupported native storage declaration")),
             };
-            let path = config.path.as_deref().ok_or_else(|| errors::forbidden("storage cell has no path"))?;
-            declared = declared.intersect(&scoped(connection, expected, path.trim_start_matches('/').split('/').map(str::to_string).collect(), false));
+            let path = config
+                .path
+                .as_deref()
+                .ok_or_else(|| errors::forbidden("storage cell has no path"))?;
+            declared = declared.intersect(&scoped(
+                connection,
+                expected,
+                path.trim_start_matches('/')
+                    .split('/')
+                    .map(str::to_string)
+                    .collect(),
+                false,
+            ));
         }
-        if selected.is_some() && config.channel_id.is_some()
-            && matches!(connection.provider, crate::Provider::Slack | crate::Provider::Signal | crate::Provider::Whatsapp) {
+        if selected.is_some()
+            && config.channel_id.is_some()
+            && matches!(
+                connection.provider,
+                crate::Provider::Slack | crate::Provider::Signal | crate::Provider::Whatsapp
+            )
+        {
             let channel = sqlx::query("select ch.external_id, ch.external_channel from channels ch join projects p on p.id = ch.project_id \
                 where ch.id = $1::uuid and ch.connection_id = $2::uuid and p.org_id = $3::uuid")
                 .bind(&config.channel_id).bind(&connection.id).bind(&org.id).fetch_optional(&mut *tx).await.map_err(errors::db_error)?
                 .ok_or_else(|| errors::forbidden("cell interface connection changed"))?;
             let resource = if connection.provider == crate::Provider::Slack {
-                vec![channel.get::<Option<String>, _>("external_channel").ok_or_else(|| errors::forbidden("interface has no channel"))?]
+                vec![channel
+                    .get::<Option<String>, _>("external_channel")
+                    .ok_or_else(|| errors::forbidden("interface has no channel"))?]
             } else {
-                let peer = crate::validate_recipient(connection.provider, config.recipient.as_deref().unwrap_or("")).map_err(errors::forbidden)?;
+                let peer = crate::validate_recipient(
+                    connection.provider,
+                    config.recipient.as_deref().unwrap_or(""),
+                )
+                .map_err(errors::forbidden)?;
                 vec![channel.get("external_id"), peer]
             };
             declared = declared.intersect(&scoped(connection, "messages.send", resource, false));
         }
-        declared = parent.narrow(&declared.validate(connection.provider).map_err(errors::forbidden)?).map_err(errors::forbidden)?;
+        declared = parent
+            .narrow(
+                &declared
+                    .validate(connection.provider)
+                    .map_err(errors::forbidden)?,
+            )
+            .map_err(errors::forbidden)?;
         declared.narrow(requested).map_err(errors::forbidden)?;
     }
     let policy = policy(&mut tx, &org.id).await?;
     let organization = ceiling(&policy, connection, &parent);
-    let cell = parent.narrow(requested).map_err(errors::forbidden)?.intersect(&organization);
+    let cell = parent
+        .narrow(requested)
+        .map_err(errors::forbidden)?
+        .intersect(&organization);
     if !cell.scopes.iter().any(|s| s.operation == operation) {
-        return Err(errors::forbidden(policy.connector_blocker(connection.provider, &parent, operation, &[])
-            .unwrap_or_else(|| format!("{operation} is not permitted by the live operation/resource ceilings"))));
+        return Err(errors::forbidden(
+            policy
+                .connector_blocker(connection.provider, &parent, operation, &[])
+                .unwrap_or_else(|| {
+                    format!("{operation} is not permitted by the live operation/resource ceilings")
+                }),
+        ));
     }
-    let grant = warrant::for_connection(&root, &org.id, connection.provider.id(), operation, &connection.id, cost);
+    let grant = warrant::for_connection(
+        &root,
+        &org.id,
+        connection.provider.id(),
+        operation,
+        &connection.id,
+        cost,
+    );
     let account = format!("{owner}/{}", connection.id);
     let capability = cell.capability_json(connection.provider, &connection.id);
     let projection = json!({"account": account, "cell": capability, "warrant": capability});
     // Connection defaults are explicitly materialized; malformed/missing trusted
     // organization/run documents never trigger the broker's legacy read default.
-    vault::write(&format!("{}/permissions", vault::credential_path(connection.provider, owner, &connection.id)), &json!(parent))
-        .await.map_err(|_| errors::bad_gateway("could not provision the connection ceiling"))?;
-    publish_ceiling(&org.id, connection.provider.id(), &connection.id, &organization).await?;
+    vault::write(
+        &format!(
+            "{}/permissions",
+            vault::credential_path(connection.provider, owner, &connection.id)
+        ),
+        &json!(parent),
+    )
+    .await
+    .map_err(|_| errors::bad_gateway("could not provision the connection ceiling"))?;
+    publish_ceiling(
+        &org.id,
+        connection.provider.id(),
+        &connection.id,
+        &organization,
+    )
+    .await?;
     sqlx::query("insert into connector_authorities (warrant_id, org_id, connection_id, run_id, account, provider, expires_at, graph_id, cell_id, connection_ref, owner_id, projection) \
         values ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5, $6, to_timestamp($7::bigint), $8::uuid, $9::uuid, $3::text, $10::uuid, $11::jsonb)")
         .bind(&grant.warrant.id).bind(&org.id).bind(&connection.id).bind(&grant.run_id)
@@ -263,12 +516,19 @@ pub async fn mint_for_cell(org: &Org, user: &User, connection: &Connection, owne
         .bind(projection.to_string())
         .execute(&mut *tx).await.map_err(errors::db_error)?;
     let path = authority_path(&org.id, &grant.run_id, &grant.warrant.id);
-    vault::write(&path, &projection).await.map_err(|_| errors::bad_gateway("could not provision the trusted run connector authority"))?;
+    vault::write(&path, &projection).await.map_err(|_| {
+        errors::bad_gateway("could not provision the trusted run connector authority")
+    })?;
     if let Err(e) = tx.commit().await {
         let _ = vault::delete(&path).await;
         return Err(errors::db_error(e));
     }
-    Ok(Minted { grant, organization, connection: parent, cell })
+    Ok(Minted {
+        grant,
+        organization,
+        connection: parent,
+        cell,
+    })
 }
 
 /// Bind only app-minted external writer warrants to a live graph and real Lode
@@ -278,8 +538,19 @@ pub struct WriterBinding {
     pub functions: Vec<String>,
 }
 
-pub async fn bind_writer(org: &Org, graph: &str, session: &str, credentials: &serde_json::Value, desired_tools: &[String]) -> Result<WriterBinding, ServerFnError> {
-    if session.is_empty() || session.len() > 128 || !session.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_') {
+pub async fn bind_writer(
+    org: &Org,
+    graph: &str,
+    session: &str,
+    credentials: &serde_json::Value,
+    desired_tools: &[String],
+) -> Result<WriterBinding, ServerFnError> {
+    if session.is_empty()
+        || session.len() > 128
+        || !session
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
         return Err(errors::bad_request("invalid writer conversation identity"));
     }
     let mut tx = lock(&org.id).await?;
@@ -287,52 +558,109 @@ pub async fn bind_writer(org: &Org, graph: &str, session: &str, credentials: &se
         coalesce(p.repo_default_branch,'main') as branch from graphs g join projects p on p.id = g.project_id where g.id=$1::uuid and p.org_id=$2::uuid")
         .bind(graph).bind(&org.id).fetch_one(&mut *tx).await.map_err(errors::db_error)?;
     let cells = super::graphs::cells_of(graph).await?;
-    let current = policy(&mut tx, &org.id).await?.for_cells(&cells.iter().map(|row| row.cell.clone()).collect::<Vec<_>>());
-    let functions = cells.iter().filter(|row| row.cell.cell_type.has_function()).map(|row| row.cell.name.clone()).collect();
-    let tools: Vec<_> = desired_tools.iter().filter(|tool| current.tools.contains(tool)).cloned().collect();
+    let current = policy(&mut tx, &org.id)
+        .await?
+        .for_cells(&cells.iter().map(|row| row.cell.clone()).collect::<Vec<_>>());
+    let functions = cells
+        .iter()
+        .filter(|row| row.cell.cell_type.has_function())
+        .map(|row| row.cell.name.clone())
+        .collect();
+    let tools: Vec<_> = desired_tools
+        .iter()
+        .filter(|tool| current.tools.contains(tool))
+        .cloned()
+        .collect();
     let mut selected = Vec::new();
     for key in ["repo", "model", "lun"] {
-        let credential = credentials.get(key).ok_or_else(|| errors::bad_request("missing writer credential"))?;
-        selected.push((key, credential.get("warrant").ok_or_else(|| errors::bad_request("missing writer warrant"))?));
+        let credential = credentials
+            .get(key)
+            .ok_or_else(|| errors::bad_request("missing writer credential"))?;
+        selected.push((
+            key,
+            credential
+                .get("warrant")
+                .ok_or_else(|| errors::bad_request("missing writer warrant"))?,
+        ));
         if key == "repo" {
-            if let Some(operations) = credential.get("operations").and_then(serde_json::Value::as_array) {
-                for operation in operations { selected.push((key, operation.get("warrant").ok_or_else(|| errors::bad_request("missing writer operation warrant"))?)); }
+            if let Some(operations) = credential
+                .get("operations")
+                .and_then(serde_json::Value::as_array)
+            {
+                for operation in operations {
+                    selected.push((
+                        key,
+                        operation.get("warrant").ok_or_else(|| {
+                            errors::bad_request("missing writer operation warrant")
+                        })?,
+                    ));
+                }
             }
         }
     }
     for (kind, token) in selected {
-        let id = token.get("id").and_then(serde_json::Value::as_str).ok_or_else(|| errors::bad_request("invalid writer warrant ID"))?;
+        let id = token
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| errors::bad_request("invalid writer warrant ID"))?;
         let row = sqlx::query("select run_id::text as run, connection_ref, graph_id::text as graph, projection::text as projection from connector_authorities \
             where warrant_id=$1::uuid and org_id=$2::uuid and connection_id is not null and cell_id is null and expires_at>now()")
             .bind(id).bind(&org.id).fetch_optional(&mut *tx).await.map_err(errors::db_error)?
             .ok_or_else(|| errors::forbidden("writer warrant is expired or revoked"))?;
         let expected: Option<String> = source.get(if kind == "model" { "model" } else { "repo" });
-        if expected.as_deref() != Some(row.get::<String,_>("connection_ref").as_str()) {
-            return Err(errors::forbidden("writer connection changed during provisioning"));
+        if expected.as_deref() != Some(row.get::<String, _>("connection_ref").as_str()) {
+            return Err(errors::forbidden(
+                "writer connection changed during provisioning",
+            ));
         }
-        if row.get::<Option<String>,_>("graph").is_some_and(|bound| bound != graph) {
-            return Err(errors::forbidden("writer warrant cannot change its graph binding"));
+        if row
+            .get::<Option<String>, _>("graph")
+            .is_some_and(|bound| bound != graph)
+        {
+            return Err(errors::forbidden(
+                "writer warrant cannot change its graph binding",
+            ));
         }
-        let mut projection: serde_json::Value = serde_json::from_str(&row.get::<String,_>("projection")).map_err(|_| errors::forbidden("invalid tracked writer projection"))?;
+        let mut projection: serde_json::Value =
+            serde_json::from_str(&row.get::<String, _>("projection"))
+                .map_err(|_| errors::forbidden("invalid tracked writer projection"))?;
         if kind == "model" {
             if let Some(previous) = projection.get("conversation") {
-                let names = previous.get("allowedTools").and_then(serde_json::Value::as_array).ok_or_else(|| errors::forbidden("invalid tracked conversation"))?;
-                if previous.get("sessionId").and_then(serde_json::Value::as_str) != Some(session)
-                    || tools.iter().any(|tool| !names.iter().any(|name| name.as_str() == Some(tool))) {
-                    return Err(errors::forbidden("writer conversation cannot change identity or widen tools"));
+                let names = previous
+                    .get("allowedTools")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or_else(|| errors::forbidden("invalid tracked conversation"))?;
+                if previous
+                    .get("sessionId")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(session)
+                    || tools
+                        .iter()
+                        .any(|tool| !names.iter().any(|name| name.as_str() == Some(tool)))
+                {
+                    return Err(errors::forbidden(
+                        "writer conversation cannot change identity or widen tools",
+                    ));
                 }
             }
             projection["conversation"] = json!({"sessionId": session, "allowedTools": tools});
         }
         if kind == "repo" {
             let publication = json!({"branch": source.get::<String,_>("branch"), "root": ["typednotes", source.get::<String,_>("slug").as_str()]});
-            if projection.get("publication").is_some_and(|previous| *previous != publication) {
-                return Err(errors::forbidden("writer publication boundary cannot change"));
+            if projection
+                .get("publication")
+                .is_some_and(|previous| *previous != publication)
+            {
+                return Err(errors::forbidden(
+                    "writer publication boundary cannot change",
+                ));
             }
             projection["publication"] = publication;
         }
-        let path = authority_path(&org.id, &row.get::<String,_>("run"), id);
-        vault::write(&path, &projection).await.map_err(|_| errors::bad_gateway("could not bind trusted writer policy"))?;
+        let path = authority_path(&org.id, &row.get::<String, _>("run"), id);
+        vault::write(&path, &projection)
+            .await
+            .map_err(|_| errors::bad_gateway("could not bind trusted writer policy"))?;
         sqlx::query("update connector_authorities set projection=$2::jsonb, graph_id=$3::uuid where warrant_id=$1::uuid")
             .bind(id).bind(projection.to_string()).bind(graph).execute(&mut *tx).await.map_err(errors::db_error)?;
     }
@@ -340,9 +668,16 @@ pub async fn bind_writer(org: &Org, graph: &str, session: &str, credentials: &se
     // under the very same org lock used by edits and grant publication; after
     // commit an edit either narrows this session or rejects its fresh tokens.
     sqlx::query("update graphs set lode_session_id=$2 where id=$1::uuid")
-        .bind(graph).bind(session).execute(&mut *tx).await.map_err(errors::db_error)?;
+        .bind(graph)
+        .bind(session)
+        .execute(&mut *tx)
+        .await
+        .map_err(errors::db_error)?;
     tx.commit().await.map_err(errors::db_error)?;
-    Ok(WriterBinding { policy: current, functions })
+    Ok(WriterBinding {
+        policy: current,
+        functions,
+    })
 }
 
 #[cfg(test)]
@@ -356,19 +691,39 @@ mod tests {
     #[test]
     fn server_derived_scope_inherits_limits_and_does_not_widen_resources() {
         let connection = Connection {
-            id: "c".into(), provider: crate::Provider::S3, label: "reports".into(),
-            base_url: "https://s3.example.invalid/reports".into(), external_id: None,
-            status: "active".into(), owner_email: String::new(), created_at: String::new(),
-            last_checked_at: None, last_error: None, can_remove: false,
-            permissions: Some(ConnectorPermissions { scopes: ConnectorPermissions::scoped("objects.write", vec!["allowed".into()], true).scopes,
-                max_request_bytes: 2048, max_response_bytes: 4096 }),
+            id: "c".into(),
+            provider: crate::Provider::S3,
+            label: "reports".into(),
+            base_url: "https://s3.example.invalid/reports".into(),
+            external_id: None,
+            status: "active".into(),
+            owner_email: String::new(),
+            created_at: String::new(),
+            last_checked_at: None,
+            last_error: None,
+            can_remove: false,
+            permissions: Some(ConnectorPermissions {
+                scopes: ConnectorPermissions::scoped("objects.write", vec!["allowed".into()], true)
+                    .scopes,
+                max_request_bytes: 2048,
+                max_response_bytes: 4096,
+            }),
         };
-        let child = scoped(&connection, "objects.write", vec!["allowed".into(), "file".into()], false);
+        let child = scoped(
+            &connection,
+            "objects.write",
+            vec!["allowed".into(), "file".into()],
+            false,
+        );
         assert_eq!(child.max_request_bytes, 2048);
         assert_eq!(child.max_response_bytes, 4096);
         assert!(child.permits("objects.write", &["allowed".into(), "file".into()]));
         assert!(!child.permits("objects.write", &["allowed".into(), "other".into()]));
-        assert!(scoped(&connection, "objects.write", vec!["outside".into()], false).scopes.is_empty());
+        assert!(
+            scoped(&connection, "objects.write", vec!["outside".into()], false)
+                .scopes
+                .is_empty()
+        );
         assert_eq!(bucket(&connection).as_deref(), Some("reports"));
     }
 }

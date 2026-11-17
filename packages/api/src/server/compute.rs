@@ -124,8 +124,13 @@ fn target_from_urls(raw: &str, runtime: Option<&str>) -> Result<(String, String)
     let url = match runtime {
         Some(raw) => {
             let remote = url::Url::parse(raw).map_err(|_| "COMPUTE_DB_RUNTIME_URL is not a URL")?;
-            if !matches!(remote.scheme(), "postgres" | "postgresql") || !remote.username().is_empty() || remote.password().is_some()
-                || remote.query().is_some() || remote.fragment().is_some() || remote.path() != local.path() {
+            if !matches!(remote.scheme(), "postgres" | "postgresql")
+                || !remote.username().is_empty()
+                || remote.password().is_some()
+                || remote.query().is_some()
+                || remote.fragment().is_some()
+                || remote.path() != local.path()
+            {
                 return Err("COMPUTE_DB_RUNTIME_URL must name the same database, without credentials, query or fragment".into());
             }
             remote
@@ -146,11 +151,17 @@ fn target_from_urls(raw: &str, runtime: Option<&str>) -> Result<(String, String)
 /// Non-secret compilation target. The API key/password and administrative URL
 /// credentials are never part of this value or a writer/model request.
 pub fn public_target(schema: &str) -> Result<serde_json::Value, String> {
-    if !is_safe_ident(schema) { return Err("invalid bound compute schema".into()); }
+    if !is_safe_ident(schema) {
+        return Err("invalid bound compute schema".into());
+    }
     let (base, database) = target()?;
     let (host, port) = base.rsplit_once(':').ok_or("invalid compute host/port")?;
     let port: u16 = port.parse().map_err(|_| "invalid compute port")?;
-    if port == 0 || !host.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '.') {
+    if port == 0
+        || !host
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '.')
+    {
         return Err("the runtime requires a plain compute hostname and port".into());
     }
     Ok(json!({"host": host, "port": port, "database": database, "user": schema, "schema": schema}))
@@ -163,8 +174,12 @@ pub fn credential_path(org_id: &str, user_id: &str) -> String {
 
 /// Make sure (org, user) has its schema and role; their name.
 pub async fn ensure(org_id: &str, org_slug: &str, user_id: &str) -> Result<String, String> {
-    let mut app = super::connector::lock(org_id).await.map_err(|e| super::errors::message(&e))?;
-    super::connector::require_actor(&mut app, org_id, user_id).await.map_err(|e| super::errors::message(&e))?;
+    let mut app = super::connector::lock(org_id)
+        .await
+        .map_err(|e| super::errors::message(&e))?;
+    super::connector::require_actor(&mut app, org_id, user_id)
+        .await
+        .map_err(|e| super::errors::message(&e))?;
     if let Some(row) = sqlx::query(
         "select name from compute_schemas where org_id = $1::uuid and user_id = $2::uuid",
     )
@@ -176,7 +191,9 @@ pub async fn ensure(org_id: &str, org_slug: &str, user_id: &str) -> Result<Strin
     {
         let name: String = row.get("name");
         if name != role_name(org_slug, org_id, user_id) || !is_safe_ident(&name) {
-            return Err("stored compute schema does not match its organization/user binding".into());
+            return Err(
+                "stored compute schema does not match its organization/user binding".into(),
+            );
         }
         return Ok(name);
     }
@@ -236,23 +253,46 @@ pub async fn ensure(org_id: &str, org_slug: &str, user_id: &str) -> Result<Strin
     .execute(&mut *app)
     .await
     .map_err(|e| format!("database error: {e}"))?;
-    app.commit().await.map_err(|_| "could not commit the compute binding")?;
+    app.commit()
+        .await
+        .map_err(|_| "could not commit the compute binding")?;
     Ok(name)
 }
 
 /// The conventional database sink stores one JSON value column. Provisioning
 /// is trusted app DDL, separate from the runtime's operation-scoped query API.
-pub async fn ensure_sink_table(org_id: &str, org_slug: &str, user_id: &str, table: &str) -> Result<String, String> {
-    if !is_safe_ident(table) { return Err("invalid database sink table identifier".into()); }
-    let schema = ensure(org_id, org_slug, user_id).await?;
-    let _guard = super::connector::lock(org_id).await.map_err(|e| super::errors::message(&e))?;
-    let mut tx = pool()?.begin().await.map_err(|_| "compute database unavailable")?;
-    for statement in [format!("grant \"{schema}\" to current_user"), format!("set local role \"{schema}\""),
-        format!("create table if not exists \"{schema}\".\"{table}\" (value jsonb not null)"),
-        "reset role".into(), format!("revoke \"{schema}\" from current_user")] {
-        sqlx::query(AssertSqlSafe(statement)).execute(&mut *tx).await.map_err(|_| "could not provision the bound database sink table")?;
+pub async fn ensure_sink_table(
+    org_id: &str,
+    org_slug: &str,
+    user_id: &str,
+    table: &str,
+) -> Result<String, String> {
+    if !is_safe_ident(table) {
+        return Err("invalid database sink table identifier".into());
     }
-    tx.commit().await.map_err(|_| "could not commit database sink provisioning")?;
+    let schema = ensure(org_id, org_slug, user_id).await?;
+    let _guard = super::connector::lock(org_id)
+        .await
+        .map_err(|e| super::errors::message(&e))?;
+    let mut tx = pool()?
+        .begin()
+        .await
+        .map_err(|_| "compute database unavailable")?;
+    for statement in [
+        format!("grant \"{schema}\" to current_user"),
+        format!("set local role \"{schema}\""),
+        format!("create table if not exists \"{schema}\".\"{table}\" (value jsonb not null)"),
+        "reset role".into(),
+        format!("revoke \"{schema}\" from current_user"),
+    ] {
+        sqlx::query(AssertSqlSafe(statement))
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| "could not provision the bound database sink table")?;
+    }
+    tx.commit()
+        .await
+        .map_err(|_| "could not commit database sink provisioning")?;
     Ok(schema)
 }
 
@@ -267,11 +307,17 @@ pub async fn drop_schema(name: &str) -> Result<(), String> {
         .begin()
         .await
         .map_err(|e| format!("the notebook database is unreachable: {e}"))?;
-    let exists: bool = sqlx::query("select exists(select 1 from pg_roles where rolname=$1) as present")
-        .bind(name).fetch_one(&mut *tx).await
-        .map_err(|e| format!("the notebook database is unreachable: {e}"))?.get("present");
+    let exists: bool =
+        sqlx::query("select exists(select 1 from pg_roles where rolname=$1) as present")
+            .bind(name)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| format!("the notebook database is unreachable: {e}"))?
+            .get("present");
     let mut statements = Vec::new();
-    if exists { statements.push(format!("grant \"{name}\" to current_user")); }
+    if exists {
+        statements.push(format!("grant \"{name}\" to current_user"));
+    }
     statements.push(format!("drop schema if exists \"{name}\" cascade"));
     if exists {
         statements.push(format!("revoke \"{name}\" from current_user"));
@@ -294,8 +340,16 @@ mod tests {
     #[test]
     fn remote_compute_address_changes_transport_only() {
         let local = "postgres://admin:private@127.0.0.1:15433/compute";
-        assert_eq!(target_from_urls(local, Some("postgres://compute-db:5432/compute")).unwrap(), ("compute-db:5432".into(), "compute".into()));
-        for remote in ["postgres://compute-db:5432/other", "postgres://admin:private@compute-db/compute", "https://compute-db/compute", "postgres://compute-db/compute?schema=other"] {
+        assert_eq!(
+            target_from_urls(local, Some("postgres://compute-db:5432/compute")).unwrap(),
+            ("compute-db:5432".into(), "compute".into())
+        );
+        for remote in [
+            "postgres://compute-db:5432/other",
+            "postgres://admin:private@compute-db/compute",
+            "https://compute-db/compute",
+            "postgres://compute-db/compute?schema=other",
+        ] {
             assert!(target_from_urls(local, Some(remote)).is_err());
         }
     }

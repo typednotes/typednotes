@@ -26,11 +26,19 @@ jobs:
         shell: bash
         run: bash ci/test-require-main-ci.sh
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
       - name: Shared API and permission contracts
         run: cargo test -p api --features server --lib
       - name: Server build
         run: cargo check -p web --features server
+      - name: Server clippy
+        run: |
+          cargo clippy -p web --features server --all-targets -- -D warnings
+          cargo clippy -p api --features server --all-targets -- -D warnings
       - name: Install workflow policy dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-yaml
       - name: Workflow release policy
@@ -47,9 +55,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Browser build
         run: cargo check -p web --features web --target wasm32-unknown-unknown
+      - name: Browser clippy
+        run: cargo clippy -p web --features web --target wasm32-unknown-unknown --all-targets -- -D warnings
       - name: Install branding test dependencies
         run: |
           sudo apt-get update

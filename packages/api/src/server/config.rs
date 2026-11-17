@@ -107,7 +107,8 @@ pub fn runtime_liaison_url() -> Option<String> {
 }
 
 pub fn background_enabled() -> bool {
-    !env("TYPEDNOTES_BACKGROUND").is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "off"))
+    !env("TYPEDNOTES_BACKGROUND")
+        .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "off"))
 }
 
 /// A non-negative integer setting, with a default.

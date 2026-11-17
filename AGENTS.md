@@ -23,7 +23,7 @@ stay in sync (see Project-specific notes).
 | Install | `rustup target add wasm32-unknown-unknown`; install `dx` matching `dioxus` in `Cargo.lock` (0.7.10, see `Dockerfile`); local DB: `export DATABASE_URL=…` then `scripts/dev-db.sh`; private env: `cp .env.local.example .env.local` (see `docs/local-development.md`) |
 | Type-check | `cargo check -p web --features server` and `cargo check -p web --features web --target wasm32-unknown-unknown` |
 | Test | `cargo test -p api --features server --lib`; `bash ci/test-require-main-ci.sh`; `python3 ci/test-workflow-policy.py` (needs PyYAML); `python3 scripts/test_logo.py` (needs fontTools, Fira Code, rsvg); opt-in end-to-end: `uv run --with playwright scripts/test_notebook_ui.py --help`, `scripts/test_native_connectors.py` |
-| Lint / format | `TODO(agents-md): no lint/format step runs in CI; clippy.toml configures cargo clippy but it is not enforced` |
+| Lint / format | `cargo fmt --all --check`; `cargo clippy -p web --features server --all-targets -- -D warnings`; `cargo clippy -p api --features server --all-targets -- -D warnings`; `cargo clippy -p web --features web --target wasm32-unknown-unknown --all-targets -- -D warnings` |
 | Build / release | `dx bundle -p web --web --release` (see `Dockerfile`); release: a `vX.Y.Z` tag publishes the image via `.github/workflows/docker-publish.yml`, gated by `ci/require-main-ci.sh` (pushing is the user's action — see the overrides below) |
 | Run (local app) | `bash scripts/dev.sh --check`, then `bash scripts/dev.sh` (`dx serve -p web`, http://localhost:8080); `TODO(agents-md): no CLI entry point` |
 
@@ -160,12 +160,13 @@ experiments are logged too.
 ### Types: use the strongest standard checking the language offers, maximally
 
 - Use the standard type-checker of the language/framework in its strictest practical mode, run it in
-  CI, and keep it at zero errors. Here: Rust (edition 2021, Dioxus 0.7.10). CI runs `cargo check`
-  on the server (`-p web --features server`) and, in the extended job, on the browser build
-  (`--features web --target wasm32-unknown-unknown`). `clippy.toml` sets
-  `await-holding-invalid-types` (Dioxus signal borrows held across `.await`), but there is no
-  `[lints]` table, `cargo clippy` is not run in CI and warnings are not denied — the standard's
-  target is `cargo clippy --workspace --all-targets -- -D warnings`.
+  CI, and keep it at zero errors. Here: Rust (edition 2021, Dioxus 0.7.10), with
+  `cargo clippy --all-targets -- -D warnings` (default lint groups plus `clippy.toml`'s
+  `await-holding-invalid-types` for Dioxus signal borrows held across `.await`; warnings fail the
+  build) and `cargo fmt --all --check` in CI. Clippy covers what CI builds: the server
+  (`-p web` and `-p api`, `--features server`) in the check job and the browser build
+  (`-p web --features web --target wasm32-unknown-unknown`) in the extended job; the `desktop`
+  and `mobile` packages are not built in CI. A `#[allow(clippy::…)]` needs a comment justifying it.
 - Make illegal states unrepresentable: precise types, enums/sum types over strings and flags, new
   types for identifiers and units, immutable data by default. Avoid `Any`, casts and ignores; when
   one is unavoidable, scope it narrowly and justify it in a comment.

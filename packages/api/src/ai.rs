@@ -533,7 +533,9 @@ fn uses_openai_responses(model: &str) -> bool {
         .and_then(|name| name.split(['.', '-']).next())
         .and_then(|major| major.parse::<u32>().ok())
         .is_some_and(|major| major >= 5)
-        || ["o1", "o3", "o4"].iter().any(|prefix| model.starts_with(prefix))
+        || ["o1", "o3", "o4"]
+            .iter()
+            .any(|prefix| model.starts_with(prefix))
 }
 
 /// USD per million tokens, as published by the linked catalog. Missing means
@@ -665,7 +667,11 @@ mod tests {
             (Provider::OpencodeGo, "minimax-m2.7", AiApi::Messages),
             (Provider::OpencodeZen, "minimax-m2.7", AiApi::Chat),
             (Provider::OpencodeZen, "muse-spark-1.3", AiApi::Responses),
-            (Provider::OpencodeGo, "muse-spark-1.3-contributor", AiApi::Responses),
+            (
+                Provider::OpencodeGo,
+                "muse-spark-1.3-contributor",
+                AiApi::Responses,
+            ),
             (Provider::OpencodeZen, "jev-1.13", AiApi::Classifier),
             (Provider::GithubCopilot, "gpt-4.1", AiApi::Chat),
             (Provider::GithubCopilot, "gpt-4o", AiApi::Chat),

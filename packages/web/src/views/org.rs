@@ -17,10 +17,12 @@ pub fn ProjectView(slug: String, project: String, connected: String, error: Stri
 /// `/orgs/:slug/projects/:project/graphs/:graph`: a notebook.
 #[component]
 pub fn GraphView(slug: String, project: String, graph: String) -> Element {
-    let nav=use_navigator();
-    use_effect(move ||{nav.replace(format!("/orgs/{slug}/projects/{project}"));});
-    let _=graph;
-    rsx!{p{role:"status","Opening project notes…"}}
+    let nav = use_navigator();
+    use_effect(move || {
+        nav.replace(format!("/orgs/{slug}/projects/{project}"));
+    });
+    let _ = graph;
+    rsx! {p{role:"status","Opening project notes…"}}
 }
 
 /// `/settings`: your account.

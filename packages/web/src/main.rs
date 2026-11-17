@@ -2,8 +2,8 @@ use dioxus::prelude::*;
 
 use ui::{Navbar, UserMenu};
 use views::{
-    AccountView, GraphView, Home, Login, OrgSettingsHome, OrgSettingsView, OrgView,
-    ProjectSettingsHome, ProjectSettingsView, ProjectView, Organizations, Onboarding,
+    AccountView, GraphView, Home, Login, Onboarding, OrgSettingsHome, OrgSettingsView, OrgView,
+    Organizations, ProjectSettingsHome, ProjectSettingsView, ProjectView,
 };
 
 mod views;
@@ -82,7 +82,7 @@ fn SharedView(token: String) -> Element {
 /// which allows us to use the web-specific `Route` enum.
 #[component]
 fn WebNavbar() -> Element {
-    let current_path=use_route::<Route>().to_string();
+    let current_path = use_route::<Route>().to_string();
     rsx! {
         Navbar {
             Link {

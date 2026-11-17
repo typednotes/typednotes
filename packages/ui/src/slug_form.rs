@@ -1,6 +1,6 @@
 use api::{
-    check_org_slug, check_project_slug, create_org, create_project,
-    slugify, validate_org, validate_slug, SlugCheck,
+    check_org_slug, check_project_slug, create_org, create_project, slugify, validate_org,
+    validate_slug, SlugCheck,
 };
 use dioxus::prelude::*;
 
@@ -49,10 +49,13 @@ pub(crate) fn NewSlugForm(
                 return None;
             }
             if let Err(message) = validate_slug(&s) {
-                return Some((s, SlugCheck {
-                    available: false,
-                    message,
-                }));
+                return Some((
+                    s,
+                    SlugCheck {
+                        available: false,
+                        message,
+                    },
+                ));
             }
             futures_timer::Delay::new(std::time::Duration::from_millis(400)).await;
             let checked = s.clone();
@@ -60,13 +63,19 @@ pub(crate) fn NewSlugForm(
                 Scope::Org => check_org_slug(s).await,
                 Scope::Project { org } => check_project_slug(org, s).await,
             };
-            Some((checked, answer.unwrap_or_else(|e| SlugCheck {
-                available: false,
-                message: format!("could not check the slug: {}", error_message(&e)),
-            })))
+            Some((
+                checked,
+                answer.unwrap_or_else(|e| SlugCheck {
+                    available: false,
+                    message: format!("could not check the slug: {}", error_message(&e)),
+                }),
+            ))
         }
     });
-    let verdict = check().flatten().filter(|(checked, _)| *checked == slug().trim().to_lowercase()).map(|(_, verdict)| verdict);
+    let verdict = check()
+        .flatten()
+        .filter(|(checked, _)| *checked == slug().trim().to_lowercase())
+        .map(|(_, verdict)| verdict);
     let blocked = verdict.as_ref().is_some_and(|c| !c.available);
 
     let submit = move |evt: FormEvent| {
@@ -79,18 +88,27 @@ pub(crate) fn NewSlugForm(
                 return;
             }
             busy.set(true);
-            let saved_scope=scope.clone();
+            let saved_scope = scope.clone();
             let created = match scope {
                 Scope::Org => create_org(s, n).await.map(|o| o.slug),
                 Scope::Project { org } => create_project(org, s, n).await.map(|p| p.slug),
             };
             match created {
                 Ok(created) => {
-                    let defaults=match saved_scope {
-                        Scope::Org=>api::set_workspace_defaults(created.clone(),None,None,false).await,
-                        Scope::Project{org}=>api::set_workspace_defaults(org,Some(created.clone()),None,false).await,
+                    let defaults = match saved_scope {
+                        Scope::Org => {
+                            api::set_workspace_defaults(created.clone(), None, None, false).await
+                        }
+                        Scope::Project { org } => {
+                            api::set_workspace_defaults(org, Some(created.clone()), None, false)
+                                .await
+                        }
                     };
-                    if let Err(e)=defaults { error.set(Some(error_message(&e)));busy.set(false);return; }
+                    if let Err(e) = defaults {
+                        error.set(Some(error_message(&e)));
+                        busy.set(false);
+                        return;
+                    }
                     crate::onboarding::refresh_workspace();
                     slug.set(String::new());
                     name.set(String::new());

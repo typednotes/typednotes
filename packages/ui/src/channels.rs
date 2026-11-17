@@ -1,7 +1,8 @@
 use api::{
-    add_existing_interface, add_slack_channel, connect_signal, connect_whatsapp, health, list_channels, list_connections,
-    list_messages, list_slack_channels, remove_channel, send_message, validate_message,
-    validate_signal, validate_whatsapp, Channel, Health, Message, Provider,
+    add_existing_interface, add_slack_channel, connect_signal, connect_whatsapp, health,
+    list_channels, list_connections, list_messages, list_slack_channels, remove_channel,
+    send_message, validate_message, validate_signal, validate_whatsapp, Channel, Health, Message,
+    Provider,
 };
 use dioxus::prelude::*;
 
@@ -170,7 +171,14 @@ fn ChannelRow(
 ) -> Element {
     let mut confirming = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
-    let (note, ok) = if channel.paired { ("Linked device · messages received through Typednotes".to_string(), true) } else { delivery_note(channel.provider, health.as_ref()) };
+    let (note, ok) = if channel.paired {
+        (
+            "Linked device · messages received through Typednotes".to_string(),
+            true,
+        )
+    } else {
+        delivery_note(channel.provider, health.as_ref())
+    };
     let id = channel.id.clone();
     let manage_slug = slug.clone();
     let manage_project = project.clone();
@@ -226,7 +234,12 @@ fn AddInterface(
     let selected_kind = use_selected(kind.into());
     let org = slug.clone();
     let mut connections = use_resource(move || list_connections(org.clone()));
-    let existing = connections().and_then(Result::ok).unwrap_or_default().into_iter().filter(|c| c.provider == kind()).collect::<Vec<_>>();
+    let existing = connections()
+        .and_then(Result::ok)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|c| c.provider == kind())
+        .collect::<Vec<_>>();
     rsx! {
         div { class: "conn-section",
             h4 { "Add an interface" }
@@ -279,8 +292,18 @@ fn AddInterface(
 }
 
 #[component]
-fn ExistingInterface(slug: String, project: String, connections: Vec<api::Connection>, on_added: EventHandler<()>) -> Element {
-    let mut connection = use_signal(|| connections.first().map(|c| c.id.clone()).unwrap_or_default());
+fn ExistingInterface(
+    slug: String,
+    project: String,
+    connections: Vec<api::Connection>,
+    on_added: EventHandler<()>,
+) -> Element {
+    let mut connection = use_signal(|| {
+        connections
+            .first()
+            .map(|c| c.id.clone())
+            .unwrap_or_default()
+    });
     let selected = use_selected(connection.into());
     let mut busy = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
@@ -347,7 +370,9 @@ fn SlackForm(
             (chosen, result)
         }
     }));
-    let current_channels = available().filter(|(id, _)| *id == current).map(|(_, result)| result);
+    let current_channels = available()
+        .filter(|(id, _)| *id == current)
+        .map(|(_, result)| result);
 
     let add = {
         let current = current.clone();
@@ -610,7 +635,8 @@ fn Composer(
             evt.prevent_default();
             let checked = validate_message(&text()).and_then(|_| {
                 if needs_recipient {
-                    api::validate_recipient(provider.unwrap_or(Provider::Whatsapp), &recipient()).map(|_| ())
+                    api::validate_recipient(provider.unwrap_or(Provider::Whatsapp), &recipient())
+                        .map(|_| ())
                 } else {
                     Ok(())
                 }

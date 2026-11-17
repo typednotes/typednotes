@@ -448,11 +448,18 @@ pub struct LodeProgress {
     pub question: Option<WriterQuestion>,
 }
 
-#[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
-pub struct WriterQuestion {pub id:String,pub question:WriterQuestionText}
-#[derive(Clone,Debug,PartialEq,Serialize,Deserialize)]
-#[serde(rename_all="camelCase")]
-pub struct WriterQuestionText {pub text:String,pub options:Vec<String>,pub free_text:bool}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WriterQuestion {
+    pub id: String,
+    pub question: WriterQuestionText,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriterQuestionText {
+    pub text: String,
+    pub options: Vec<String>,
+    pub free_text: bool,
+}
 
 /// The answer to feeding an input: the nodes that changed.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -655,13 +662,27 @@ pub fn validate_cell(
     };
     let required = |o: &Option<String>, what: &str| trimmed(o).ok_or(format!("{what}: required"));
     let mut out = CellConfig::default();
-    if config.connectors.len() > 32 || config.connectors.iter().map(|c| &c.connection).collect::<BTreeSet<_>>().len() != config.connectors.len() {
+    if config.connectors.len() > 32
+        || config
+            .connectors
+            .iter()
+            .map(|c| &c.connection)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != config.connectors.len()
+    {
         return Err("connectors: at most 32 distinct connections".into());
     }
     out.connectors = config.connectors.clone();
-    out.dependencies = config.dependencies.as_ref().map(|deps| {
-        deps.iter().map(|name| validate_ident("dependency", name)).collect::<Result<Vec<_>, _>>()
-    }).transpose()?;
+    out.dependencies = config
+        .dependencies
+        .as_ref()
+        .map(|deps| {
+            deps.iter()
+                .map(|name| validate_ident("dependency", name))
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?;
     if let Some(deps) = &out.dependencies {
         if deps.len() > 64 || deps.iter().collect::<BTreeSet<_>>().len() != deps.len() {
             return Err("dependencies: at most 64 distinct cell names".into());
@@ -672,8 +693,12 @@ pub fn validate_cell(
     }
     out.output_type = trimmed(&config.output_type);
     if let Some(ty) = &out.output_type {
-        if ty.len() > 512 || ty.chars().any(|c| c.is_control() || c == ';')
-            || ty.contains("--") || ty.contains("/-") || ty.contains('#') {
+        if ty.len() > 512
+            || ty.chars().any(|c| c.is_control() || c == ';')
+            || ty.contains("--")
+            || ty.contains("/-")
+            || ty.contains('#')
+        {
             return Err("output type: one Lean type expression, at most 512 characters".into());
         }
     }
@@ -912,7 +937,11 @@ pub struct LunFunction {
     pub signature: String,
     #[serde(default)]
     pub producer: bool,
-    #[serde(default, rename = "outputType", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "outputType",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub output_type: Option<String>,
 }
 
@@ -1297,23 +1326,43 @@ fn cell_instruction(cell: &Cell) -> String {
              app persists and sends every changed emission in order)"
         ),
     };
-    let deps = cell.config.dependencies.clone().unwrap_or_else(|| crate::cell_references(&cell.description));
+    let deps = cell
+        .config
+        .dependencies
+        .clone()
+        .unwrap_or_else(|| crate::cell_references(&cell.description));
     let named = if cell.config.dependencies.is_some() || !deps.is_empty() {
         if deps.is_empty() {
             " This note takes no note arguments (a zero-dependency function is a source). Runtime producer clock/cursor parameters are not note arguments.".into()
         } else {
             format!(" Its graph arguments are exactly [{}], in that order; infer each argument type from the named note's output. No undeclared note dependencies; producer clock/cursor parameters are runtime-owned.", deps.join(", "))
         }
-    } else { String::new() };
+    } else {
+        String::new()
+    };
     let output = cell.config.output_type.as_ref().map(|ty|
         format!(" The output type is constrained to `{ty}`; ordinary functions return `Eff effs ({ty})`, while producers emit `{ty}` values inside the typed step envelope. Preserve outputType in lun.json; Lun checks the caller-owned emission/result type.")
     ).unwrap_or_default();
-    let external: Vec<_> = cell.config.connectors.iter().filter(|grant| crate::LocalService::from_selection(&grant.connection).is_none()).collect();
-    let local: Vec<_> = cell.config.connectors.iter().filter(|grant| crate::LocalService::from_selection(&grant.connection).is_some()).collect();
-    let connectors = if external.is_empty() { String::new() } else {
+    let external: Vec<_> = cell
+        .config
+        .connectors
+        .iter()
+        .filter(|grant| crate::LocalService::from_selection(&grant.connection).is_none())
+        .collect();
+    let local: Vec<_> = cell
+        .config
+        .connectors
+        .iter()
+        .filter(|grant| crate::LocalService::from_selection(&grant.connection).is_some())
+        .collect();
+    let connectors = if external.is_empty() {
+        String::new()
+    } else {
         format!(" This note may use only the following project connected-service grants through `Control.Monad.Effect.Connector`, in its `Eff` row: {}. Use named operations and structured resource components; never raw HTTP or IO to bypass a connector grant.", serde_json::to_string(&external).unwrap_or_default())
     };
-    let locals = if local.is_empty() { String::new() } else {
+    let locals = if local.is_empty() {
+        String::new()
+    } else {
         format!(" Bound local-service requests: {}. Use the PostgreSQL or SecretStore effect and the trusted actor/graph bindings; these are not external Connector credentials. No raw SQL or raw vault HTTP.", serde_json::to_string(&local).unwrap_or_default())
     };
     format!("{instruction}{named}{output}{connectors}{locals}")
@@ -1564,10 +1613,14 @@ mod tests {
 
     #[test]
     fn producer_manifests_preserve_emission_contracts_through_app_serialization() {
-        let function=json!({"name":"paced","module":"Sheet","function":"Sheet.paced","signature":"Nat → Nat → Option Bool → Eff [] (List Nat × Bool × Option Nat)","producer":true,"outputType":"Nat"});
-        let manifest:LunJson=serde_json::from_value(json!({"functions":[function.clone()]})).unwrap();
-        assert_eq!(serde_json::to_value(&manifest.functions[0]).unwrap(),function);
-        assert!(cell_impl(CellType::Node,"paced",&CellConfig::default(),&manifest).producer);
+        let function = json!({"name":"paced","module":"Sheet","function":"Sheet.paced","signature":"Nat → Nat → Option Bool → Eff [] (List Nat × Bool × Option Nat)","producer":true,"outputType":"Nat"});
+        let manifest: LunJson =
+            serde_json::from_value(json!({"functions":[function.clone()]})).unwrap();
+        assert_eq!(
+            serde_json::to_value(&manifest.functions[0]).unwrap(),
+            function
+        );
+        assert!(cell_impl(CellType::Node, "paced", &CellConfig::default(), &manifest).producer);
         assert!(serde_json::from_value::<LunFunction>(json!({"name":"x","module":"X","function":"X.x","signature":"Unit → Eff [] Nat","producer":"yes"})).is_err());
     }
 
@@ -1960,7 +2013,10 @@ mod tests {
         assert!(m.contains("Currently: `total : List Nat → Eff [] Nat` in `Sheet`."));
         assert!(m.contains("What is wrong: it forgets the shipping"));
         let b = build_repair_message("Invoices", &[&c], "function total: type mismatch");
-        assert!(b.contains("function total: type mismatch") && b.contains("- `total` (Note · calculation)"));
+        assert!(
+            b.contains("function total: type mismatch")
+                && b.contains("- `total` (Note · calculation)")
+        );
     }
 
     #[test]

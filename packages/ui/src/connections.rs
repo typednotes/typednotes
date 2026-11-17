@@ -1,10 +1,10 @@
 use api::{
     ai_environment, aws_s3_endpoint, connect_ai, connect_azure, connect_caldav, connect_jmap,
-    connect_notion, connect_s3, delete_connection, health, list_connections, test_connection,
-    validate_api_key, validate_azure, validate_base_url, validate_caldav, validate_jmap,
-    validate_name, validate_s3, Connection, Health, Provider, TestResult,
-    connector_operations, connector_scope_label, set_connection_permissions,
-    ConnectorPermissions, ConnectorScope, PermissionPreset,
+    connect_notion, connect_s3, connector_operations, connector_scope_label, delete_connection,
+    health, list_connections, set_connection_permissions, test_connection, validate_api_key,
+    validate_azure, validate_base_url, validate_caldav, validate_jmap, validate_name, validate_s3,
+    Connection, ConnectorPermissions, ConnectorScope, Health, PermissionPreset, Provider,
+    TestResult,
 };
 use dioxus::prelude::*;
 
@@ -26,7 +26,10 @@ pub(crate) const CONNECTIONS_CSS: Asset = asset!("/assets/styling/connections.cs
 /// keys to the server, which puts them in the vault and answers with the
 /// connection's public description only.
 #[component]
-pub(crate) fn ConnectionsPanel(slug: ReadSignal<String>, #[props(default = false)] setup_only: bool) -> Element {
+pub(crate) fn ConnectionsPanel(
+    slug: ReadSignal<String>,
+    #[props(default = false)] setup_only: bool,
+) -> Element {
     let mut list = use_resource(move || list_connections(slug()));
     let settings = use_resource(move || api::get_org_settings(slug()));
 
@@ -72,19 +75,34 @@ pub(crate) fn ConnectionsPanel(slug: ReadSignal<String>, #[props(default = false
 }
 
 #[component]
-fn ConnectionRow(slug: String, connection: Connection, policy: Option<api::EffectPolicy>, on_changed: EventHandler<()>) -> Element {
+fn ConnectionRow(
+    slug: String,
+    connection: Connection,
+    policy: Option<api::EffectPolicy>,
+    on_changed: EventHandler<()>,
+) -> Element {
     let mut busy = use_signal(|| false);
     let mut result = use_signal(|| None::<TestResult>);
     let mut confirming = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
     let mut show_models = use_signal(|| false);
     let price_model = use_signal(String::new);
-    let parent = connection.permissions.clone().unwrap_or_else(|| ConnectorPermissions::preset(connection.provider, PermissionPreset::ReadOnly));
-    let operation = if connection.provider.is_ai() { "models.list" } else if connection.provider.is_code() { "repositories.list" } else { "" };
+    let parent = connection.permissions.clone().unwrap_or_else(|| {
+        ConnectorPermissions::preset(connection.provider, PermissionPreset::ReadOnly)
+    });
+    let operation = if connection.provider.is_ai() {
+        "models.list"
+    } else if connection.provider.is_code() {
+        "repositories.list"
+    } else {
+        ""
+    };
     let blocked = policy.as_ref().and_then(|policy| {
         if !policy.allows_connector(connection.provider) || !operation.is_empty() {
             policy.connector_blocker(connection.provider, &parent, operation, &[])
-        } else { None }
+        } else {
+            None
+        }
     });
 
     let (id, s) = (connection.id.clone(), slug.clone());
@@ -199,8 +217,10 @@ fn ConnectionRow(slug: String, connection: Connection, policy: Option<api::Effec
 
 #[component]
 fn CodeTokenRepair(slug: String, connection: String, on_changed: EventHandler<()>) -> Element {
-    let mut token=use_signal(String::new);let mut busy=use_signal(||false);let mut error=use_signal(||None::<String>);
-    rsx!{details{class:"conn-subform",summary{"Use a replacement code-host token"}
+    let mut token = use_signal(String::new);
+    let mut busy = use_signal(|| false);
+    let mut error = use_signal(|| None::<String>);
+    rsx! {details{class:"conn-subform",summary{"Use a replacement code-host token"}
         p{class:"conn-meta","Alternatively to OAuth, use a personal access token for this code host. The connection ID, project links and application permissions stay unchanged."}
         Label{html_for:"repair-{connection}","Replacement token"}
         Input{id:"repair-{connection}",r#type:"password",autocomplete:"off",value:token(),disabled:busy(),oninput:move |e:FormEvent|token.set(e.value())}
@@ -236,18 +256,28 @@ pub(crate) fn PermissionEditor(
     };
     let scope_label = match (provider, local_service) {
         (Some(provider), None) => connector_scope_label(provider),
-        (None, Some(api::LocalService::Postgres)) => "Table names within the executing user's database schema",
+        (None, Some(api::LocalService::Postgres)) => {
+            "Table names within the executing user's database schema"
+        }
         (None, Some(api::LocalService::Vault)) => "Project secret names",
         _ => "Resources",
     };
-    let displayed = value.clone().or_else(|| ceiling.clone()).unwrap_or_else(|| policy_preset(PermissionPreset::ReadOnly));
+    let displayed = value
+        .clone()
+        .or_else(|| ceiling.clone())
+        .unwrap_or_else(|| policy_preset(PermissionPreset::ReadOnly));
     let preset = |preset| {
         let requested = policy_preset(preset);
-        ceiling.as_ref().map_or(requested.clone(), |limit| limit.intersect(&requested))
+        ceiling
+            .as_ref()
+            .map_or(requested.clone(), |limit| limit.intersect(&requested))
     };
     let read = preset(PermissionPreset::ReadOnly);
     let write = preset(PermissionPreset::ReadWrite);
-    let common_root = displayed.scopes.first().map(|s| s.root.clone())
+    let common_root = displayed
+        .scopes
+        .first()
+        .map(|s| s.root.clone())
         .filter(|root| displayed.scopes.iter().all(|s| &s.root == root));
     let mixed_resources = !displayed.scopes.is_empty() && common_root.is_none();
     rsx! {
@@ -366,8 +396,16 @@ pub(crate) fn PermissionEditor(
 }
 
 #[component]
-fn ConnectionPermissions(slug: String, connection: Connection, on_changed: EventHandler<()>) -> Element {
-    let mut permissions = use_signal(|| connection.permissions.clone().unwrap_or_else(|| ConnectorPermissions::preset(connection.provider, PermissionPreset::ReadOnly)));
+fn ConnectionPermissions(
+    slug: String,
+    connection: Connection,
+    on_changed: EventHandler<()>,
+) -> Element {
+    let mut permissions = use_signal(|| {
+        connection.permissions.clone().unwrap_or_else(|| {
+            ConnectorPermissions::preset(connection.provider, PermissionPreset::ReadOnly)
+        })
+    });
     let mut busy = use_signal(|| false);
     let mut outcome = use_signal(|| None::<Result<String, String>>);
     rsx! {
@@ -504,20 +542,40 @@ fn ProviderSelect(
 
 /// The ways to add a connection, grouped by what it is for.
 #[component]
-fn AddConnection(slug: String, connected: ReadSignal<Vec<Provider>>, setup_only: bool, on_added: EventHandler<()>) -> Element {
+fn AddConnection(
+    slug: String,
+    connected: ReadSignal<Vec<Provider>>,
+    setup_only: bool,
+    on_added: EventHandler<()>,
+) -> Element {
     let status = use_resource(health);
     let h = status().and_then(|r| r.ok());
     let vault = h.as_ref().is_some_and(|h| h.vault);
     let mut storage = use_signal(|| Provider::S3);
     let mut calendar = use_signal(|| Provider::GoogleCalendar);
     let mut mail = use_signal(|| Provider::Gmail);
-    let available = |providers: &[Provider]| providers.iter().copied().filter(|p| !connected().contains(p)).collect::<Vec<_>>();
+    let available = |providers: &[Provider]| {
+        providers
+            .iter()
+            .copied()
+            .filter(|p| !connected().contains(p))
+            .collect::<Vec<_>>()
+    };
     let code_options = available(&Provider::CODE);
     let storage_options = available(&Provider::STORAGE);
     let calendar_options = available(&Provider::CALENDARS);
     let mail_options = available(&Provider::MAIL);
-    let ai_options = available(Provider::AI).into_iter().filter(|p| !setup_only || p.can_generate()).collect::<Vec<_>>();
-    let selected = |options: &[Provider], requested: Provider| options.iter().copied().find(|p| *p == requested).or_else(|| options.first().copied());
+    let ai_options = available(Provider::AI)
+        .into_iter()
+        .filter(|p| !setup_only || p.can_generate())
+        .collect::<Vec<_>>();
+    let selected = |options: &[Provider], requested: Provider| {
+        options
+            .iter()
+            .copied()
+            .find(|p| *p == requested)
+            .or_else(|| options.first().copied())
+    };
     let chosen_storage = selected(&storage_options, storage());
     let chosen_calendar = selected(&calendar_options, calendar());
     let chosen_mail = selected(&mail_options, mail());
@@ -1000,20 +1058,36 @@ fn AzureForm(slug: String, disabled: bool, on_added: EventHandler<()>) -> Elemen
 }
 
 #[component]
-fn AiForm(slug: String, options: ReadSignal<Vec<Provider>>, disabled: bool, on_added: EventHandler<()>) -> Element {
+fn AiForm(
+    slug: String,
+    options: ReadSignal<Vec<Provider>>,
+    disabled: bool,
+    on_added: EventHandler<()>,
+) -> Element {
     let mut requested_provider = use_signal(|| Provider::Anthropic);
-    let provider = use_memo(move || options().iter().copied().find(|p| *p == requested_provider())
-        .or_else(|| options().first().copied()).unwrap_or(Provider::Anthropic));
+    let provider = use_memo(move || {
+        options()
+            .iter()
+            .copied()
+            .find(|p| *p == requested_provider())
+            .or_else(|| options().first().copied())
+            .unwrap_or(Provider::Anthropic)
+    });
     let mut base_url = use_signal(String::new);
     let mut key = use_signal(String::new);
     let env_slug = slug.clone();
     let environment = use_resource(move || ai_environment(env_slug.clone()));
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
-    let mut last_provider = use_signal(|| provider());
+    let mut last_provider = use_signal(|| provider.cloned());
     use_effect(move || {
         let current = provider();
-        if current != last_provider() { key.set(String::new()); base_url.set(String::new()); error.set(None); last_provider.set(current); }
+        if current != last_provider() {
+            key.set(String::new());
+            base_url.set(String::new());
+            error.set(None);
+            last_provider.set(current);
+        }
     });
     let key_name = provider().ai_info().map(|p| p.env).unwrap_or("API_KEY");
 

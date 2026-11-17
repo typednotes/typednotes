@@ -57,7 +57,12 @@ pub(crate) fn MembersPanel(slug: ReadSignal<String>, role: String) -> Element {
 }
 
 #[component]
-fn MemberRow(slug: String, member: Member, actor_role: String, on_removed: EventHandler<bool>) -> Element {
+fn MemberRow(
+    slug: String,
+    member: Member,
+    actor_role: String,
+    on_removed: EventHandler<bool>,
+) -> Element {
     let mut confirming = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);

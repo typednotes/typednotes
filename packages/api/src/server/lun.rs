@@ -17,7 +17,9 @@ pub fn configured() -> bool {
 pub const RUNTIME_CONTRACT: &str = "stateless-producers-v4";
 
 fn require_contract(body: &Value) -> Result<(), String> {
-    if body.get("state").and_then(Value::as_str) == Some("ready") && body.get("runtimeContract").and_then(Value::as_str) != Some(RUNTIME_CONTRACT) {
+    if body.get("state").and_then(Value::as_str) == Some("ready")
+        && body.get("runtimeContract").and_then(Value::as_str) != Some(RUNTIME_CONTRACT)
+    {
         return Err("the ready runtime build has an incompatible execution contract; deploy Lun 0.4.1 or newer and rebuild the project".into());
     }
     Ok(())
@@ -163,7 +165,10 @@ pub async fn build(id: &str, graph: &str) -> Result<Option<Build>, String> {
     .map_err(|e| format!("the code runtime: {e}"))?;
     match a.status {
         404 => Ok(None),
-        200 => { require_contract(&a.body)?; Ok(Some(parse_build(&a.body, graph))) },
+        200 => {
+            require_contract(&a.body)?;
+            Ok(Some(parse_build(&a.body, graph)))
+        }
         _ => Err(fail("the build status", &a)),
     }
 }
@@ -178,7 +183,9 @@ pub async fn call_function(
 ) -> Result<Result<Value, String>, String> {
     let path = format!("/v0/builds/{}/functions/{}", segment(build), segment(name));
     let mut body = execution.clone();
-    let fields = body.as_object_mut().ok_or("execution context must be an object")?;
+    let fields = body
+        .as_object_mut()
+        .ok_or("execution context must be an object")?;
     if !fields.contains_key("binding") || !fields.contains_key("policy") {
         return Err("authenticated runtime policy and binding are required".into());
     }
@@ -217,11 +224,7 @@ pub struct GraphAnswer {
 /// `POST /v0/builds/{id}/graphs/{graph}` with optional previous state and fresh
 /// authenticated policy, binding and warrants. Never retry failed effect calls.
 pub async fn step(build: &str, graph: &str, body: &Value) -> Result<GraphAnswer, String> {
-    let path = format!(
-        "/v0/builds/{}/graphs/{}",
-        segment(build),
-        segment(graph)
-    );
+    let path = format!("/v0/builds/{}/graphs/{}", segment(build), segment(graph));
     let a = rpc::call(
         &service()?,
         Method::POST,
@@ -242,15 +245,26 @@ fn parse_step(body: &Value) -> Result<GraphAnswer, String> {
         .ok_or("the code runtime did not return caller-owned graph state; deploy a compatible stateless runtime")?;
     let next_call_at = match body.get("nextCallAt") {
         Some(Value::Null) => None,
-        Some(value) => Some(value.as_u64().filter(|n| *n <= 253_402_300_799_999).ok_or("the runtime returned an invalid Unix-millisecond deadline")?),
+        Some(value) => Some(
+            value
+                .as_u64()
+                .filter(|n| *n <= 253_402_300_799_999)
+                .ok_or("the runtime returned an invalid Unix-millisecond deadline")?,
+        ),
         None => return Err("the runtime omitted nextCallAt".into()),
     };
     for field in ["nodes", "changed"] {
-        let nodes = body.get(field).and_then(Value::as_array).ok_or("the runtime returned an invalid graph outcome list")?;
-        if nodes.iter().any(|node| crate::parse_node(node).is_none()) { return Err("the runtime returned a malformed graph outcome".into()); }
+        let nodes = body
+            .get(field)
+            .and_then(Value::as_array)
+            .ok_or("the runtime returned an invalid graph outcome list")?;
+        if nodes.iter().any(|node| crate::parse_node(node).is_none()) {
+            return Err("the runtime returned a malformed graph outcome".into());
+        }
     }
     Ok(GraphAnswer {
-        state, next_call_at,
+        state,
+        next_call_at,
         changed: parse_nodes(body.get("changed")),
         nodes: parse_nodes(body.get("nodes")),
     })
@@ -267,7 +281,11 @@ pub async fn end(session: &str) {
 pub async fn end_checked(session: &str) -> Result<(), String> {
     let path = format!("/v0/sessions/{}", segment(session));
     let answer = rpc::quick(&service()?, Method::DELETE, &path, None).await?;
-    if answer.ok() || answer.status == 404 { Ok(()) } else { Err(fail("session deletion", &answer)) }
+    if answer.ok() || answer.status == 404 {
+        Ok(())
+    } else {
+        Err(fail("session deletion", &answer))
+    }
 }
 
 #[cfg(test)]
@@ -276,16 +294,31 @@ mod tests {
 
     #[test]
     fn stable_graph_contract_preserves_order_and_refuses_malformed_deadlines() {
-        let response=json!({"state":{"contract":RUNTIME_CONTRACT},"nextCallAt":1700000000123u64,"nodes":[{"id":1,"output":3}],"changed":[{"id":1,"output":1},{"id":1,"output":2},{"id":1,"output":3}]});
-        let step=parse_step(&response).unwrap();
-        assert_eq!(step.next_call_at,Some(1700000000123));
-        assert_eq!(step.changed.iter().map(|n|n.outcome.as_ref().unwrap().output.clone().unwrap()).collect::<Vec<_>>(),vec![json!(1),json!(2),json!(3)]);
-        for deadline in [json!(-1),json!(0.5),json!("soon"),json!(u64::MAX)] {
-            let mut bad=response.clone();bad["nextCallAt"]=deadline;assert!(parse_step(&bad).is_err());
+        let response = json!({"state":{"contract":RUNTIME_CONTRACT},"nextCallAt":1700000000123u64,"nodes":[{"id":1,"output":3}],"changed":[{"id":1,"output":1},{"id":1,"output":2},{"id":1,"output":3}]});
+        let step = parse_step(&response).unwrap();
+        assert_eq!(step.next_call_at, Some(1700000000123));
+        assert_eq!(
+            step.changed
+                .iter()
+                .map(|n| n.outcome.as_ref().unwrap().output.clone().unwrap())
+                .collect::<Vec<_>>(),
+            vec![json!(1), json!(2), json!(3)]
+        );
+        for deadline in [json!(-1), json!(0.5), json!("soon"), json!(u64::MAX)] {
+            let mut bad = response.clone();
+            bad["nextCallAt"] = deadline;
+            assert!(parse_step(&bad).is_err());
         }
-        let mut bad=response.clone();bad["changed"]=json!([{}]);assert!(parse_step(&bad).is_err());
-        assert!(require_contract(&json!({"state":"ready","runtimeContract":"bounded-eff-worker-v2"})).is_err());
-        assert!(require_contract(&json!({"state":"ready","runtimeContract":RUNTIME_CONTRACT})).is_ok());
+        let mut bad = response.clone();
+        bad["changed"] = json!([{}]);
+        assert!(parse_step(&bad).is_err());
+        assert!(require_contract(
+            &json!({"state":"ready","runtimeContract":"bounded-eff-worker-v2"})
+        )
+        .is_err());
+        assert!(
+            require_contract(&json!({"state":"ready","runtimeContract":RUNTIME_CONTRACT})).is_ok()
+        );
     }
 
     #[test]

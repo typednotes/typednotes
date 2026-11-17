@@ -98,10 +98,18 @@ pub async fn health() -> Health {
         && table_exists(pool, "public.notebook_shares").await
         && table_exists(pool, "public.notebook_share_sessions").await
         && table_exists(pool, "public.notebook_share_calls").await;
-    let schema = schema && sqlx::query("select to_regprocedure('tenant_deletion_ready()') is not null as ready")
-        .fetch_one(pool).await.map(|row| row.get::<bool, _>("ready")).unwrap_or(false);
-    let schema = schema && sqlx::query("select tenant_deletion_ready() as ready")
-        .fetch_one(pool).await.map(|row| row.get::<bool, _>("ready")).unwrap_or(false);
+    let schema = schema
+        && sqlx::query("select to_regprocedure('tenant_deletion_ready()') is not null as ready")
+            .fetch_one(pool)
+            .await
+            .map(|row| row.get::<bool, _>("ready"))
+            .unwrap_or(false);
+    let schema = schema
+        && sqlx::query("select tenant_deletion_ready() as ready")
+            .fetch_one(pool)
+            .await
+            .map(|row| row.get::<bool, _>("ready"))
+            .unwrap_or(false);
     let schema=schema&&table_exists(pool,"public.graph_generation_requests").await
          &&table_exists(pool,"public.note_origins").await
          &&table_exists(pool,"public.project_note_retirements").await
@@ -297,15 +305,19 @@ pub(super) async fn welcome_grant(org_id: &str) {
 
 /// The org's settings.
 pub async fn org_settings(org: &Org) -> Result<crate::OrgSettings, ServerFnError> {
-    let row = sqlx::query("select auto_repairs, effect_policy::text as effect_policy from orgs where id = $1::uuid")
-        .bind(&org.id)
-        .fetch_one(pool()?)
-        .await
-        .map_err(db_error)?;
+    let row = sqlx::query(
+        "select auto_repairs, effect_policy::text as effect_policy from orgs where id = $1::uuid",
+    )
+    .bind(&org.id)
+    .fetch_one(pool()?)
+    .await
+    .map_err(db_error)?;
     Ok(crate::OrgSettings {
-        effect_policy: row.get::<Option<String>, _>("effect_policy")
+        effect_policy: row
+            .get::<Option<String>, _>("effect_policy")
             .map(|value| serde_json::from_str(&value))
-            .transpose().map_err(|_| super::errors::bad_gateway("the organization permissions are unreadable"))?
+            .transpose()
+            .map_err(|_| super::errors::bad_gateway("the organization permissions are unreadable"))?
             .unwrap_or_default(),
         auto_repairs: row.get("auto_repairs"),
         default_auto_repairs: config::auto_repairs().min(i64::from(crate::MAX_AUTO_REPAIRS)) as i32,
@@ -313,9 +325,14 @@ pub async fn org_settings(org: &Org) -> Result<crate::OrgSettings, ServerFnError
     })
 }
 
-pub async fn set_effect_policy(org: &Org, policy: &crate::EffectPolicy) -> Result<crate::OrgSettings, ServerFnError> {
+pub async fn set_effect_policy(
+    org: &Org,
+    policy: &crate::EffectPolicy,
+) -> Result<crate::OrgSettings, ServerFnError> {
     if !matches!(org.role.as_str(), "owner" | "admin") {
-        return Err(super::errors::forbidden("only owners and admins can change organization execution policy"));
+        return Err(super::errors::forbidden(
+            "only owners and admins can change organization execution policy",
+        ));
     }
     let policy = policy.validate().map_err(super::errors::bad_request)?;
     let mut tx = super::connector::lock(&org.id).await?;
@@ -324,24 +341,45 @@ pub async fn set_effect_policy(org: &Org, policy: &crate::EffectPolicy) -> Resul
     let local = sqlx::query("select distinct provider, connection_ref from connector_authorities where org_id = $1::uuid and connection_id is null")
         .bind(&org.id).fetch_all(&mut *tx).await.map_err(db_error)?;
     for row in local {
-        super::connector::publish_ceiling(&org.id, &row.get::<String, _>("provider"), &row.get::<String, _>("connection_ref"), &crate::ConnectorPermissions::deny_all()).await?;
+        super::connector::publish_ceiling(
+            &org.id,
+            &row.get::<String, _>("provider"),
+            &row.get::<String, _>("connection_ref"),
+            &crate::ConnectorPermissions::deny_all(),
+        )
+        .await?;
     }
     let writers = sqlx::query("select distinct g.lode_session_id as session from graphs g join projects p on p.id = g.project_id \
         where p.org_id = $1::uuid and g.lode_session_id is not null")
         .bind(&org.id).fetch_all(&mut *tx).await.map_err(db_error)?;
     for row in writers {
-        super::lode::narrow(&row.get::<String, _>("session"), &policy.tools).await
-            .map_err(|_| super::errors::bad_gateway("could not apply the organization writer tool ceiling"))?;
+        super::lode::narrow(&row.get::<String, _>("session"), &policy.tools)
+            .await
+            .map_err(|_| {
+                super::errors::bad_gateway("could not apply the organization writer tool ceiling")
+            })?;
     }
     // First close every live org gate. A failed distributed write leaves the
     // operation unacknowledged and any successfully closed gates deny-all.
     for row in &rows {
-        super::connector::publish_ceiling(&org.id, &row.get::<String, _>("provider"), &row.get::<String, _>("id"), &crate::ConnectorPermissions::deny_all()).await?;
+        super::connector::publish_ceiling(
+            &org.id,
+            &row.get::<String, _>("provider"),
+            &row.get::<String, _>("id"),
+            &crate::ConnectorPermissions::deny_all(),
+        )
+        .await?;
     }
     super::connector::revoke(&mut tx, &org.id, None).await?;
     sqlx::query("update orgs set effect_policy = $2::jsonb where id = $1::uuid")
-        .bind(&org.id).bind(serde_json::to_string(&policy).map_err(|_| super::errors::bad_request("invalid permissions"))?)
-        .execute(&mut *tx).await.map_err(db_error)?;
+        .bind(&org.id)
+        .bind(
+            serde_json::to_string(&policy)
+                .map_err(|_| super::errors::bad_request("invalid permissions"))?,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
     // A running graph must re-register against the new upper bounds.
     sqlx::query("update graphs g set lun_session_id = null, lode_session_id = null, updated_at = now() \
         from projects p where g.project_id = p.id and p.org_id = $1::uuid and g.status <> 'implementing'")

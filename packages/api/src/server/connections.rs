@@ -30,7 +30,13 @@ fn connection_of(row: &PgRow, org: &Org, user: &User) -> Connection {
     let provider: String = row.get("provider");
     let owner_id: String = row.get("user_id");
     Connection {
-        permissions: row.get::<Option<String>, _>("permissions").map(|s| serde_json::from_str(&s).unwrap_or(crate::ConnectorPermissions { scopes: Vec::new(), max_request_bytes: 1, max_response_bytes: 1 })),
+        permissions: row.get::<Option<String>, _>("permissions").map(|s| {
+            serde_json::from_str(&s).unwrap_or(crate::ConnectorPermissions {
+                scopes: Vec::new(),
+                max_request_bytes: 1,
+                max_response_bytes: 1,
+            })
+        }),
         id: row.get("id"),
         // The check constraint lists exactly `Provider::ALL`.
         provider: Provider::from_id(&provider).unwrap_or(Provider::OpenaiCompatible),
@@ -48,30 +54,67 @@ fn connection_of(row: &PgRow, org: &Org, user: &User) -> Connection {
 
 /// A separate non-secret vault document lets the write-only app update policy
 /// without retrieving or rewriting a connection's API key.
-pub async fn set_permissions(org: &Org, user: &User, id: &str, permissions: &crate::ConnectorPermissions) -> Result<Connection, ServerFnError> {
+pub async fn set_permissions(
+    org: &Org,
+    user: &User,
+    id: &str,
+    permissions: &crate::ConnectorPermissions,
+) -> Result<Connection, ServerFnError> {
     let (connection, _) = get(org, user, id).await?;
-    if !connection.can_remove { return Err(forbidden("only the connection's creator or an org admin can change its permissions")); }
-    let permissions = permissions.validate(connection.provider).map_err(super::errors::bad_request)?;
+    if !connection.can_remove {
+        return Err(forbidden(
+            "only the connection's creator or an org admin can change its permissions",
+        ));
+    }
+    let permissions = permissions
+        .validate(connection.provider)
+        .map_err(super::errors::bad_request)?;
     let mut tx = connector::lock(&org.id).await?;
-    connector::require_actor(&mut tx,&org.id,&user.id).await?;
+    connector::require_actor(&mut tx, &org.id, &user.id).await?;
     let owner = sqlx::query("select c.user_id::text as owner, m.role from connections c join memberships m on m.org_id=c.org_id and m.user_id=$3::uuid \
         where c.org_id=$1::uuid and c.id=$2::uuid for update of c")
         .bind(&org.id).bind(id).bind(&user.id).fetch_one(&mut *tx).await.map_err(db_error)?;
-    if owner.get::<String,_>("owner") != user.id && !matches!(owner.get::<String,_>("role").as_str(),"owner"|"admin") {
+    if owner.get::<String, _>("owner") != user.id
+        && !matches!(owner.get::<String, _>("role").as_str(), "owner" | "admin")
+    {
         return Err(forbidden("your current role cannot edit this connection"));
     }
-    let owner: String=owner.get("owner");
+    let owner: String = owner.get("owner");
     // Close the mandatory live gate before any distributed update. If either
     // vault or SQL fails, old warrants remain denied, never partially widened.
-    connector::publish_ceiling(&org.id, connection.provider.id(), id, &crate::ConnectorPermissions::deny_all()).await?;
+    connector::publish_ceiling(
+        &org.id,
+        connection.provider.id(),
+        id,
+        &crate::ConnectorPermissions::deny_all(),
+    )
+    .await?;
     connector::revoke(&mut tx, &org.id, Some(id)).await?;
-    let path = format!("{}/permissions", vault::credential_path(connection.provider, &owner, id));
-    vault::write(&path, &serde_json::to_value(&permissions).map_err(|_| super::errors::bad_request("invalid permissions"))?)
-        .await.map_err(|_| bad_gateway("could not store the connection permissions"))?;
+    let path = format!(
+        "{}/permissions",
+        vault::credential_path(connection.provider, &owner, id)
+    );
+    vault::write(
+        &path,
+        &serde_json::to_value(&permissions)
+            .map_err(|_| super::errors::bad_request("invalid permissions"))?,
+    )
+    .await
+    .map_err(|_| bad_gateway("could not store the connection permissions"))?;
     sqlx::query("update connections set permissions = $2::jsonb where id = $1::uuid")
-        .bind(id).bind(serde_json::to_string(&permissions).map_err(|_| super::errors::bad_request("invalid permissions"))?)
-        .execute(&mut *tx).await.map_err(db_error)?;
-    let organization = connector::ceiling(&connector::policy(&mut tx, &org.id).await?, &connection, &permissions);
+        .bind(id)
+        .bind(
+            serde_json::to_string(&permissions)
+                .map_err(|_| super::errors::bad_request("invalid permissions"))?,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    let organization = connector::ceiling(
+        &connector::policy(&mut tx, &org.id).await?,
+        &connection,
+        &permissions,
+    );
     connector::publish_ceiling(&org.id, connection.provider.id(), id, &organization).await?;
     tx.commit().await.map_err(db_error)?;
     Ok(get(org, user, id).await?.0)
@@ -92,9 +135,19 @@ pub async fn list(org: &Org, user: &User) -> Result<Vec<Connection>, ServerFnErr
 }
 
 pub async fn ensure_available(org: &Org, provider: Provider) -> Result<(), ServerFnError> {
-    let existing = sqlx::query("select 1 from connections where org_id=$1::uuid and provider=$2 limit 1")
-        .bind(&org.id).bind(provider.id()).fetch_optional(pool()?).await.map_err(db_error)?;
-    if existing.is_some() { return Err(conflict(format!("{} is already connected to this organization; use or remove that connection first", provider.name()))); }
+    let existing =
+        sqlx::query("select 1 from connections where org_id=$1::uuid and provider=$2 limit 1")
+            .bind(&org.id)
+            .bind(provider.id())
+            .fetch_optional(pool()?)
+            .await
+            .map_err(db_error)?;
+    if existing.is_some() {
+        return Err(conflict(format!(
+            "{} is already connected to this organization; use or remove that connection first",
+            provider.name()
+        )));
+    }
     Ok(())
 }
 
@@ -142,16 +195,40 @@ pub async fn store(
     let mut tx = connector::lock(&org.id).await?;
     let guard = sqlx::query("select exists(select 1 from pg_trigger where tgrelid='public.connections'::regclass and tgname='connections_provider_once' and tgenabled in ('O','A')) as ready")
         .fetch_one(&mut *tx).await.map_err(db_error)?.get::<bool,_>("ready");
-    if !guard { return Err(unavailable("connection creation requires migration 0009_connection_provider_guard.sql")); }
+    if !guard {
+        return Err(unavailable(
+            "connection creation requires migration 0009_connection_provider_guard.sql",
+        ));
+    }
     connector::require_actor(&mut tx, &org.id, &user.id).await?;
     if credential.get("kind").and_then(Value::as_str) == Some("paired_device") {
-        let role = sqlx::query("select role from memberships where org_id=$1::uuid and user_id=$2::uuid")
-            .bind(&org.id).bind(&user.id).fetch_one(&mut *tx).await.map_err(db_error)?.get::<String,_>("role");
-        if !matches!(role.as_str(), "owner" | "admin") { return Err(forbidden("only current organization admins can link a messaging account")); }
+        let role =
+            sqlx::query("select role from memberships where org_id=$1::uuid and user_id=$2::uuid")
+                .bind(&org.id)
+                .bind(&user.id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db_error)?
+                .get::<String, _>("role");
+        if !matches!(role.as_str(), "owner" | "admin") {
+            return Err(forbidden(
+                "only current organization admins can link a messaging account",
+            ));
+        }
     }
-    let existing = sqlx::query("select 1 from connections where org_id=$1::uuid and provider=$2 limit 1")
-        .bind(&org.id).bind(new.provider.id()).fetch_optional(&mut *tx).await.map_err(db_error)?;
-    if existing.is_some() { return Err(conflict(format!("{} is already connected to this organization; use or remove that connection first", new.provider.name()))); }
+    let existing =
+        sqlx::query("select 1 from connections where org_id=$1::uuid and provider=$2 limit 1")
+            .bind(&org.id)
+            .bind(new.provider.id())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_error)?;
+    if existing.is_some() {
+        return Err(conflict(format!(
+            "{} is already connected to this organization; use or remove that connection first",
+            new.provider.name()
+        )));
+    }
     let inserted = sqlx::query(
         "insert into connections (org_id, user_id, provider, label, base_url, external_id) \
          values ($1::uuid, $2::uuid, $3, $4, $5, $6) returning id::text as id",
@@ -165,7 +242,12 @@ pub async fn store(
     .fetch_one(&mut *tx)
     .await
     .map_err(|error| match error {
-        sqlx::Error::Database(ref e) if e.constraint() == Some("connections_org_provider_once") => conflict(format!("{} is already connected to this organization", new.provider.name())),
+        sqlx::Error::Database(ref e) if e.constraint() == Some("connections_org_provider_once") => {
+            conflict(format!(
+                "{} is already connected to this organization",
+                new.provider.name()
+            ))
+        }
         other => db_error(other),
     })?;
     let id: String = inserted.get("id");
@@ -182,24 +264,40 @@ pub async fn store(
             "could not store the credential in the vault: {e}"
         )));
     }
-    let permissions = crate::ConnectorPermissions::preset(new.provider, crate::PermissionPreset::ReadOnly);
+    let permissions =
+        crate::ConnectorPermissions::preset(new.provider, crate::PermissionPreset::ReadOnly);
     let path = vault::credential_path(new.provider, &user.id, &id);
-    if let Err(e) = vault::write(&format!("{path}/permissions"), &serde_json::json!(permissions)).await {
+    if let Err(e) = vault::write(
+        &format!("{path}/permissions"),
+        &serde_json::json!(permissions),
+    )
+    .await
+    {
         let _ = vault::delete(&path).await;
         let _ = vault::delete(&format!("{path}/permissions")).await;
-        return Err(bad_gateway(format!("could not provision connection permissions: {e}")));
+        return Err(bad_gateway(format!(
+            "could not provision connection permissions: {e}"
+        )));
     }
     let policy = connector::policy(&mut tx, &org.id).await?;
     let organization = if policy.allows_connector(new.provider) {
-        policy.connector_ceilings.get(new.provider.id()).cloned().unwrap_or_else(|| permissions.clone())
-    } else { crate::ConnectorPermissions::deny_all() };
+        policy
+            .connector_ceilings
+            .get(new.provider.id())
+            .cloned()
+            .unwrap_or_else(|| permissions.clone())
+    } else {
+        crate::ConnectorPermissions::deny_all()
+    };
     connector::publish_ceiling(&org.id, new.provider.id(), &id, &organization).await?;
-    sqlx::query("update connections set status = 'active', permissions = $2::jsonb where id = $1::uuid")
-        .bind(&id)
-        .bind(serde_json::json!(permissions).to_string())
-        .execute(&mut *tx)
-        .await
-        .map_err(db_error)?;
+    sqlx::query(
+        "update connections set status = 'active', permissions = $2::jsonb where id = $1::uuid",
+    )
+    .bind(&id)
+    .bind(serde_json::json!(permissions).to_string())
+    .execute(&mut *tx)
+    .await
+    .map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     Ok(get(org, user, &id).await?.0)
 }
@@ -216,12 +314,33 @@ pub async fn remove(org: &Org, user: &User, id: &str) -> Result<(), ServerFnErro
     }
     let mut tx = connector::lock(&org.id).await?;
     connector::require_actor(&mut tx, &org.id, &user.id).await?;
-    let role = sqlx::query("select role from memberships where org_id=$1::uuid and user_id=$2::uuid")
-        .bind(&org.id).bind(&user.id).fetch_one(&mut *tx).await.map_err(db_error)?.get::<String,_>("role");
-    if owner != user.id && !matches!(role.as_str(), "owner" | "admin") { return Err(forbidden("your current role cannot remove this connection")); }
-    connector::publish_ceiling(&org.id, connection.provider.id(), id, &crate::ConnectorPermissions::deny_all()).await?;
+    let role =
+        sqlx::query("select role from memberships where org_id=$1::uuid and user_id=$2::uuid")
+            .bind(&org.id)
+            .bind(&user.id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_error)?
+            .get::<String, _>("role");
+    if owner != user.id && !matches!(role.as_str(), "owner" | "admin") {
+        return Err(forbidden("your current role cannot remove this connection"));
+    }
+    connector::publish_ceiling(
+        &org.id,
+        connection.provider.id(),
+        id,
+        &crate::ConnectorPermissions::deny_all(),
+    )
+    .await?;
     connector::revoke(&mut tx, &org.id, Some(id)).await?;
-    super::paired::unlink_locked(&org.id, &owner, id, connection.provider, &connection.base_url).await?;
+    super::paired::unlink_locked(
+        &org.id,
+        &owner,
+        id,
+        connection.provider,
+        &connection.base_url,
+    )
+    .await?;
     vault::delete(&vault::credential_path(connection.provider, &owner, id))
         .await
         .map_err(|e| {
@@ -233,8 +352,12 @@ pub async fn remove(org: &Org, user: &User, id: &str) -> Result<(), ServerFnErro
         .execute(&mut *tx)
         .await
         .map_err(db_error)?;
-    vault::delete(&format!("{}/permissions", vault::credential_path(connection.provider, &owner, id)))
-        .await.map_err(|_| bad_gateway("could not delete connection permissions"))?;
+    vault::delete(&format!(
+        "{}/permissions",
+        vault::credential_path(connection.provider, &owner, id)
+    ))
+    .await
+    .map_err(|_| bad_gateway("could not delete connection permissions"))?;
     tx.commit().await.map_err(db_error)?;
     Ok(())
 }
@@ -243,45 +366,94 @@ pub async fn remove(org: &Org, user: &User, id: &str) -> Result<(), ServerFnErro
 /// Repair an existing slot without changing IDs, selected repositories, grants
 /// or byte ceilings. Credential replacement is write-only; old mints are closed
 /// before the old document is erased. A failed replacement stays pending.
-pub async fn replace_credential(org: &Org, user: &User, id: &str, provider: Provider, label: &str, credential: Value) -> Result<Connection, ServerFnError> {
+pub async fn replace_credential(
+    org: &Org,
+    user: &User,
+    id: &str,
+    provider: Provider,
+    label: &str,
+    credential: Value,
+) -> Result<Connection, ServerFnError> {
     let (connection, _) = get(org, user, id).await?;
-    if connection.provider != provider || !connection.can_remove { return Err(forbidden("only its creator or an org admin can reconnect this provider")); }
+    if connection.provider != provider || !connection.can_remove {
+        return Err(forbidden(
+            "only its creator or an org admin can reconnect this provider",
+        ));
+    }
     let mut tx = connector::lock(&org.id).await?;
     connector::require_actor(&mut tx, &org.id, &user.id).await?;
     let current = sqlx::query("select c.user_id::text as owner,m.role from connections c join memberships m on m.org_id=c.org_id and m.user_id=$3::uuid where c.org_id=$1::uuid and c.id=$2::uuid for update of c")
         .bind(&org.id).bind(id).bind(&user.id).fetch_one(&mut *tx).await.map_err(db_error)?;
-    let old:String=current.get("owner");
-    if old != user.id && !matches!(current.get::<String,_>("role").as_str(), "owner"|"admin") { return Err(forbidden("connection ownership or your role changed")); }
-    connector::publish_ceiling(&org.id, provider.id(), id, &crate::ConnectorPermissions::deny_all()).await?;
-    connector::revoke(&mut tx,&org.id,Some(id)).await?;
+    let old: String = current.get("owner");
+    if old != user.id && !matches!(current.get::<String, _>("role").as_str(), "owner" | "admin") {
+        return Err(forbidden("connection ownership or your role changed"));
+    }
+    connector::publish_ceiling(
+        &org.id,
+        provider.id(),
+        id,
+        &crate::ConnectorPermissions::deny_all(),
+    )
+    .await?;
+    connector::revoke(&mut tx, &org.id, Some(id)).await?;
     let revision=sqlx::query("update connections set status='pending',last_error='Reauthorization in progress',credential_revision=gen_random_uuid() where id=$1::uuid returning credential_revision::text as revision")
         .bind(id).fetch_one(&mut *tx).await.map_err(db_error)?.get::<String,_>("revision");
     // Persist pending before touching the key: retries can never use a row
     // advertised as active after a failed distributed credential replacement.
     tx.commit().await.map_err(db_error)?;
     let mut tx = connector::lock(&org.id).await?;
-    connector::require_actor(&mut tx,&org.id,&user.id).await?;
+    connector::require_actor(&mut tx, &org.id, &user.id).await?;
     let current=sqlx::query("select c.user_id::text as owner,m.role from connections c join memberships m on m.org_id=c.org_id and m.user_id=$3::uuid \
         where c.id=$1::uuid and c.org_id=$2::uuid and c.credential_revision=$4::uuid for update of c")
         .bind(id).bind(&org.id).bind(&user.id).bind(&revision).fetch_optional(&mut *tx).await.map_err(db_error)?
         .ok_or_else(||conflict("connection was removed or another reauthorization started; retry"))?;
-    if current.get::<String,_>("owner") != old || (old != user.id && !matches!(current.get::<String,_>("role").as_str(),"owner"|"admin")) {
-        return Err(forbidden("connection ownership or your administrative role changed"));
+    if current.get::<String, _>("owner") != old
+        || (old != user.id
+            && !matches!(current.get::<String, _>("role").as_str(), "owner" | "admin"))
+    {
+        return Err(forbidden(
+            "connection ownership or your administrative role changed",
+        ));
     }
-    vault::delete(&vault::credential_path(provider,&old,id)).await.map_err(|_|bad_gateway("could not erase the previous credential"))?;
-    if old != user.id { vault::delete(&format!("{}/permissions",vault::credential_path(provider,&old,id))).await.map_err(|_|bad_gateway("could not revoke previous owner permissions"))?; }
-    vault::write(&vault::credential_path(provider,&user.id,id),&credential).await.map_err(|_|bad_gateway("could not store the replacement credential; retry reauthorization"))?;
+    vault::delete(&vault::credential_path(provider, &old, id))
+        .await
+        .map_err(|_| bad_gateway("could not erase the previous credential"))?;
+    if old != user.id {
+        vault::delete(&format!(
+            "{}/permissions",
+            vault::credential_path(provider, &old, id)
+        ))
+        .await
+        .map_err(|_| bad_gateway("could not revoke previous owner permissions"))?;
+    }
+    vault::write(&vault::credential_path(provider, &user.id, id), &credential)
+        .await
+        .map_err(|_| {
+            bad_gateway("could not store the replacement credential; retry reauthorization")
+        })?;
     let permissions = sqlx::query("select permissions::text as permissions from connections where id=$1::uuid and org_id=$2::uuid")
         .bind(id).bind(&org.id).fetch_one(&mut *tx).await.map_err(db_error)?.get::<Option<String>,_>("permissions")
         .map(|s|serde_json::from_str::<crate::ConnectorPermissions>(&s)).transpose().map_err(|_|forbidden("invalid stored permissions"))?
         .unwrap_or_else(||crate::ConnectorPermissions::preset(provider,crate::PermissionPreset::ReadOnly));
-    vault::write(&format!("{}/permissions",vault::credential_path(provider,&user.id,id)),&serde_json::json!(permissions)).await.map_err(|_|bad_gateway("could not restore permission document"))?;
-    let organization=connector::ceiling(&connector::policy(&mut tx,&org.id).await?,&connection,&permissions);
-    connector::publish_ceiling(&org.id,provider.id(),id,&organization).await?;
+    vault::write(
+        &format!(
+            "{}/permissions",
+            vault::credential_path(provider, &user.id, id)
+        ),
+        &serde_json::json!(permissions),
+    )
+    .await
+    .map_err(|_| bad_gateway("could not restore permission document"))?;
+    let organization = connector::ceiling(
+        &connector::policy(&mut tx, &org.id).await?,
+        &connection,
+        &permissions,
+    );
+    connector::publish_ceiling(&org.id, provider.id(), id, &organization).await?;
     sqlx::query("update connections set user_id=$2::uuid,label=$3,status='active',last_error=null,last_checked_at=null where id=$1::uuid")
         .bind(id).bind(&user.id).bind(label).execute(&mut *tx).await.map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
-    Ok(get(org,user,id).await?.0)
+    Ok(get(org, user, id).await?.0)
 }
 
 pub struct ProviderCall {
@@ -294,7 +466,13 @@ pub struct ProviderCall {
 
 impl ProviderCall {
     pub fn new(operation: &str, resource: Vec<String>, payload: Value) -> Self {
-        Self { operation: operation.into(), resource, payload, permissions: None, cell_id: None }
+        Self {
+            operation: operation.into(),
+            resource,
+            payload,
+            permissions: None,
+            cell_id: None,
+        }
     }
     pub fn with_permissions(mut self, permissions: crate::ConnectorPermissions) -> Self {
         self.permissions = Some(permissions);
@@ -309,27 +487,52 @@ impl ProviderCall {
 /// A probe consumes an existing read grant. Send-only providers are never tested
 /// by sending an unsolicited message or by restoring their unsupported inventory.
 fn probe(c: &Connection) -> Result<ProviderCall, String> {
-    let permissions = c.permissions.clone().unwrap_or_else(|| crate::ConnectorPermissions::preset(c.provider, crate::PermissionPreset::ReadOnly));
+    let permissions = c.permissions.clone().unwrap_or_else(|| {
+        crate::ConnectorPermissions::preset(c.provider, crate::PermissionPreset::ReadOnly)
+    });
     let (operation, root) = match c.provider {
         p if p.is_ai() => ("models.list", Vec::new()),
         Provider::Github | Provider::Gitlab => ("repositories.list", Vec::new()),
         Provider::S3 | Provider::Azure => ("objects.list", Vec::new()),
         Provider::Gdrive => ("files.list", vec!["root".into()]),
         Provider::Dropbox => ("files.list", Vec::new()),
-        Provider::GoogleCalendar | Provider::MicrosoftCalendar | Provider::Caldav => ("calendars.list", Vec::new()),
+        Provider::GoogleCalendar | Provider::MicrosoftCalendar | Provider::Caldav => {
+            ("calendars.list", Vec::new())
+        }
         Provider::Gmail | Provider::Outlook => ("mailboxes.list", vec!["me".into()]),
         Provider::Slack => ("channels.list", Vec::new()),
         Provider::Notion => ("pages.read", Vec::new()),
         Provider::Jmap => ("mailboxes.list", Vec::new()),
-        Provider::Signal | Provider::Whatsapp if super::paired::is_paired(c) =>
-            ("messages.read", vec![c.external_id.clone().ok_or("finish QR pairing before testing")?]),
-        Provider::Signal | Provider::Whatsapp => return Err("this legacy transport supports sending only; no read-only broker probe is available".into()),
+        Provider::Signal | Provider::Whatsapp if super::paired::is_paired(c) => (
+            "messages.read",
+            vec![c
+                .external_id
+                .clone()
+                .ok_or("finish QR pairing before testing")?],
+        ),
+        Provider::Signal | Provider::Whatsapp => return Err(
+            "this legacy transport supports sending only; no read-only broker probe is available"
+                .into(),
+        ),
         _ => return Err("no supported native probe".into()),
     };
-    let resource = if permissions.permits(operation, &root) && !matches!(c.provider, Provider::Notion | Provider::Jmap) { root }
-        else { permissions.scopes.iter().find(|scope| scope.operation == operation && !scope.root.is_empty())
-            .map(|scope| scope.root.clone()).ok_or("configure a resource-scoped read permission to test this connection")? };
-    Ok(ProviderCall::new(operation, resource, serde_json::json!({})))
+    let resource = if permissions.permits(operation, &root)
+        && !matches!(c.provider, Provider::Notion | Provider::Jmap)
+    {
+        root
+    } else {
+        permissions
+            .scopes
+            .iter()
+            .find(|scope| scope.operation == operation && !scope.root.is_empty())
+            .map(|scope| scope.root.clone())
+            .ok_or("configure a resource-scoped read permission to test this connection")?
+    };
+    Ok(ProviderCall::new(
+        operation,
+        resource,
+        serde_json::json!({}),
+    ))
 }
 
 /// Slack answers `200` with `{"ok": false, "error": …}` on failure.
@@ -362,13 +565,22 @@ fn describe(c: &Connection, body: &[u8]) -> Result<String, String> {
     };
     let described = match c.provider {
         Provider::Github | Provider::Gitlab => {
-            let count = json.as_ref().and_then(Value::as_array).ok_or("the provider returned no repository inventory")?.len();
+            let count = json
+                .as_ref()
+                .and_then(Value::as_array)
+                .ok_or("the provider returned no repository inventory")?
+                .len();
             Some(format!("{count} repositories visible"))
-        },
+        }
         Provider::Gdrive => {
-            let count = json.as_ref().and_then(|j| j.get("files")).and_then(Value::as_array).ok_or("Google returned no file inventory")?.len();
+            let count = json
+                .as_ref()
+                .and_then(|j| j.get("files"))
+                .and_then(Value::as_array)
+                .ok_or("Google returned no file inventory")?
+                .len();
             Some(format!("{count} files visible"))
-        },
+        }
         Provider::GoogleCalendar => {
             if json
                 .as_ref()
@@ -391,10 +603,19 @@ fn describe(c: &Connection, body: &[u8]) -> Result<String, String> {
             Some("Microsoft calendars are readable".to_string())
         }
         Provider::Gmail | Provider::Outlook => {
-            let key = if c.provider == Provider::Gmail { "labels" } else { "value" };
-            let count = json.as_ref().and_then(|j| j.get(key)).and_then(Value::as_array).ok_or("the provider returned no mailbox inventory")?.len();
+            let key = if c.provider == Provider::Gmail {
+                "labels"
+            } else {
+                "value"
+            };
+            let count = json
+                .as_ref()
+                .and_then(|j| j.get(key))
+                .and_then(Value::as_array)
+                .ok_or("the provider returned no mailbox inventory")?
+                .len();
             Some(format!("{count} mailboxes visible"))
-        },
+        }
         Provider::Notion => {
             if field("/object").as_deref() != Some("page") || field("/id").is_none() {
                 return Err("Notion returned no selected page".to_string());
@@ -430,20 +651,34 @@ fn describe(c: &Connection, body: &[u8]) -> Result<String, String> {
         }
         Provider::Caldav => unreachable!("CalDAV was described above"),
         Provider::Dropbox => {
-            let count = json.as_ref().and_then(|j| j.get("entries")).and_then(Value::as_array).ok_or("Dropbox returned no folder inventory")?.len();
+            let count = json
+                .as_ref()
+                .and_then(|j| j.get("entries"))
+                .and_then(Value::as_array)
+                .ok_or("Dropbox returned no folder inventory")?
+                .len();
             Some(format!("{count} files visible"))
-        },
+        }
         Provider::S3 => Some("bucket listed".to_string()),
         Provider::Azure => Some("container listed".to_string()),
         Provider::Slack => {
             if let Some(error) = slack_error(body) {
                 return Err(format!("Slack refused: {error}"));
             }
-            let count = json.as_ref().and_then(|j| j.get("channels")).and_then(Value::as_array).ok_or("Slack returned no channel inventory")?.len();
+            let count = json
+                .as_ref()
+                .and_then(|j| j.get("channels"))
+                .and_then(Value::as_array)
+                .ok_or("Slack returned no channel inventory")?
+                .len();
             Some(format!("{count} channels visible"))
         }
         Provider::Whatsapp | Provider::Signal if super::paired::is_paired(c) => {
-            if !json.as_ref().and_then(|j| j.get("messages")).is_some_and(Value::is_array) {
+            if !json
+                .as_ref()
+                .and_then(|j| j.get("messages"))
+                .is_some_and(Value::is_array)
+            {
                 return Err("the linked device returned no inbox page".into());
             }
             Some("paired-device inbox is readable".into())
@@ -466,7 +701,9 @@ fn describe(c: &Connection, body: &[u8]) -> Result<String, String> {
             Some(format!("the bridge sends as {number}"))
         }
         p if p.is_ai() => {
-            let json = json.as_ref().ok_or("the provider returned no JSON model catalog")?;
+            let json = json
+                .as_ref()
+                .ok_or("the provider returned no JSON model catalog")?;
             if json.get("error").is_some_and(|e| !e.is_null()) {
                 return Err("the provider returned an error instead of a model catalog".into());
             }
@@ -571,22 +808,49 @@ pub async fn call_with_cost(
             "calls to providers are disabled: the credential broker is not configured",
         ));
     }
-    if !crate::ConnectorPermissions::valid_resource(&request.resource) || !request.payload.is_object() {
-        return Err(super::errors::bad_request("invalid native connector resource or payload"));
+    if !crate::ConnectorPermissions::valid_resource(&request.resource)
+        || !request.payload.is_object()
+    {
+        return Err(super::errors::bad_request(
+            "invalid native connector resource or payload",
+        ));
     }
-    let parent = connection.permissions.clone().unwrap_or_else(|| crate::ConnectorPermissions::preset(connection.provider, crate::PermissionPreset::ReadOnly));
+    let parent = connection.permissions.clone().unwrap_or_else(|| {
+        crate::ConnectorPermissions::preset(connection.provider, crate::PermissionPreset::ReadOnly)
+    });
     let requested = match request.permissions {
-        Some(permissions) => parent.narrow(&permissions.validate(connection.provider).map_err(super::errors::bad_request)?).map_err(forbidden)?,
+        Some(permissions) => parent
+            .narrow(
+                &permissions
+                    .validate(connection.provider)
+                    .map_err(super::errors::bad_request)?,
+            )
+            .map_err(forbidden)?,
         None => parent,
     };
     if !requested.permits(&request.operation, &request.resource) {
-        return Err(forbidden("the connection does not permit this native resource"));
+        return Err(forbidden(
+            "the connection does not permit this native resource",
+        ));
     }
     let provider = connection.provider.id();
-    let minted = connector::mint_for_cell(org, user, connection, owner, &request.operation, &requested, cost, request.cell_id.as_deref()).await?;
+    let minted = connector::mint_for_cell(
+        org,
+        user,
+        connection,
+        owner,
+        &request.operation,
+        &requested,
+        cost,
+        request.cell_id.as_deref(),
+    )
+    .await?;
     if !minted.cell.permits(&request.operation, &request.resource)
-        || request.payload.to_string().len() as u64 > minted.cell.max_request_bytes {
-        return Err(forbidden("the live organization ceiling does not permit this native call"));
+        || request.payload.to_string().len() as u64 > minted.cell.max_request_bytes
+    {
+        return Err(forbidden(
+            "the live organization ceiling does not permit this native call",
+        ));
     }
     let grant = minted.grant;
     let r = Request {
@@ -629,9 +893,13 @@ pub async fn call_ok(
             connection.provider.name(),
             snippet(&body)
         ))),
-        Outcome::Refused { status, error } => Err(bad_gateway(if error=="credential_unavailable" {
-            format!("The broker could not read or refresh this connection's stored credential ({status} {error}). Reconnect the existing account in Connections. If all connections fail, check the broker's vault identity and availability; changing notebook permissions cannot repair a credential.")
-        } else { format!("the credential broker refused the call ({status} {error})") })),
+        Outcome::Refused { status, error } => {
+            Err(bad_gateway(if error == "credential_unavailable" {
+                format!("The broker could not read or refresh this connection's stored credential ({status} {error}). Reconnect the existing account in Connections. If all connections fail, check the broker's vault identity and availability; changing notebook permissions cannot repair a credential.")
+            } else {
+                format!("the credential broker refused the call ({status} {error})")
+            }))
+        }
     }
 }
 
@@ -709,12 +977,17 @@ mod tests {
                 .fixed_base_url()
                 .unwrap_or("https://storage.example.com/bucket");
             let call = probe(&connection(p, base));
-            if matches!(p, Provider::Signal | Provider::Whatsapp | Provider::Notion | Provider::Jmap) {
+            if matches!(
+                p,
+                Provider::Signal | Provider::Whatsapp | Provider::Notion | Provider::Jmap
+            ) {
                 assert!(call.is_err());
                 continue;
             }
             let call = call.unwrap();
-            assert!(crate::connector_operations(p).iter().any(|op| op.id == call.operation && !op.write));
+            assert!(crate::connector_operations(p)
+                .iter()
+                .any(|op| op.id == call.operation && !op.write));
             assert_eq!(call.payload, serde_json::json!({}));
         }
     }
@@ -800,7 +1073,10 @@ mod tests {
             } else {
                 br#"{"data":[]}"#.as_slice()
             };
-            assert!(describe(&c, body).is_ok(), "{p:?} rejected its model catalog");
+            assert!(
+                describe(&c, body).is_ok(),
+                "{p:?} rejected its model catalog"
+            );
         }
     }
 

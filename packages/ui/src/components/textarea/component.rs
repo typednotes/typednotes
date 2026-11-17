@@ -55,7 +55,12 @@ pub fn Textarea(
     // hydration comment as literal input text, and HTML's value attribute does
     // not initialize them. Seed escaped text for SSR, then let the controlled
     // value property handle updates. Keep the seed stable to preserve selection.
-    let initial_text = use_hook(|| value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;"));
+    let initial_text = use_hook(|| {
+        value
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    });
     rsx! {
         textarea {
             class: Styles::dx_textarea,

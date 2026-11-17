@@ -11,11 +11,10 @@
 //! projects, notebooks, the inbox — and link here when something is missing.
 
 use api::{
-    current_user, delete_account, delete_org, get_account, get_org, get_org_settings, get_project, remove_member,
-    rename_org, rename_project, set_display_name, set_org_settings, sign_out_elsewhere, Org,
-    OrgSettings, Provider, MAX_AUTO_REPAIRS, EffectPolicy, NOTEBOOK_EFFECTS, WRITER_TOOLS,
-    set_notebook_permissions,
-    ConnectorPermissions,
+    current_user, delete_account, delete_org, get_account, get_org, get_org_settings, get_project,
+    remove_member, rename_org, rename_project, set_display_name, set_notebook_permissions,
+    set_org_settings, sign_out_elsewhere, ConnectorPermissions, EffectPolicy, Org, OrgSettings,
+    Provider, MAX_AUTO_REPAIRS, NOTEBOOK_EFFECTS, WRITER_TOOLS,
 };
 use dioxus::prelude::*;
 
@@ -29,9 +28,9 @@ use crate::components::textarea::Textarea;
 use crate::connections::{ConnectionsPanel, PermissionEditor, CONNECTIONS_CSS};
 use crate::members::MembersPanel;
 use crate::orgs::ORGS_CSS;
+use crate::permission_check::PermissionCheck;
 use crate::projects::{DeleteProject, RepoPanel};
 use crate::{error_message, navigate_to};
-use crate::permission_check::PermissionCheck;
 
 const SETTINGS_CSS: Asset = asset!("/assets/styling/settings.css");
 
@@ -498,7 +497,12 @@ fn OrgNotebooks(slug: ReadSignal<String>) -> Element {
 }
 
 #[component]
-fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_saved: EventHandler<()>) -> Element {
+fn NotebookPermissions(
+    slug: String,
+    policy: EffectPolicy,
+    can_edit: bool,
+    on_saved: EventHandler<()>,
+) -> Element {
     let mut effects = use_signal(|| policy.effects.clone());
     let mut tools = use_signal(|| policy.tools.clone());
     let mut providers = use_signal(|| policy.providers.clone());
@@ -509,21 +513,40 @@ fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_sa
     let mut toml_text = use_signal(String::new);
     let mut busy = use_signal(|| false);
     let mut status = use_signal(|| None::<Result<String, String>>);
-    let draft = move || EffectPolicy { effects: effects(), tools: tools(), providers: providers(), configured_domains: configured_domains(), domains: domains().split([',', '\n']).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).collect(), connector_ceilings: connector_ceilings() };
+    let draft = move || EffectPolicy {
+        effects: effects(),
+        tools: tools(),
+        providers: providers(),
+        configured_domains: configured_domains(),
+        domains: domains()
+            .split([',', '\n'])
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect(),
+        connector_ceilings: connector_ceilings(),
+    };
     let switch_editor = move |_| {
         status.set(None);
         if toml_mode() {
             match EffectPolicy::from_toml(&toml_text()) {
                 Ok(policy) => {
-                    effects.set(policy.effects); tools.set(policy.tools); providers.set(policy.providers);
-                    configured_domains.set(policy.configured_domains); domains.set(policy.domains.join("\n"));
-                    connector_ceilings.set(policy.connector_ceilings); toml_mode.set(false);
+                    effects.set(policy.effects);
+                    tools.set(policy.tools);
+                    providers.set(policy.providers);
+                    configured_domains.set(policy.configured_domains);
+                    domains.set(policy.domains.join("\n"));
+                    connector_ceilings.set(policy.connector_ceilings);
+                    toml_mode.set(false);
                 }
                 Err(message) => status.set(Some(Err(message))),
             }
         } else {
             match draft().to_toml() {
-                Ok(text) => { toml_text.set(text); toml_mode.set(true); }
+                Ok(text) => {
+                    toml_text.set(text);
+                    toml_mode.set(true);
+                }
                 Err(message) => status.set(Some(Err(message))),
             }
         }
@@ -531,12 +554,26 @@ fn NotebookPermissions(slug: String, policy: EffectPolicy, can_edit: bool, on_sa
     let save = move |event: FormEvent| {
         event.prevent_default();
         let slug = slug.clone();
-        let parsed = if toml_mode() { EffectPolicy::from_toml(&toml_text()) } else { draft().validate() };
+        let parsed = if toml_mode() {
+            EffectPolicy::from_toml(&toml_text())
+        } else {
+            draft().validate()
+        };
         async move {
-            let policy = match parsed { Ok(policy) => policy, Err(message) => { status.set(Some(Err(message))); return; } };
+            let policy = match parsed {
+                Ok(policy) => policy,
+                Err(message) => {
+                    status.set(Some(Err(message)));
+                    return;
+                }
+            };
             busy.set(true);
             match set_notebook_permissions(slug, policy).await {
-                Ok(_) => { status.set(Some(Ok("Execution policy saved.".into()))); on_saved.call(());crate::onboarding::refresh_workspace(); }
+                Ok(_) => {
+                    status.set(Some(Ok("Execution policy saved.".into())));
+                    on_saved.call(());
+                    crate::onboarding::refresh_workspace();
+                }
                 Err(error) => status.set(Some(Err(error_message(&error)))),
             }
             busy.set(false);
@@ -872,44 +909,48 @@ pub fn ProjectSettingsPage(
 }
 
 #[component]
-fn ProjectModel(slug:ReadSignal<String>,project:ReadSignal<String>)->Element{
-    let mut detail=use_server_future(move ||api::get_project_notes(slug(),project()))?;
-    let connections=use_server_future(move ||api::list_connections(slug()))?;
-    rsx!{Card{CardHeader{CardTitle{"Project AI model"}CardDescription{"One connection and model generate code for all project notes."}}
-        CardContent{if let (Some(Ok(d)),Some(Ok(ai)))=(detail(),connections()){
-            crate::notebook::ModelPicker{slug:slug(),project:project(),graph:d.graph,ai,on_changed:move |_|detail.restart()}
-        }}}}
+fn ProjectModel(slug: ReadSignal<String>, project: ReadSignal<String>) -> Element {
+    let mut detail = use_server_future(move || api::get_project_notes(slug(), project()))?;
+    let connections = use_server_future(move || api::list_connections(slug()))?;
+    rsx! {Card{CardHeader{CardTitle{"Project AI model"}CardDescription{"One connection and model generate code for all project notes."}}
+    CardContent{if let (Some(Ok(d)),Some(Ok(ai)))=(detail(),connections()){
+        crate::notebook::ModelPicker{slug:slug(),project:project(),graph:d.graph,ai,on_changed:move |_|detail.restart()}
+    }}}}
 }
 
 #[component]
-fn ProjectPermissions(slug:String,project:api::Project,on_saved:EventHandler<()>)->Element{
-    let org=slug.clone();let connections=use_resource(move ||api::list_connections(org.clone()));
-    let org=slug.clone();let policy=use_resource(move ||api::get_org_settings(org.clone()));
-    let mut grants=use_signal(||project.note_connections.clone());let mut status=use_signal(||None::<Result<String,String>>);let mut busy=use_signal(||false);
-    rsx!{Card{CardHeader{CardTitle{"Project note permissions"}CardDescription{"These operations and resource boundaries apply to every note. Generated code and answers cannot expand them."}}
-        CardContent{
-            crate::notebook::CellConnections{connections:connections().and_then(Result::ok).unwrap_or_default(),value:grants(),id:"project-grants",disabled:busy(),policy:policy().and_then(Result::ok).map(|s|s.effect_policy),storage_scope:None,on_change:move |value|grants.set(value)}
-            for service in [api::LocalService::Postgres,api::LocalService::Vault]{
-                div{class:"permission-grant",
-                     strong{"{service.effect()}"}
-                     Button{id:"project-local-{service.selection()}",variant:ButtonVariant::Outline,disabled:busy(),onclick:move |_|{
-                        let mut value=grants();let id=service.selection();
-                        if value.iter().any(|g|g.connection==id){value.retain(|g|g.connection!=id);}else{value.push(api::CellConnector{connection:id.into(),permissions:Some(api::ConnectorPermissions::local_preset(service,api::PermissionPreset::ReadOnly,Vec::new()))});}grants.set(value);
-                     },if grants().iter().any(|g|g.connection==service.selection()){"Disable"}else{"Enable read access"}}
-                     if let Some(grant)=grants().into_iter().find(|g|g.connection==service.selection()) {
-                         PermissionEditor {
-                             id:"project-local-policy-{service.selection()}",local_service:Some(service),
-                             value:grant.permissions,ceiling:None,allow_inherit:false,disabled:busy(),
-                             on_change:move |permissions|grants.with_mut(|value| {
-                                 if let Some(grant)=value.iter_mut().find(|g|g.connection==service.selection()){grant.permissions=permissions;}
-                             }),
-                         }
+fn ProjectPermissions(slug: String, project: api::Project, on_saved: EventHandler<()>) -> Element {
+    let org = slug.clone();
+    let connections = use_resource(move || api::list_connections(org.clone()));
+    let org = slug.clone();
+    let policy = use_resource(move || api::get_org_settings(org.clone()));
+    let mut grants = use_signal(|| project.note_connections.clone());
+    let mut status = use_signal(|| None::<Result<String, String>>);
+    let mut busy = use_signal(|| false);
+    rsx! {Card{CardHeader{CardTitle{"Project note permissions"}CardDescription{"These operations and resource boundaries apply to every note. Generated code and answers cannot expand them."}}
+    CardContent{
+        crate::notebook::CellConnections{connections:connections().and_then(Result::ok).unwrap_or_default(),value:grants(),id:"project-grants",disabled:busy(),policy:policy().and_then(Result::ok).map(|s|s.effect_policy),storage_scope:None,on_change:move |value|grants.set(value)}
+        for service in [api::LocalService::Postgres,api::LocalService::Vault]{
+            div{class:"permission-grant",
+                 strong{"{service.effect()}"}
+                 Button{id:"project-local-{service.selection()}",variant:ButtonVariant::Outline,disabled:busy(),onclick:move |_|{
+                    let mut value=grants();let id=service.selection();
+                    if value.iter().any(|g|g.connection==id){value.retain(|g|g.connection!=id);}else{value.push(api::CellConnector{connection:id.into(),permissions:Some(api::ConnectorPermissions::local_preset(service,api::PermissionPreset::ReadOnly,Vec::new()))});}grants.set(value);
+                 },if grants().iter().any(|g|g.connection==service.selection()){"Disable"}else{"Enable read access"}}
+                 if let Some(grant)=grants().into_iter().find(|g|g.connection==service.selection()) {
+                     PermissionEditor {
+                         id:"project-local-policy-{service.selection()}",local_service:Some(service),
+                         value:grant.permissions,ceiling:None,allow_inherit:false,disabled:busy(),
+                         on_change:move |permissions|grants.with_mut(|value| {
+                             if let Some(grant)=value.iter_mut().find(|g|g.connection==service.selection()){grant.permissions=permissions;}
+                         }),
                      }
-                }
+                 }
             }
-            Button{disabled:busy(),onclick:move |_|{let(slug,project)=(slug.clone(),project.slug.clone());async move{busy.set(true);match api::set_project_note_connections(slug,project,grants()).await{Ok(_)=>{status.set(Some(Ok("Project permissions saved.".into())));on_saved.call(());},Err(e)=>status.set(Some(Err(error_message(&e))))}busy.set(false);}},"Save project permissions"}
-            Outcome{status:status()}
-        }}}
+        }
+        Button{disabled:busy(),onclick:move |_|{let(slug,project)=(slug.clone(),project.slug.clone());async move{busy.set(true);match api::set_project_note_connections(slug,project,grants()).await{Ok(_)=>{status.set(Some(Ok("Project permissions saved.".into())));on_saved.call(());},Err(e)=>status.set(Some(Err(error_message(&e))))}busy.set(false);}},"Save project permissions"}
+        Outcome{status:status()}
+    }}}
 }
 
 #[component]

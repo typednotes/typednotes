@@ -1,17 +1,26 @@
-use api::{create_notebook_share, feed_shared_notebook, get_shared_notebook, list_notebook_shares, revoke_notebook_share, SharedCell};
+use crate::components::{
+    button::{Button, ButtonVariant},
+    input::Input,
+    label::Label,
+    select::{use_selected, Select, SelectOption},
+    textarea::Textarea,
+};
+use crate::{connections::CONNECTIONS_CSS, error_message, orgs::ORGS_CSS, render::Output};
+use api::{
+    create_notebook_share, feed_shared_notebook, get_shared_notebook, list_notebook_shares,
+    revoke_notebook_share, SharedCell,
+};
 use dioxus::prelude::*;
 use serde_json::Value;
-use crate::components::{button::{Button, ButtonVariant}, input::Input, label::Label, select::{use_selected, Select, SelectOption}, textarea::Textarea};
-use crate::{error_message, render::Output, orgs::ORGS_CSS, connections::CONNECTIONS_CSS};
 
 #[component]
 pub(crate) fn ShareControls(slug: String, project: String, graph: String, ready: bool) -> Element {
-    let (o,p,g) = (slug.clone(), project.clone(), graph.clone());
+    let (o, p, g) = (slug.clone(), project.clone(), graph.clone());
     let mut shares = use_resource(move || list_notebook_shares(o.clone(), p.clone(), g.clone()));
     let mut url = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
-    let (o,p,g) = (slug.clone(), project.clone(), graph.clone());
+    let (o, p, g) = (slug.clone(), project.clone(), graph.clone());
     rsx! {
         details { class: "nb-advanced share-controls",
             summary { "Share read-only project notes" }
@@ -72,21 +81,65 @@ pub fn SharedNotebookPage(token: ReadSignal<String>) -> Element {
 }
 
 #[component]
-fn SharedInput(token: String, cell: SharedCell, initial: Option<Value>, on_fed: EventHandler<api::SharedNotebook>) -> Element {
-    let is_string = cell.input_type.as_deref().is_some_and(|ty| ty.trim() == "String");
-    let is_bool = cell.input_type.as_deref().is_some_and(|ty| ty.trim() == "Bool");
-    let numeric = cell.input_type.as_deref().is_some_and(|ty| matches!(ty.trim(), "Nat" | "Int" | "Float" | "Float32"));
-    let initial = initial.map(|v| if is_string { v.as_str().unwrap_or("").to_string() } else { v.to_string() }).unwrap_or_default();
+fn SharedInput(
+    token: String,
+    cell: SharedCell,
+    initial: Option<Value>,
+    on_fed: EventHandler<api::SharedNotebook>,
+) -> Element {
+    let is_string = cell
+        .input_type
+        .as_deref()
+        .is_some_and(|ty| ty.trim() == "String");
+    let is_bool = cell
+        .input_type
+        .as_deref()
+        .is_some_and(|ty| ty.trim() == "Bool");
+    let numeric = cell
+        .input_type
+        .as_deref()
+        .is_some_and(|ty| matches!(ty.trim(), "Nat" | "Int" | "Float" | "Float32"));
+    let initial = initial
+        .map(|v| {
+            if is_string {
+                v.as_str().unwrap_or("").to_string()
+            } else {
+                v.to_string()
+            }
+        })
+        .unwrap_or_default();
     let mut value = use_signal(|| initial);
     let selected = use_selected(value.into());
     let mut busy = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
     let id = format!("shared-input-{}", cell.id);
     let submit = move |event: FormEvent| {
-        event.prevent_default(); let (token,id)=(token.clone(),cell.id.clone());
-        let parsed = if is_string { Ok(Value::String(value())) } else if is_bool { Ok(Value::Bool(value()=="true")) } else { serde_json::from_str::<Value>(&value()).map_err(|e| e.to_string()) };
-        async move { let parsed=match parsed {Ok(v)=>v,Err(e)=>{error.set(Some(e));return;}};
-            busy.set(true); match feed_shared_notebook(token,id,parsed).await {Ok(result)=>{error.set(None);on_fed.call(result);},Err(e)=>error.set(Some(error_message(&e)))} busy.set(false);
+        event.prevent_default();
+        let (token, id) = (token.clone(), cell.id.clone());
+        let parsed = if is_string {
+            Ok(Value::String(value()))
+        } else if is_bool {
+            Ok(Value::Bool(value() == "true"))
+        } else {
+            serde_json::from_str::<Value>(&value()).map_err(|e| e.to_string())
+        };
+        async move {
+            let parsed = match parsed {
+                Ok(v) => v,
+                Err(e) => {
+                    error.set(Some(e));
+                    return;
+                }
+            };
+            busy.set(true);
+            match feed_shared_notebook(token, id, parsed).await {
+                Ok(result) => {
+                    error.set(None);
+                    on_fed.call(result);
+                }
+                Err(e) => error.set(Some(error_message(&e))),
+            }
+            busy.set(false);
         }
     };
     rsx! {

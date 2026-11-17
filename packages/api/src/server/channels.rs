@@ -226,14 +226,31 @@ pub async fn add_slack(
 
 // ── WhatsApp and Signal: a connection and its channel in one step ──────
 
-pub async fn add_existing(org: &Org, user: &User, project_slug: &str, connection_id: &str) -> Result<Channel, ServerFnError> {
+pub async fn add_existing(
+    org: &Org,
+    user: &User,
+    project_slug: &str,
+    connection_id: &str,
+) -> Result<Channel, ServerFnError> {
     let (project, _) = projects::get(org, project_slug).await?;
     let (connection, _) = connections::get(org, user, connection_id).await?;
     if !matches!(connection.provider, Provider::Whatsapp | Provider::Signal) {
-        return Err(bad_request("choose an existing WhatsApp or Signal connection"));
+        return Err(bad_request(
+            "choose an existing WhatsApp or Signal connection",
+        ));
     }
-    let external_id = connection.external_id.as_deref().ok_or_else(|| bad_request("connection has no sender identity"))?;
-    insert(&project.id, &connection, external_id, None, &connection.label).await
+    let external_id = connection
+        .external_id
+        .as_deref()
+        .ok_or_else(|| bad_request("connection has no sender identity"))?;
+    insert(
+        &project.id,
+        &connection,
+        external_id,
+        None,
+        &connection.label,
+    )
+    .await
 }
 
 /// Store `connection`, bind it to the project, and undo the connection if
@@ -420,31 +437,31 @@ fn send_call(
     recipient: &str,
     text: &str,
 ) -> Result<(ProviderCall, String), String> {
-    let post = |resource: Vec<String>| ProviderCall::new("messages.send", resource, json!({"text": text}));
+    let post =
+        |resource: Vec<String>| ProviderCall::new("messages.send", resource, json!({"text": text}));
     match connection.provider {
         Provider::Slack => {
             let channel = routed
                 .external_channel
                 .clone()
                 .ok_or("this Slack interface has no channel")?;
-            Ok((
-                post(vec![channel.clone()]),
-                channel,
-            ))
+            Ok((post(vec![channel.clone()]), channel))
         }
         Provider::Whatsapp => {
-            let to = if super::paired::is_paired(connection) { crate::validate_recipient(Provider::Whatsapp, recipient)? } else { validate_phone(recipient)? };
-            Ok((
-                post(vec![routed.external_id.clone(), to.clone()]),
-                to,
-            ))
+            let to = if super::paired::is_paired(connection) {
+                crate::validate_recipient(Provider::Whatsapp, recipient)?
+            } else {
+                validate_phone(recipient)?
+            };
+            Ok((post(vec![routed.external_id.clone(), to.clone()]), to))
         }
         Provider::Signal => {
-            let to = if super::paired::is_paired(connection) { crate::validate_recipient(Provider::Signal, recipient)? } else { format!("+{}", validate_phone(recipient)?) };
-            Ok((
-                post(vec![routed.external_id.clone(), to.clone()]),
-                to,
-            ))
+            let to = if super::paired::is_paired(connection) {
+                crate::validate_recipient(Provider::Signal, recipient)?
+            } else {
+                format!("+{}", validate_phone(recipient)?)
+            };
+            Ok((post(vec![routed.external_id.clone(), to.clone()]), to))
         }
         _ => Err("not a messaging interface".to_string()),
     }
@@ -480,11 +497,25 @@ pub async fn send(
     recipient: &str,
     text: &str,
 ) -> Result<Message, ServerFnError> {
-    send_scoped(org, user, project_slug, channel_id, recipient, text, &[], None).await
+    send_scoped(
+        org,
+        user,
+        project_slug,
+        channel_id,
+        recipient,
+        text,
+        &[],
+        None,
+    )
+    .await
 }
 
 /// Automatic delivery consumes the cell's requested ceiling and fixed resource.
 /// Output text cannot replace the connection, sender, channel or recipient.
+// Each argument is a separate authority or routing input (org, actor, project,
+// channel, recipient, text, cell connector grants, cell) checked here; bundling
+// them would hide at call sites which bound is being passed.
+#[allow(clippy::too_many_arguments)]
 pub async fn send_scoped(
     org: &Org,
     user: &User,
@@ -499,8 +530,12 @@ pub async fn send_scoped(
     let routed = get(org, project_slug, channel_id).await?;
     let (connection, owner) = connections::get(org, user, &routed.channel.connection_id).await?;
     let (call, peer) = send_call(&routed, &connection, recipient, &text).map_err(bad_request)?;
-    let scoped = super::connector::scoped(&connection, &call.operation, call.resource.clone(), false);
-    let scoped = connectors.iter().find(|grant| grant.connection == connection.id).and_then(|grant| grant.permissions.as_ref())
+    let scoped =
+        super::connector::scoped(&connection, &call.operation, call.resource.clone(), false);
+    let scoped = connectors
+        .iter()
+        .find(|grant| grant.connection == connection.id)
+        .and_then(|grant| grant.permissions.as_ref())
         .map_or(scoped.clone(), |permissions| scoped.intersect(permissions));
     let call = call.with_permissions(scoped).with_cell(cell_id);
     let body = connections::call_ok(org, user, &connection, &owner, call).await?;
@@ -570,39 +605,88 @@ async fn pull_signal(
 ) -> Result<usize, ServerFnError> {
     let routed = get(org, project_slug, channel_id).await?;
     let (connection, owner) = connections::get(org, user, &routed.channel.connection_id).await?;
-    if !super::paired::is_paired(&connection) { return Ok(0); }
-    let Some(sender) = connection.external_id.as_deref() else { return Ok(0); };
-    let permissions = connection.permissions.clone().unwrap_or_else(|| crate::ConnectorPermissions::preset(connection.provider, crate::PermissionPreset::ReadOnly));
+    if !super::paired::is_paired(&connection) {
+        return Ok(0);
+    }
+    let Some(sender) = connection.external_id.as_deref() else {
+        return Ok(0);
+    };
+    let permissions = connection.permissions.clone().unwrap_or_else(|| {
+        crate::ConnectorPermissions::preset(connection.provider, crate::PermissionPreset::ReadOnly)
+    });
     let mut resources = Vec::<Vec<String>>::new();
-    for scope in permissions.scopes.iter().filter(|scope| scope.operation == "messages.read") {
-        let resource = if scope.root.is_empty() && scope.descendants || scope.root == [sender] && scope.descendants {
+    for scope in permissions
+        .scopes
+        .iter()
+        .filter(|scope| scope.operation == "messages.read")
+    {
+        let resource = if scope.root.is_empty() && scope.descendants
+            || scope.root == [sender] && scope.descendants
+        {
             vec![sender.to_string()]
-        } else if scope.root.len() == 2 && scope.root[0] == sender { scope.root.clone() } else { continue; };
-        if !resources.contains(&resource) { resources.push(resource); }
+        } else if scope.root.len() == 2 && scope.root[0] == sender {
+            scope.root.clone()
+        } else {
+            continue;
+        };
+        if !resources.contains(&resource) {
+            resources.push(resource);
+        }
     }
     let mut count = 0;
     for resource in resources {
-        let selector = serde_json::to_string(&resource).map_err(|_| bad_request("invalid message selector"))?;
+        let selector = serde_json::to_string(&resource)
+            .map_err(|_| bad_request("invalid message selector"))?;
         let after = sqlx::query("select cursor::text as cursor from paired_inbox_cursors where channel_id=$1::uuid and selector=$2")
             .bind(channel_id).bind(&selector).fetch_optional(pool()?).await.map_err(db_error)?
             .map(|row| row.get::<String,_>("cursor")).unwrap_or_else(|| "0".into());
         let call = ProviderCall::new("messages.read", resource.clone(), json!({"after": after}))
-            .with_permissions(super::connector::scoped(&connection, "messages.read", resource.clone(), false));
+            .with_permissions(super::connector::scoped(
+                &connection,
+                "messages.read",
+                resource.clone(),
+                false,
+            ));
         let body = connections::call_ok(org, user, &connection, &owner, call).await?;
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct Received { id: String, peer: String, body: String, timestamp: u64, sequence: u64 }
+        struct Received {
+            id: String,
+            peer: String,
+            body: String,
+            timestamp: u64,
+            sequence: u64,
+        }
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
-        struct Page { messages: Vec<Received>, next: String }
-        let page: Page = serde_json::from_slice(&body).map_err(|_| bad_gateway("invalid paired inbox response"))?;
-        let next = page.next.parse::<u64>().map_err(|_| bad_gateway("invalid paired inbox cursor"))?;
-        if page.messages.len() > 100 || next < after.parse::<u64>().unwrap_or(0) { return Err(bad_gateway("invalid paired inbox page")); }
+        struct Page {
+            messages: Vec<Received>,
+            next: String,
+        }
+        let page: Page = serde_json::from_slice(&body)
+            .map_err(|_| bad_gateway("invalid paired inbox response"))?;
+        let next = page
+            .next
+            .parse::<u64>()
+            .map_err(|_| bad_gateway("invalid paired inbox cursor"))?;
+        if page.messages.len() > 100 || next < after.parse::<u64>().unwrap_or(0) {
+            return Err(bad_gateway("invalid paired inbox page"));
+        }
         for message in page.messages {
-            if message.sequence > next || resource.get(1).is_some_and(|peer| peer != &message.peer) { return Err(bad_gateway("message leaves its authorized conversation")); }
+            if message.sequence > next || resource.get(1).is_some_and(|peer| peer != &message.peer)
+            {
+                return Err(bad_gateway("message leaves its authorized conversation"));
+            }
             let _ = message.timestamp;
-            let inbound = Inbound { external_id: message.id, peer: message.peer, peer_name: None, body: message.body };
-            if record_inbound(channel_id, &inbound).await? { count += 1; }
+            let inbound = Inbound {
+                external_id: message.id,
+                peer: message.peer,
+                peer_name: None,
+                body: message.body,
+            };
+            if record_inbound(channel_id, &inbound).await? {
+                count += 1;
+            }
         }
         sqlx::query("insert into paired_inbox_cursors(channel_id,selector,cursor) values($1::uuid,$2,$3::text::numeric) \
             on conflict(channel_id,selector) do update set cursor=greatest(paired_inbox_cursors.cursor,excluded.cursor)")

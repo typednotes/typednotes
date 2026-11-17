@@ -62,11 +62,7 @@ pub fn body(warrant: &Warrant, r: &Request, call: &Call) -> Value {
     })
 }
 
-pub async fn egress(
-    warrant: &Warrant,
-    r: &Request<'_>,
-    call: &Call,
-) -> Result<Outcome, String> {
+pub async fn egress(warrant: &Warrant, r: &Request<'_>, call: &Call) -> Result<Outcome, String> {
     endpoint("egress", warrant, r, call).await
 }
 
@@ -74,7 +70,12 @@ pub async fn device(warrant: &Warrant, r: &Request<'_>, call: &Call) -> Result<O
     endpoint("device", warrant, r, call).await
 }
 
-async fn endpoint(endpoint: &str, warrant: &Warrant, r: &Request<'_>, call: &Call) -> Result<Outcome, String> {
+async fn endpoint(
+    endpoint: &str,
+    warrant: &Warrant,
+    r: &Request<'_>,
+    call: &Call,
+) -> Result<Outcome, String> {
     let base = env("LIAISON_URL").ok_or("LIAISON_URL is not set")?;
     let response = http()
         .post(format!("{}/v0/{endpoint}", base.trim_end_matches('/')))
