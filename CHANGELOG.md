@@ -9,6 +9,10 @@ Releases before 0.12.2 are described in their git tags (`git tag -n`) and in
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore warning-free web builds on Rust 1.100 without changing URL routing.
+
 ## [0.12.2] — 2026-11-17
 
 Released on the user's request: agent instructions and strict type checking only; no user-visible

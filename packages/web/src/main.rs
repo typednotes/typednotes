@@ -1,4 +1,6 @@
 use dioxus::prelude::*;
+use std::fmt;
+use std::str::FromStr;
 
 use ui::{Navbar, UserMenu};
 use views::{
@@ -7,6 +9,32 @@ use views::{
 };
 
 mod views;
+
+/// An opaque URL path segment, already percent-decoded by Dioxus.
+#[derive(Debug, Clone, PartialEq)]
+struct PathSegment(String);
+
+impl FromStr for PathSegment {
+    // Dioxus 0.7.10 generates an error-constructor call even for infallible
+    // parsers. Rust 1.100 flags that call when the error type is `Infallible`.
+    type Err = String;
+
+    fn from_str(segment: &str) -> Result<Self, Self::Err> {
+        Ok(Self(segment.to_owned()))
+    }
+}
+
+impl fmt::Display for PathSegment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<PathSegment> for String {
+    fn from(segment: PathSegment) -> Self {
+        segment.0
+    }
+}
 
 #[derive(Debug, Clone, Routable, PartialEq)]
 #[rustfmt::skip]
@@ -19,25 +47,25 @@ enum Route {
     #[route("/onboarding")]
     Onboarding {},
     #[route("/s/:token")]
-    SharedView { token: String },
+    SharedView { token: PathSegment },
     #[route("/login?:error")]
     Login { error: String },
     #[route("/orgs/:slug?:connected&:error")]
-    OrgView { slug: String, connected: String, error: String },
+    OrgView { slug: PathSegment, connected: String, error: String },
     #[route("/settings")]
     AccountView {},
     #[route("/orgs/:slug/settings")]
-    OrgSettingsHome { slug: String },
+    OrgSettingsHome { slug: PathSegment },
     #[route("/orgs/:slug/settings/:section?:connected&:error")]
-    OrgSettingsView { slug: String, section: String, connected: String, error: String },
+    OrgSettingsView { slug: PathSegment, section: PathSegment, connected: String, error: String },
     #[route("/orgs/:slug/projects/:project?:connected&:error")]
-    ProjectView { slug: String, project: String, connected: String, error: String },
+    ProjectView { slug: PathSegment, project: PathSegment, connected: String, error: String },
     #[route("/orgs/:slug/projects/:project/settings")]
-    ProjectSettingsHome { slug: String, project: String },
+    ProjectSettingsHome { slug: PathSegment, project: PathSegment },
     #[route("/orgs/:slug/projects/:project/settings/:section?:connected&:error")]
-    ProjectSettingsView { slug: String, project: String, section: String, connected: String, error: String },
+    ProjectSettingsView { slug: PathSegment, project: PathSegment, section: PathSegment, connected: String, error: String },
     #[route("/orgs/:slug/projects/:project/graphs/:graph")]
-    GraphView { slug: String, project: String, graph: String },
+    GraphView { slug: PathSegment, project: PathSegment, graph: PathSegment },
 }
 
 const FAVICON: Asset = ui::BRAND_LOGO;
@@ -74,8 +102,31 @@ fn App() -> Element {
 }
 
 #[component]
-fn SharedView(token: String) -> Element {
+fn SharedView(#[props(into)] token: String) -> Element {
     rsx! { ui::SharedNotebookPage { token } }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encoded_path_segments_round_trip_as_opaque_text() {
+        let route: Route = "/orgs/team%20one/projects/notes%25/settings/connectors"
+            .parse()
+            .unwrap();
+        assert_eq!(
+            route,
+            Route::ProjectSettingsView {
+                slug: PathSegment("team one".into()),
+                project: PathSegment("notes%".into()),
+                section: PathSegment("connectors".into()),
+                connected: String::new(),
+                error: String::new(),
+            }
+        );
+        assert_eq!(route.to_string().parse::<Route>().unwrap(), route);
+    }
 }
 
 /// A web-specific Router around the shared `Navbar` component
