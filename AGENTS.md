@@ -24,7 +24,7 @@ stay in sync (see Project-specific notes).
 | Type-check | `cargo check -p web --features server` and `cargo check -p web --features web --target wasm32-unknown-unknown` |
 | Test | `cargo test -p api --features server --lib`; `bash ci/test-require-main-ci.sh`; `python3 ci/test-workflow-policy.py` (needs PyYAML); `python3 scripts/test_logo.py` (needs fontTools, Fira Code, rsvg); opt-in end-to-end: `uv run --with playwright scripts/test_notebook_ui.py --help`, `scripts/test_native_connectors.py` |
 | Lint / format | `cargo fmt --all --check`; `cargo clippy -p web --features server --all-targets -- -D warnings`; `cargo clippy -p api --features server --all-targets -- -D warnings`; `cargo clippy -p web --features web --target wasm32-unknown-unknown --all-targets -- -D warnings` |
-| Build / release | `dx bundle -p web --web --release` (see `Dockerfile`); release: a `vX.Y.Z` tag publishes the image via `.github/workflows/docker-publish.yml`, gated by `ci/require-main-ci.sh` (pushing is the user's action — see the overrides below) |
+| Build / release | `dx bundle -p web --web --release` (see `Dockerfile`); release: a `vX.Y.Z` tag publishes the image via `.github/workflows/docker-publish.yml`, gated by `ci/require-main-ci.sh` (see Permissions before pushing) |
 | Run (local app) | `bash scripts/dev.sh --check`, then `bash scripts/dev.sh` (`dx serve -p web`, http://localhost:8080); `TODO(agents-md): no CLI entry point` |
 
 Before declaring a change done, run type-check, tests and lint, and report their real output.
@@ -280,19 +280,13 @@ Look out for tasks the user does by hand again and again, and propose to automat
 
 ## Project-specific notes
 
-### Overrides of the standard rules above
+### Git workflow
 
-These project rules are stricter than the standard rules above and **take precedence** where they
-differ.
-
-#### Git
-
-**Never push.** Do not run `git push`, and do not create or update pull requests, under any
-circumstances — including when the user asks, when a task looks finished, or when a
-workflow seems to imply it. Pushing is the user's action, always.
-
-Committing locally is fine when the user asks for it. If work seems ready to push, say so
-and stop there.
+An explicit user request to push a branch or to open or update a pull request counts as
+confirmation for the requested operation when its scope is clear. Ask only if the scope is
+unclear; do not ask twice for the same operation. Pushing a branch does not authorize opening
+a pull request, and opening one does not authorize merging it. Follow the Permissions section
+above: use a topic branch, never push directly to `main`/`master`, and never force-push.
 
 ### Documentation and code synchronization
 

@@ -197,13 +197,14 @@ from `main`, and has a successful latest push-to-main CI run for that exact SHA.
 The publisher waits up to two hours for missing/queued/running exact-commit main
 CI, then publishes only after success. Failed, cancelled, PR-only or manual-only
 results cannot authorize publication. API errors or malformed evidence fail closed.
-Ordinary PR/manual CI runs the API/server/release-policy checks; browser compilation
-and branding are opt-in via the `extended-ci` PR label or the manual **extended**
-checkbox. Main always runs the full suite in parallel jobs, so release attestation
-still includes both halves.
+PRs and main pushes run the API, server, and release-policy checks. Run browser
+compilation, browser Clippy, and branding locally with `bash ci/check-extended.sh`
+(see [local development](docs/local-development.md) for prerequisites). Hosted
+extended checks run on version tags before publishing, or when explicitly requested
+with the manual **extended** checkbox.
 Only the verification job can read CI metadata; registry write access belongs
-to the subsequent publisher, which builds the verified commit without rerunning
-the test suite. Stable semver tags update `latest`; prereleases do not.
+to the subsequent publisher, which builds the verified commit after the extended
+checks pass. Stable semver tags update `latest`; prereleases do not.
 Wait for **Publish Docker image** on the tag before deploying. The fleet tracks
 the app image through `latest`, resolved to an immutable digest, and adopts SQL
 history through a separately reviewed release tag. Update that schema reference

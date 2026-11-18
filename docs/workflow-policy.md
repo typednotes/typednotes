@@ -50,12 +50,13 @@ triggers are retained. Typednotes-infra Plan keeps its existing read-only/live-m
 conditions and credentials. Archived projects, vendored forks and repositories
 without applicable workflows were not given invented release pipelines.
 
-Required main-release checks, test matrices and platforms remain. The app's API,
-server and release-policy checks run on every PR/manual invocation. Browser
-compilation and branding run in a parallel **extended** job: always on main,
-optionally on PRs with the `extended-ci` label, and on manual runs with the
-**extended** checkbox. Label changes trigger a new PR run. Main success still
-attests the full suite; an optional/manual-only result cannot release an image.
+The app's API, server and release-policy checks run on PRs, main pushes and
+manual invocations. Run browser compilation, browser Clippy and branding locally
+with `bash ci/check-extended.sh`. GitHub runs these checks on a verified version
+tag's exact SHA before publishing the app image, or when explicitly requested
+with the manual **extended** checkbox. Manual results cannot substitute for
+either the successful main CI run or the tag's extended checks. Other projects'
+test matrices and platforms are unchanged.
 Release version, changelog, notes and artifact checks remain. Publishing an old tag uses the old
 workflow stored in its commit; this policy applies to future committed tags.
 The user may push a new release commit and its new version tag together with

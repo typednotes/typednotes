@@ -34,6 +34,7 @@ CI = {
 DOCKER = {"typednotes", "ledger", "liaison", "lode", "lun", "secrets"}
 PUBLISHERS = DOCKER | {"linen", "infra"}
 GATE_TEST_NAME = "Offline release gate regressions"
+EXTENDED_WORKFLOW = "./.github/workflows/extended-ci.yml"
 MANUAL = {
     "infra": ["live-test.yml"],
     "typednotes-infra": ["apply.yml", "destroy.yml"],
@@ -78,8 +79,6 @@ def check_ci(repo, name, staged=False):
     workflow = load(repo / ".github/workflows" / filename, staged)
     for event in ("push", "pull_request"):
         expected = {"branches": ["main"]}
-        if name == "typednotes" and event == "pull_request":
-            expected["types"] = ["opened", "synchronize", "reopened", "labeled", "unlabeled"]
         assert workflow["on"][event] == expected, (name, event)
     assert triggers(workflow, "push", "refs/heads/main")
     assert not triggers(workflow, "push", "refs/heads/feature")
@@ -94,7 +93,7 @@ def check_ci(repo, name, staged=False):
         gate_tests = [
             step
             for job in workflow["jobs"].values()
-            for step in job["steps"]
+            for step in job.get("steps", [])
             if "ci/test-require-main-ci.sh" in step.get("run", "")
         ]
         expected = {"name": GATE_TEST_NAME, "shell": "bash", "run": "bash ci/test-require-main-ci.sh"}
@@ -110,15 +109,24 @@ def check_ci(repo, name, staged=False):
         def without_gate_tests(jobs):
             jobs = copy.deepcopy(jobs)
             for job in jobs.values():
-                job["steps"] = [step for step in job["steps"] if step.get("name") != GATE_TEST_NAME]
+                if "steps" in job:
+                    job["steps"] = [step for step in job["steps"] if step.get("name") != GATE_TEST_NAME]
             return jobs
 
         assert without_gate_tests(workflow["jobs"]) == without_gate_tests(before["jobs"]), f"{name}: changed CI jobs"
     else:
         assert workflow["on"]["workflow_dispatch"]["inputs"]["extended"]["type"] == "boolean"
         assert workflow["on"]["workflow_dispatch"]["inputs"]["extended"]["default"] == "false"
-        assert workflow["jobs"]["extended"]["if"] == "github.event_name == 'push' || inputs.extended == true || contains(github.event.pull_request.labels.*.name, 'extended-ci')"
-        assert any("wasm32" in step.get("run", "") for step in workflow["jobs"]["extended"]["steps"])
+        assert workflow["jobs"]["extended"] == {
+            "if": "github.event_name == 'workflow_dispatch' && inputs.extended == true",
+            "uses": EXTENDED_WORKFLOW,
+        }
+        extended = load(repo / EXTENDED_WORKFLOW, staged)
+        assert set(extended["on"]) == {"workflow_call"}
+        assert extended["permissions"] == {"contents": "read"}
+        steps = extended["jobs"]["browser-and-branding"]["steps"]
+        assert steps[0]["with"] == {"ref": "${{ inputs.ref || github.sha }}", "persist-credentials": "false"}
+        assert any(step.get("run") == "bash ci/check-extended.sh" and "if" not in step for step in steps)
     for filename in MANUAL.get(name, []):
         live = load(repo / ".github/workflows" / filename, staged)
         assert set(live["on"]) == {"workflow_dispatch"}
@@ -154,7 +162,7 @@ def check_publisher(repo, name, filename, publish_job, staged=False):
     assert gate["env"]["GH_TOKEN"] == "${{ github.token }}"
     assert verify["outputs"]["sha"] == "${{ steps.ci.outputs.sha }}"
     publish = jobs[publish_job]
-    assert publish["needs"] == "verify"
+    assert publish["needs"] == (["verify", "extended"] if name == "typednotes" else "verify")
     assert publish["steps"][0]["with"]["ref"] == "${{ needs.verify.outputs.sha }}"
     assert publish["steps"][0]["with"]["persist-credentials"] == "false"
     if "workflow_dispatch" in workflow["on"]:
@@ -162,7 +170,16 @@ def check_publisher(repo, name, filename, publish_job, staged=False):
         assert tag["required"] == "true" and tag["type"] == "string"
         assert checkout["with"]["ref"] == "refs/tags/${{ inputs.tag || github.ref_name }}"
     if filename == "docker-publish.yml":
-        assert set(jobs) == {"verify", "build-and-push"}
+        expected_jobs = {"verify", "build-and-push"}
+        if name == "typednotes":
+            expected_jobs.add("extended")
+            assert jobs["extended"] == {
+                "needs": "verify",
+                "uses": EXTENDED_WORKFLOW,
+                "with": {"ref": "${{ needs.verify.outputs.sha }}"},
+            }
+            assert "if" not in publish and "continue-on-error" not in publish
+        assert set(jobs) == expected_jobs
         assert publish["permissions"] == {"contents": "read", "packages": "write"}
         metadata = next(step for step in publish["steps"] if step.get("id") == "meta")
         tags = metadata["with"]["tags"]

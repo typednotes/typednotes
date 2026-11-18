@@ -33,8 +33,14 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: bash ci/require-main-ci.sh ci.yml "$TAG"
 
-  build-and-push:
+  extended:
     needs: verify
+    uses: ./.github/workflows/extended-ci.yml
+    with:
+      ref: ${{ needs.verify.outputs.sha }}
+
+  build-and-push:
+    needs: [verify, extended]
     runs-on: ubuntu-latest
     permissions:
       contents: read
