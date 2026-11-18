@@ -119,7 +119,7 @@ peers. They require no production login or paid provider:
 ```sh
 cargo test -p api --features server --lib
 cargo check -p web --features server
-cargo check -p web --features web --target wasm32-unknown-unknown
+bash ci/check-extended.sh
 uv run --with playwright scripts/test_notebook_ui.py --help
 uv run --with playwright scripts/test_notebook_ui.py --output-parent /existing/scratch
 
@@ -127,6 +127,12 @@ uv run --with playwright scripts/test_notebook_ui.py --output-parent /existing/s
 cargo build -p web --features server
 python3 scripts/test_native_connectors.py --temp-root /existing/scratch
 ```
+
+`ci/check-extended.sh` runs the same browser compilation, Clippy, and branding
+checks as the release workflow without using hosted runner credits. It needs
+the `wasm32-unknown-unknown` Rust target, Clippy, Python with fontTools and
+PyYAML, the Fira Code font, and `rsvg-convert`. Set `PYTHON` to use a different
+Python executable.
 
 The fixture scratch parent must already exist. Browser checks cover notebook
 lifecycle, permission/TOML editing, denial recovery, same-document navigation,
