@@ -9,6 +9,15 @@ Releases before 0.12.2 are described in their git tags (`git tag -n`) and in
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/repo-sync.sh` checks live `origin` refs across sibling checkouts and
+  supports fast-forward-only pull, pruning merged local branches, and guarded undo.
+- Set Git author identity and signing preferences across sibling checkouts with
+  `scripts/repo-sync.sh config`.
+- Publish local-only topic branches with `scripts/repo-sync.sh push`; existing
+  remote branches and tags are left unchanged.
+
 ### Changed
 
 - Run hosted browser and branding checks on version tags or explicit manual runs;
