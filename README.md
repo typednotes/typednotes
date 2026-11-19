@@ -1,8 +1,8 @@
 # Typednotes
 
 A server-side agent that acts on resources **on behalf of** users, with bounded,
-auditable authority. System decisions: [`docs/architecture.md`](https://github.com/typednotes/typednotes/blob/main/docs/architecture.md);
-per-service detail: [`docs/services/`](https://github.com/typednotes/typednotes/tree/main/docs/services/).
+auditable authority. Start with the [documentation index](docs/README.md) for the
+implemented architecture, service contracts, and local development.
 
 This repository is the **app**: a Dioxus 0.7 fullstack web app whose server is the minimal
 `core` of the architecture — users, identities, orgs and memberships in Postgres
