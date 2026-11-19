@@ -62,6 +62,8 @@ flows, deployment shapes and references to related systems and research.
 For a hot-reloaded local app backed by deployed services, use the private
 `.env.local` launcher and transport settings described in
 [`docs/local-development.md`](https://github.com/typednotes/typednotes/blob/main/docs/local-development.md).
+To verify sibling Git checkouts against their live `origin` refs, use
+`scripts/repo-sync.sh check --yes` (see [repository sync](docs/local-development.md#check-sibling-repositories)).
 Google Calendar/Gmail setup has a step-by-step guide in
 [`docs/google-connections.md`](https://github.com/typednotes/typednotes/blob/main/docs/google-connections.md).
 

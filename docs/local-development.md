@@ -26,6 +26,53 @@ printing credentials. For another port, set `PUBLIC_URL` to that origin and pass
 For an entirely local database, set `DATABASE_URL`, start PostgreSQL and run
 `scripts/dev-db.sh` before the launcher. The server does not apply migrations.
 
+## Check sibling repositories
+
+From the app checkout:
+
+```sh
+scripts/repo-sync.sh check --dry-run  # Preview the checkouts without network access.
+scripts/repo-sync.sh check --yes     # Compare with live origin refs without fetching.
+scripts/repo-sync.sh pull --yes      # Fast-forward clean, checked-out branches.
+scripts/repo-sync.sh prune --dry-run # Preview local branches merged into origin's default.
+```
+
+The checker scans direct children of the workspace parent, not vendored
+dependencies. Use `--root DIR` or `TYPEDNOTES_REPOS_ROOT` for another workspace.
+It compares branch and tag names and exact ref IDs and reports dirty trees.
+It does not determine whether a differing branch is ahead or behind.
+Exit codes: `0` for a clean match, `1` for differences, `2` if the check could
+not complete. Status badges are colored in a terminal; use `NO_COLOR=1` for
+plain output.
+
+`pull` skips dirty, detached, local-only, ahead, and diverged branches; it does
+not move inactive branches or tags. `pull --dry-run` lists candidate checkouts
+without contacting origin. `undo --yes` can reverse the most recent recorded
+pull on each clean checkout if it is still on the recorded branch and commit.
+To remove eligible branches after reviewing the preview, use `prune --yes`.
+It protects the default
+branch, `main`, `master`, and branches checked out in any worktree. It checks
+live `origin` even in preview mode, but skips a repo if the advertised commit
+is missing locally (fetch origin and retry). Squash and rebase merges do not
+qualify unless the original commit is also reachable. Do not run this
+alongside other checkout or branch-management operations.
+
+Use `undo --pruned --dry-run` to list saved branches and `undo --pruned --yes`
+to restore their tips without overwriting existing branches. Use `--root DIR`
+to limit these commands to another workspace.
+
+Use `scripts/repo-sync.sh config --dry-run` to preview local Git config changes
+and `scripts/repo-sync.sh config --yes` to set the author identity shown in
+`config --help` and disable commit and tag signing. This only edits local
+repository config and requires no network. `undo --config --yes` restores
+the previous config if the file hasn't been edited since the update.
+
+Use `scripts/repo-sync.sh push --dry-run` to list unpublished topic branches,
+then `scripts/repo-sync.sh push --yes` to publish them. This creates missing
+branches on `origin` without updating existing branches or pushing tags.
+It skips `main`, `master`, the remote default, and branches that already
+track an existing origin branch or another remote. Preview queries live refs.
+
 ## Connect to the deployed backend
 
 Use private-network/VPN addresses or forwarded service ports. For example, if a
