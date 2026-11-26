@@ -10,13 +10,14 @@ For the current logical roles and stateless execution path, see
 
 ## 1. Purpose
 
-Turn natural-language descriptions into Lean code: a graph's cells
-([`../computations.md`](../computations.md)) become modules of typed functions
-and the `lun.json` wiring them, written **into the project's own git repository**
-on a branch shared with the user — open, `publish` (one commit, never a force
-push), `lun_build`, fix, done. A `ui`, `endpoint` or `channel` source is an input
-with a trigger, and a `secret` cell a declared capability: lode names them in
-the graph and the `lun.json`, and never sees a secret *value*.
+Turn natural-language descriptions into a declared Lean signature and its
+implementation for each function-backed [cell](../computations.md). Lode writes
+the functions and the `lun.json` that declares their signatures and wires the
+graph **into the project's Git repository** on a shared branch. Caller-pinned
+types and wiring remain authoritative, as do platform effect ceilings. Lode
+publishes and checks the resulting commit with `lun_build`. A `ui`, `endpoint`
+or `channel` source is an input with a trigger, and a `secret` cell a declared
+capability: Lode names them in the graph and never sees a secret *value*.
 
 **Not responsible for:** holding any credential (it reaches the repository host
 and the model through `liaison`, with warrants the app mints), deciding what it

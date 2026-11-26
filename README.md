@@ -1,8 +1,8 @@
 # Typednotes
 
 A server-side agent that acts on resources **on behalf of** users, with bounded,
-auditable authority. Start with the [documentation index](docs/README.md) for the
-implemented architecture, service contracts, and local development.
+auditable authority. Start with the [illustrated system overview](docs/system-overview.md)
+or the [documentation index](docs/README.md).
 
 This repository is the **app**: a Dioxus 0.7 fullstack web app whose server is the minimal
 `core` of the architecture — users, identities, orgs and memberships in Postgres
@@ -17,8 +17,8 @@ notebooks of natural-language cells — graphs implemented by `lode` in the
 repository and run by `lun`, fed by scheduled checks, widgets, webhooks and channel
 messages ([`docs/computations.md`](https://github.com/typednotes/typednotes/blob/main/docs/computations.md)). Members are invited by email;
 account, org and project settings each have their own page ([`docs/services/web.md`](https://github.com/typednotes/typednotes/blob/main/docs/services/web.md) §4b).
-Credentials go into the vault; every provider call — "Test",
-listing repositories, sending a message — goes through liaison. The contract with the other services
+Credentials go into the vault. Delegated connector operations — testing a connection,
+listing repositories, sending a message — go through Liaison. The contract with the other services
 is [`docs/connections.md`](https://github.com/typednotes/typednotes/blob/main/docs/connections.md). Everything else in the architecture lives in
 sibling services:
 
@@ -26,7 +26,7 @@ sibling services:
 |---|---|---|
 | app (`web` + `core`) | this one | [`typednotes-infra`](https://github.com/typednotes/typednotes-infra/tree/main) |
 | `ledger` — usage events, credits, holds | [`typednotes/ledger`](https://github.com/typednotes/ledger/tree/main) | [`typednotes-infra`](https://github.com/typednotes/typednotes-infra/tree/main) |
-| `liaison` — the broker, sole egress chokepoint | [`typednotes/liaison`](https://github.com/typednotes/liaison/tree/main) | [`typednotes-infra`](https://github.com/typednotes/typednotes-infra/tree/main) |
+| `liaison` — broker for delegated connector operations | [`typednotes/liaison`](https://github.com/typednotes/liaison/tree/main) | [`typednotes-infra`](https://github.com/typednotes/typednotes-infra/tree/main) |
 | `secrets` — the vault | [`typednotes/secrets`](https://github.com/typednotes/secrets/tree/main) | [`typednotes-infra`](https://github.com/typednotes/typednotes-infra/tree/main) |
 | `lode` — implements graph cells as Lean code in the repo | [`typednotes/lode`](https://github.com/typednotes/lode/tree/main) | [`typednotes-infra`](https://github.com/typednotes/typednotes-infra/tree/main) |
 | `lun` — builds and runs the typed, reactive graphs | [`typednotes/lun`](https://github.com/typednotes/lun/tree/main) | [`typednotes-infra`](https://github.com/typednotes/typednotes-infra/tree/main) |

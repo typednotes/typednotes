@@ -13,6 +13,8 @@ that decides what the resulting code may access.
 
 ## Reading map
 
+New to Typednotes? Start with the [illustrated system overview](system-overview.md).
+
 - [1. Vocabulary and system map](#1-vocabulary-and-system-map)
 - [2. Components and their exact responsibilities](#2-components-and-their-exact-responsibilities)
 - [3. From a note to a checked implementation](#3-from-a-note-to-a-checked-implementation)
@@ -113,9 +115,10 @@ workers are not implemented. See [§4](#4-execution-scheduling-and-failure-recov
 ### 2.3 Lode: bounded code-writing agent and development loop
 
 **Implementation:** Lean service in [`typednotes/lode`](https://github.com/typednotes/lode).
-Lode turns descriptions into Lean modules and `lun.json` in a shared Git branch.
-It owns coding sessions, a checkout, diagnostics and an append-only interaction
-log. It does not own the application's durable graph execution state.
+Lode writes both the declared Lean type signature (the formal spec, including
+the effect row) and the function that implements it. The Lean modules and
+`lun.json` live in a shared Git branch. Lode owns coding sessions, a checkout,
+diagnostics and an append-only interaction log, not durable graph execution state.
 
 Its agent-computer interface includes scoped file tools, compiler/LSP feedback,
 publication, Lun builds and bounded runtime trials. This resembles the tool-driven
@@ -159,6 +162,9 @@ Lun does not persist that state, schedule the next invocation or expose the old
 graph-session API. Functions may fail locally, block dependents and later recover.
 Producers can emit zero or several values; they yield a continuation instead of
 holding a service thread asleep until the next occurrence.
+
+For a possible evolution beyond whole-build drivers, see the
+[cell packaging and native reuse proposal](cell-packages.md).
 
 **Interface:** `/v0/builds`, build status/log, `/functions/{name}` and
 `/graphs/{name}` under a build. **Source:**
@@ -291,8 +297,9 @@ of this request path.
 engine: typed desired/observed state, provider backends, planning and apply. It
 is a Terraform/OpenTofu-style deployment tool, not a runtime note executor.
 [`typednotes-infra`](https://github.com/typednotes/typednotes-infra) is its consumer:
-the concrete fleet, service access policies, migration histories, image assembly,
-configuration and Lite/Local process supervision.
+the concrete fleet, service access policies, migration selection, configuration
+and Lite/Local process supervision. [`typednotes-lite`](https://github.com/typednotes/typednotes-lite)
+publishes the combined Lite and Local images.
 
 A service tag, a container image, a migration source and an applied deployment
 are different artifacts. Publishing one does not prove the others are installed.
@@ -304,7 +311,7 @@ migrations before starting the services.
 
 **Source:** [fleet](https://github.com/typednotes/typednotes-infra/blob/main/Fleet.lean),
 [Lite declaration](https://github.com/typednotes/typednotes-infra/blob/main/Fleet/Lite.lean),
-[image assembly](https://github.com/typednotes/typednotes-infra/tree/main/images),
+ [image assembly](https://github.com/typednotes/typednotes-lite/tree/main/images),
 [Local packaging](https://github.com/typednotes/typednotes-infra/tree/main/local).
 
 ### 2.11 Names that are not additional current product services
@@ -337,9 +344,10 @@ artifact used for execution.*
    build contracts. Background checkout is acknowledged separately from completion.
 3. After receiving the persisted Lode session ID, the app publishes protected
    conversation/publication refinements and starts generation with fresh grants.
-4. Lode iterates model calls, named tools, compiler/LSP diagnostics, publication,
-   Lun builds and bounded calls. An effect refusal is feedback, not permission
-   to substitute raw HTTP/SQL or a broader credential.
+4. Lode produces both the declared signature and its implementation, iterating
+   with named tools, compiler/LSP diagnostics, publication and bounded Lun trials.
+   An effect refusal is feedback, not permission to substitute raw HTTP/SQL or a
+   broader credential.
 5. The app reads the published manifest at an immutable commit, supplies its own
    contracts and asks Lun to check/build it. It adopts the ready build only when
    its declared functions, sources, outputs and wiring match the caller's bounds.
@@ -493,10 +501,14 @@ a classic compute PostgreSQL instance. The fleet declares private service access
 and an operator-only database inspector. Inspector access is an operator facility,
 not an application/model tool. Check the actual fleet for versions and endpoints.
 
-**Lite:** one warm container supervising six application processes, with external
-Serverless SQL. Logical migration histories share that database. Built-in compute
-role provisioning/`db` sinks are disabled because that database cannot create the
-required actor roles. Worker disks are ephemeral.
+**Lite:** one warm container supervising six application processes. App, ledger
+and audit tables share one external Serverless SQL database; the vault has
+another. Built-in compute role provisioning/`db` sinks are disabled because
+Serverless SQL cannot create the required actor roles. Worker disks are ephemeral.
+
+**Full from Lite:** the promotion topology splits Lite's services into separate
+containers and adds compute while retaining Lite's databases and public endpoint.
+It uses the same pinned bundle and matching migration history.
 
 **Local:** a combined image also runs PostgreSQL, persisting a dedicated host
 directory containing database state, service keys and worker state. Compute is a
@@ -506,7 +518,7 @@ applies the exact packaged SQL history before serving.
 
 **Current paired-device packaging boundary:** the standalone Liaison image builds
 the adapters. The reviewed combined-image
-[artifact extractor](https://github.com/typednotes/typednotes-infra/blob/main/images/artifact.Dockerfile)
+[artifact extractor](https://github.com/typednotes/typednotes-lite/blob/main/images/artifact.Dockerfile)
 copies the Liaison executable only, not its new Rust libraries or their environment
 wiring. Neither a new source tag nor Local's general-purpose data mount by itself
 establishes QR support in a combined image. Packaging, persistent encrypted device
@@ -516,7 +528,7 @@ disk does not satisfy the requirement.
 Deployment sources:
 [fleet README](https://github.com/typednotes/typednotes-infra/blob/main/README.md),
 [Local lifecycle](https://github.com/typednotes/typednotes-infra/blob/main/local/README.md),
-[image assembly](https://github.com/typednotes/typednotes-infra/blob/main/images/README.md),
+ [image assembly](https://github.com/typednotes/typednotes-lite/blob/main/images/README.md),
 and [release promotion policy](workflow-policy.md).
 
 ## 7. What is proved, tested or still trusted

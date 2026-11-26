@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="613" viewBox="0 0 960 613" role="img" aria-labelledby="title desc">
+  <title id="title">One native cell artifact reused in two Lun DAGs</title>
+  <desc id="desc">Lun's loader verifies the target, audit version and exact bytes of one persisted quote artifact. A reporting DAG and a review DAG both reference that artifact. Each DAG has its own versioned plan, inputs, results, state, and fresh actor and operation authority. Only the code is shared.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0 0 9 4.5 0 9Z" fill="#456078"/>
+    </marker>
+  </defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}
+    .title{font-size:30px;font-weight:700}.head{font-size:22px;font-weight:700}
+    .body{font-size:18px}.note{font-size:17px;fill:#405769}
+    .canvas{fill:#fff;stroke:#a7b9c8;stroke-width:2}
+    .plan{fill:#f5f8fb;stroke:#a7b9c8}.code{fill:#edf4ff;stroke:#7291ba}
+    .loader{fill:#eaf6f2;stroke:#6c9c8e}.node{fill:#fff;stroke:#a7b9c8}
+    .box{stroke-width:1.5}.line,.arrow{fill:none;stroke:#456078;stroke-width:2}
+    .arrow{marker-end:url(#arrow)}
+  </style>
+  <rect x="1" y="1" width="958" height="611" rx="15" class="canvas"/>
+  <text x="32" y="50" class="title">One native cell artifact, two Lun DAGs</text>
+  <text x="32" y="79" class="note">Proposed design · reuse is explicit; execution contexts stay separate</text>
+
+  <path class="arrow" d="M400 163H527"/>
+  <text x="464" y="150" text-anchor="middle" class="note">Load</text>
+  <path class="line" d="M728 224V265H242"/>
+  <path class="arrow" d="M242 265V299"/>
+  <path class="arrow" d="M728 265V299"/>
+
+  <g id="artifact">
+    <rect x="32" y="112" width="368" height="112" rx="10" class="box code"/>
+    <text x="52" y="148" class="head">Compiled quote cell</text>
+    <text x="52" y="177" class="body">One native variant for this target</text>
+    <text x="52" y="203" class="note">Persisted by byte digest + build record</text>
+  </g>
+  <g id="loader">
+    <rect x="528" y="112" width="400" height="112" rx="10" class="box loader"/>
+    <text x="548" y="148" class="head">Lun verifies the variant</text>
+    <text x="548" y="177" class="body">Check digest, build record, audit and ABI</text>
+    <text x="548" y="203" class="note">Bind exact code to each checked plan</text>
+  </g>
+
+  <g id="report-plan">
+    <rect x="32" y="300" width="420" height="245" rx="10" class="box plan"/>
+    <text x="52" y="339" class="head">DAG A · Reports</text>
+    <text x="52" y="367" class="note">Checked plan A pins the variant</text>
+    <path class="arrow" d="M159 427H188"/>
+    <path class="arrow" d="M282 427H311"/>
+    <g id="orders-node">
+      <rect x="52" y="401" width="107" height="52" rx="8" class="box node"/>
+      <text x="105.5" y="433" text-anchor="middle" class="body">Orders</text>
+    </g>
+    <g id="quote-a-node">
+      <rect x="189" y="401" width="93" height="52" rx="8" class="box code"/>
+      <text x="235.5" y="433" text-anchor="middle" class="body">quote</text>
+    </g>
+    <g id="report-node">
+      <rect x="312" y="401" width="120" height="52" rx="8" class="box node"/>
+      <text x="372" y="433" text-anchor="middle" class="body">Report</text>
+    </g>
+    <text x="52" y="490" class="body">Own state, results and wake-ups</text>
+    <text x="52" y="517" class="note">Fresh actor, policy and warrants</text>
+  </g>
+  <g id="review-plan">
+    <rect x="508" y="300" width="420" height="245" rx="10" class="box plan"/>
+    <text x="528" y="339" class="head">DAG B · Reviews</text>
+    <text x="528" y="367" class="note">Checked plan B pins the same variant</text>
+    <path class="arrow" d="M635 427H664"/>
+    <path class="arrow" d="M758 427H787"/>
+    <g id="drafts-node">
+      <rect x="528" y="401" width="107" height="52" rx="8" class="box node"/>
+      <text x="581.5" y="433" text-anchor="middle" class="body">Drafts</text>
+    </g>
+    <g id="quote-b-node">
+      <rect x="665" y="401" width="93" height="52" rx="8" class="box code"/>
+      <text x="711.5" y="433" text-anchor="middle" class="body">quote</text>
+    </g>
+    <g id="review-node">
+      <rect x="788" y="401" width="120" height="52" rx="8" class="box node"/>
+      <text x="848" y="433" text-anchor="middle" class="body">Review</text>
+    </g>
+    <text x="528" y="490" class="body">Own state, results and wake-ups</text>
+    <text x="528" y="517" class="note">Fresh actor, policy and warrants</text>
+  </g>
+
+  <text x="480" y="584" text-anchor="middle" class="body">Share the machine code, never the state or the authority.</text>
+</svg>

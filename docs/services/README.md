@@ -1,9 +1,9 @@
 # Services and component contracts
 
-Start with the [implemented system architecture](../system-architecture.md) for
-current roles, SVG diagrams, state ownership, execution/authority flows and
-deployment packaging. [Architecture decisions](../architecture.md) is a historical
-design draft. [Proof strategy](../proof-strategy.md) defines the shared vocabulary;
+Start with the [illustrated system overview](../system-overview.md) for the
+subsystem figures, or the [implemented system architecture](../system-architecture.md)
+for detailed flows, ownership and deployment. [Architecture decisions](../architecture.md)
+is a historical design draft. [Proof strategy](../proof-strategy.md) defines the shared vocabulary;
 actual service code and current guarantee documents determine which claims hold.
 
 ## Implemented component map
@@ -22,7 +22,8 @@ Full, Lite and Local package them differently; see the overview's deployment sec
 | [Ledger](ledger.md) | Lean library/service | Credit/hold/usage schema and model; serving process sweeps expired holds; request-path consumers use shared SQL |
 | [Linen](https://github.com/typednotes/linen) | Linked Lean library | Effects, capabilities, graphs, proof-carrying values and service/FFI primitives |
 | [Infra](https://github.com/typednotes/infra) | Lean deployment engine | Typed desired/observed infrastructure, provider adapters, plan/apply |
-| [Typednotes Infra](https://github.com/typednotes/typednotes-infra) | Fleet and packaging project | Concrete resources, access, image assembly, migration orchestration and combined-image supervision |
+| [Typednotes Infra](https://github.com/typednotes/typednotes-infra) | Fleet declaration | Concrete resources, access, migration orchestration and combined-image supervision |
+| [Typednotes Lite](https://github.com/typednotes/typednotes-lite) | Release packaging | Builds and publishes version-aligned Lite and Local images |
 
 `core` and `web` are currently roles of the same Rust application. The scheduler
 is app background work, not an independently packaged service. Ledger is an

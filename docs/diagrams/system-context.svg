@@ -45,7 +45,7 @@
     <text x="948" y="154" class="head">External services</text><text x="948" y="181" class="body">Identity, Git, models,</text><text x="948" y="205" class="body">mail, storage, messaging</text>
   </g>
   <g data-box="lode"><rect x="40" y="350" width="260" height="135" rx="9" class="node"/>
-    <text x="58" y="387" class="head">Lode · Lean</text><text x="58" y="416" class="body">Bounded coding sessions</text><text x="58" y="443" class="body">Compiler / LSP / Git work</text><text x="58" y="467" class="small">Model + private Git via Liaison</text>
+    <text x="58" y="387" class="head">Lode · Lean</text><text x="58" y="416" class="body">Lean signatures and bodies</text><text x="58" y="443" class="body">Compiler / LSP / Git work</text><text x="58" y="467" class="small">Model + private Git via Liaison</text>
   </g>
   <g data-box="lun"><rect x="410" y="350" width="330" height="135" rx="9" class="node"/>
     <text x="430" y="387" class="head">Lun · Lean</text><text x="430" y="416" class="body">Check, compile, execute a step</text><text x="430" y="443" class="body">Fresh authority; warm code cache</text><text x="430" y="467" class="small">Returns state; does not persist it</text>

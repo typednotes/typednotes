@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="770" viewBox="0 0 1200 770" role="img" aria-labelledby="title desc">
   <title id="title">From project notes to a checked running build</title>
-  <desc id="desc">The app opens Lode and receives its persisted session ID, then writes protected policies to Secrets before starting generation. Lode uses Liaison for models and repository effects, publishes code and asks Lun for build and trial feedback. The app adopts a checked build and owns subsequent stateful orchestration.</desc>
+  <desc id="desc">The app opens Lode and receives its persisted session ID, then writes protected policies to Secrets before starting generation. Lode uses Liaison for models and repository effects, writes and publishes both signatures and implementations, and asks Lun for build and trial feedback. The app adopts a checked build and owns subsequent stateful orchestration.</desc>
   <defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 9 4.5 0 9Z" fill="#426380"/></marker></defs>
   <style>text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}.title{font-size:28px;font-weight:700}.head{font-size:19px;font-weight:700}.body{font-size:15px}.small{font-size:14px;fill:#526575}.line{fill:none;stroke:#426380;stroke-width:2;marker-end:url(#arrow)}.life{stroke:#b5c5d1;stroke-dasharray:5 5}.box{fill:#f5f8fb;stroke:#acbfce;stroke-width:1.5}</style>
   <rect width="1200" height="770" fill="white"/>
-  <text x="35" y="46" class="title">Describe → implement → publish → check → adopt</text>
+  <text x="35" y="46" class="title">Describe → specify and implement → publish → check → adopt</text>
   <text x="35" y="76" class="body">Code generation and execution are separate contracts, driven by the application.</text>
   <path class="life" d="M140 150V702M380 150V702M650 150V702M900 150V702M1110 150V702"/>
   <g data-box="app"><rect x="40" y="105" width="200" height="45" rx="7" class="box"/><text x="140" y="134" class="head" text-anchor="middle">App</text></g>
@@ -25,5 +25,5 @@
   <path class="line" d="M1110 554H380"/><text x="745" y="542" text-anchor="middle" class="small">Diagnostics and checked interfaces feed the coding loop</text>
   <path class="line" d="M140 618H1110"/><text x="625" y="606" text-anchor="middle" class="body">7. Adopt checked build; invoke with state, inputs and current authority</text>
   <path class="line" d="M1110 669H140"/><text x="625" y="657" text-anchor="middle" class="body">8. Return new state, ordered changes, final outcomes and nextCallAt</text>
-  <text x="35" y="739" class="body">The model proposes implementations. Lean checks declared contracts. Typednotes persists execution state.</text>
+  <text x="35" y="739" class="body">Lode writes signatures and implementations. Lun checks the build. Typednotes persists execution state.</text>
 </svg>
