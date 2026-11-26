@@ -17,6 +17,8 @@ Releases before 0.12.2 are described in their git tags (`git tag -n`) and in
   `scripts/repo-sync.sh config`.
 - Publish local-only topic branches with `scripts/repo-sync.sh push`; existing
   remote branches and tags are left unchanged.
+- Document the proposed Lean cell package and native artifact reuse across Lun DAGs.
+- Add an illustrated system overview with a global map and individual subsystem figures.
 
 ### Changed
 

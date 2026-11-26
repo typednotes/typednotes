@@ -1,10 +1,11 @@
 # Typednotes documentation
 
-Start with the [implemented system architecture](system-architecture.md) for the current
-service boundaries, data flows, and deployment shapes. The [architecture draft](architecture.md)
-records design decisions and proposals; it is not a map of the current deployment.
+Start with the [illustrated system overview](system-overview.md) for the global map
+and a figure for each subsystem. The [implemented system architecture](system-architecture.md)
+covers detailed flows, ownership and trusted boundaries. The [architecture draft](architecture.md)
+records historical decisions and proposals.
 
-[![How the app, execution services, broker, and credential store fit together](diagrams/system-context.svg)](system-architecture.md)
+[![How Typednotes turns a note into a checked computation with bounded external effects](diagrams/system/overview.svg)](system-overview.md)
 
 ## Development and releases
 
@@ -23,6 +24,7 @@ records design decisions and proposals; it is not a map of the current deploymen
 - [Workspaces](workspaces.md) and [deletion](deletion.md)
 - [Notebook UI](notebook-ui.md) and [computations](computations.md)
 - [Graphs and Lode](graph-and-lode.md)
+- [Cell packages and native reuse across Lun DAGs](cell-packages.md) (proposal)
 - [Scheduling ownership and recovery](scheduling-ownership.md)
 - [Proof strategy and trusted boundaries](proof-strategy.md)
 - [Measured Lun throughput](lun-throughput.md)

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="353" viewBox="0 0 960 353" role="img" aria-labelledby="title desc">
+  <title id="title">Paired messaging: device setup is not a send grant</title>
+  <desc id="desc">A signed owner/admin pairing operation and a warranted direct-message operation are separate paths into Liaison. Its in-process Signal and WhatsApp adapters own device sessions and store keys and recent messages on encrypted persistent storage.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#42637a"/></marker></defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}.title{font-size:28px;font-weight:700}.head{font-size:20px;font-weight:700}.body{font-size:18px}
+    .canvas{fill:#fff;stroke:#a7b9c8;stroke-width:2}.box{fill:#f5f8fb;stroke:#a7b9c8;stroke-width:1.5}.secure{fill:#eaf6f2;stroke:#6c9c8e}
+    .flow{fill:none;stroke:#42637a;stroke-width:2;marker-end:url(#arrow)}
+  </style>
+  <rect x="1" y="1" width="958" height="351" rx="14" class="canvas"/>
+  <text x="28" y="48" class="title">Paired messaging: device setup is not a send grant</text>
+  <path class="flow" d="M276 125H336"/><path class="flow" d="M276 234H336"/><path class="flow" d="M658 178H712"/>
+  <g id="pairing">
+    <rect x="28" y="83" width="248" height="84" rx="8" class="box"/>
+    <text x="46" y="116" class="head">Device setup</text><text x="46" y="145" class="body">Owner/admin QR or unlink</text>
+  </g>
+  <g id="messaging">
+    <rect x="28" y="192" width="248" height="84" rx="8" class="box"/>
+    <text x="46" y="225" class="head">Message operation</text><text x="46" y="254" class="body">Read or send with warrant</text>
+  </g>
+  <g id="broker">
+    <rect x="337" y="83" width="321" height="193" rx="8" class="box secure"/>
+    <text x="355" y="120" class="head">Inside Liaison</text>
+    <text x="355" y="155" class="body">Check device or message scope</text>
+    <text x="355" y="198" class="body">Signal / WhatsApp native adapters</text>
+    <text x="355" y="236" class="body">Own and lock each device session</text>
+  </g>
+  <g id="store">
+    <rect x="713" y="114" width="219" height="127" rx="8" class="box"/>
+    <text x="731" y="150" class="head">Encrypted storage</text>
+    <text x="731" y="182" class="body">Device identity</text><text x="731" y="207" class="body">Bounded recent inbox</text>
+  </g>
+  <text x="28" y="320" class="body">Device storage must outlive a worker. The app stores its own delivery cursors.</text>
+</svg>

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="409" viewBox="0 0 960 409" role="img" aria-labelledby="title desc">
+  <title id="title">Lun builds once and runs bounded graph steps</title>
+  <desc id="desc">A build checks pinned source against declared contracts and produces a ready native driver. On demand, a warm worker runs a stateless graph step with previous state, inputs and fresh grants. It returns updated state, ordered changes and the next wake-up for the app.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#42637a"/></marker></defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}.title{font-size:28px;font-weight:700}.head{font-size:20px;font-weight:700}.body{font-size:18px}.small{font-size:16px;fill:#405769}
+    .canvas{fill:#fff;stroke:#a7b9c8;stroke-width:2}.box{fill:#f5f8fb;stroke:#a7b9c8;stroke-width:1.5}.work{fill:#edf4ff;stroke:#7291ba}
+    .flow{fill:none;stroke:#42637a;stroke-width:2;marker-end:url(#arrow)}
+  </style>
+  <rect x="1" y="1" width="958" height="407" rx="14" class="canvas"/>
+  <text x="28" y="48" class="title">Lun builds once and runs bounded graph steps</text>
+  <path class="flow" d="M276 136H320"/><path class="flow" d="M638 136H682"/>
+  <path class="flow" d="M808 193V228H480V263"/><text x="556" y="219" class="small">Load the checked build</text>
+  <path class="flow" d="M276 316H320"/><path class="flow" d="M638 316H682"/>
+  <g id="build-input">
+    <rect x="28" y="83" width="248" height="110" rx="8" class="box"/>
+    <text x="46" y="119" class="head">Pinned source</text><text x="46" y="148" class="body">Git commit and manifest</text><text x="46" y="172" class="body">Caller-owned contracts</text>
+  </g>
+  <g id="compile">
+    <rect x="321" y="83" width="317" height="110" rx="8" class="box work"/>
+    <text x="339" y="119" class="head">Check and compile</text><text x="339" y="148" class="body">Signatures, effects, wiring</text><text x="339" y="172" class="body">One native driver per build</text>
+  </g>
+  <g id="artifact">
+    <rect x="683" y="83" width="249" height="110" rx="8" class="box"/>
+    <text x="701" y="119" class="head">Ready build</text><text x="701" y="148" class="body">Build ID selects code</text><text x="701" y="172" class="body">No recompile on a step</text>
+  </g>
+  <g id="step-input">
+    <rect x="28" y="264" width="248" height="110" rx="8" class="box"/>
+    <text x="46" y="300" class="head">Step request</text><text x="46" y="329" class="body">Previous state + inputs</text><text x="46" y="353" class="body">Fresh actor and grants</text>
+  </g>
+  <g id="step">
+    <rect x="321" y="264" width="317" height="110" rx="8" class="box work"/>
+    <text x="339" y="300" class="head">Run the checked DAG</text><text x="339" y="329" class="body">Apply affected functions</text><text x="339" y="353" class="body">Resume due producers</text>
+  </g>
+  <g id="step-output">
+    <rect x="683" y="264" width="249" height="110" rx="8" class="box"/>
+    <text x="701" y="300" class="head">Return to app</text><text x="701" y="329" class="body">State and ordered changes</text><text x="701" y="353" class="body">Next wake-up, if any</text>
+  </g>
+</svg>

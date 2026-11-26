@@ -1,9 +1,44 @@
-<!-- Implemented and locally verified against documented Lun 0.4.1 / Linen 1.12.0.
-     App 0.11.0, Lode 0.5.0 and fleet 0.7.0 have local release commits/tags;
-     publication and deployment remain pending.
-     See docs/release-0.11.0.md and docs/scheduling-ownership.md for verification,
-     trusted boundaries and the required coordinated migration/rollout. Checkmarks
-     denote local implementation/verification, not deployment or every CI platform. -->
+# Typednotes TODO
+
+## Sub-projects
+
+Use the [illustrated system overview](docs/system-overview.md) to see how these
+repositories fit together and where to file follow-up work.
+
+- **[Typednotes app](docs/system-overview.md#app):** Web and Core in one app. Owns
+  users, organizations, projects, notes and grants; adopts checked builds and
+  persists execution state, schedules and the delivery outbox.
+- **[Lode](docs/system-overview.md#lode):** Turns a note into both a formal Lean
+  signature (including the effect row) and its implementation. Preserves
+  caller-pinned contracts and platform bounds, tests the code, and publishes
+  the Lean modules and `lun.json` when authorized.
+- **[Lun](docs/system-overview.md#lun):** Checks the signature, implementation,
+  effects and DAG wiring; builds a native driver and runs stateless steps with
+  fresh authority. [Cross-build cell artifact reuse](docs/cell-packages.md) is a proposal.
+- **[Linen](docs/system-overview.md#linen):** Linked Lean library for typed effects,
+  capability evidence, reactive graphs and systems primitives. Not a service.
+- **[Liaison](docs/system-overview.md#liaison):** Broker for delegated connector
+  operations. Checks warrants and live permissions, uses provider credentials,
+  and records outcomes. Hosts the native paired-messaging adapters.
+- **[Secrets](docs/system-overview.md#secrets):** Authenticated vault with
+  path-scoped access to credentials and policy records, backed by encrypted
+  PostgreSQL storage.
+- **[Ledger](docs/system-overview.md#ledger):** Owns the shared credit, hold and
+  usage model and SQL tables, and runs the expired-hold sweeper.
+- **[Infra](https://github.com/typednotes/infra):** Reusable Lean engine that
+  plans and applies changes from typed infrastructure declarations.
+- **[Typednotes Infra](https://github.com/typednotes/typednotes-infra):** Declares
+  and deploys the Typednotes fleet, service access and migration histories.
+- **[Typednotes Lite](https://github.com/typednotes/typednotes-lite):** Builds and
+  publishes the combined Lite and Local images with matching service versions
+  and migrations. Image publication is separate from deployment.
+
+## App checklist
+
+The completed items below record local implementation or verification, not
+deployment or full CI coverage. See the [0.11.0 release notes](docs/release-0.11.0.md)
+and [scheduling ownership](docs/scheduling-ownership.md) for the earlier rollout
+baseline and its verification boundaries.
 
 - [x] How is lode told it is fully in auto mode? Is it safe? When lode really need a user input, how can it ask the user for an input?
 - [x] In https://app.typednotes.com/orgs/workspace-7827ce26-84e5-4ed9-b8a8-dfc1515560aa/projects/my-project/settings/repository?connected=github `Code connection` and `Account or organization` select menu overlap in some window width situations.

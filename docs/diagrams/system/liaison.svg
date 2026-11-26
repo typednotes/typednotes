@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="362" viewBox="0 0 960 362" role="img" aria-labelledby="title desc">
+  <title id="title">Liaison turns a scoped operation into a provider call</title>
+  <desc id="desc">A delegated request names an operation and resource and presents a warrant. Liaison checks the warrant and live policy, reserves credit with Ledger SQL, then uses a vault credential through a native adapter and records the outcome.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#42637a"/></marker></defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}.title{font-size:28px;font-weight:700}.head{font-size:21px;font-weight:700}.body{font-size:18px}
+    .canvas{fill:#fff;stroke:#a7b9c8;stroke-width:2}.box{fill:#f5f8fb;stroke:#a7b9c8;stroke-width:1.5}.secure{fill:#eaf6f2;stroke:#6c9c8e}
+    .flow{fill:none;stroke:#42637a;stroke-width:2;marker-end:url(#arrow)}
+  </style>
+  <rect x="1" y="1" width="958" height="360" rx="14" class="canvas"/>
+  <text x="28" y="48" class="title">Liaison turns a scoped operation into a provider call</text>
+  <path class="flow" d="M273 139H321"/><path class="flow" d="M633 139H681"/>
+  <path class="flow" d="M408 225V195"/><path class="flow" d="M552 195V225"/>
+  <g id="request">
+    <rect x="28" y="83" width="245" height="111" rx="8" class="box"/>
+    <text x="46" y="119" class="head">Delegated request</text><text x="46" y="148" class="body">Operation and resource</text><text x="46" y="173" class="body">Signed warrant</text>
+  </g>
+  <g id="check">
+    <rect x="322" y="83" width="311" height="111" rx="8" class="box secure"/>
+    <text x="340" y="119" class="head">Liaison broker</text><text x="340" y="148" class="body">Verify warrant and live ceilings</text><text x="340" y="173" class="body">Reserve credit before dispatch</text>
+  </g>
+  <g id="provider">
+    <rect x="682" y="83" width="250" height="111" rx="8" class="box"/>
+    <text x="700" y="119" class="head">Provider adapter</text><text x="700" y="148" class="body">Build and send the request</text><text x="700" y="173" class="body">Return a bounded result</text>
+  </g>
+  <g id="dependencies">
+    <rect x="201" y="225" width="558" height="79" rx="8" class="box"/>
+    <text x="220" y="256" class="body">Secrets: live policy and provider credentials</text>
+    <text x="220" y="282" class="body">PostgreSQL: holds, settlement and audit records</text>
+  </g>
+  <text x="28" y="337" class="body">Denied operations have no raw provider HTTP fallback.</text>
+</svg>

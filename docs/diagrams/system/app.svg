@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="269" viewBox="0 0 960 269" role="img" aria-labelledby="title desc">
+  <title id="title">The app owns product decisions and durable state</title>
+  <desc id="desc">The browser uses the Dioxus Web and Rust Core roles of one application. Core stores identities, note declarations and runs in PostgreSQL. It controls build adoption and mints scoped warrants.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#42637a"/></marker></defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}.title{font-size:28px;font-weight:700}.head{font-size:21px;font-weight:700}.body{font-size:18px}
+    .canvas{fill:#fff;stroke:#a7b9c8;stroke-width:2}.box{fill:#f5f8fb;stroke:#a7b9c8;stroke-width:1.5}.core{fill:#edf4ff;stroke:#7291ba}
+    .flow{fill:none;stroke:#42637a;stroke-width:2;marker-end:url(#arrow)}
+  </style>
+  <rect x="1" y="1" width="958" height="267" rx="14" class="canvas"/>
+  <text x="28" y="49" class="title">The app owns product decisions and durable state</text>
+  <path class="flow" d="M256 136H306"/><path class="flow" d="M636 136H686"/>
+  <g id="browser">
+    <rect x="28" y="83" width="228" height="110" rx="8" class="box"/>
+    <text x="46" y="119" class="head">Browser</text><text x="46" y="148" class="body">Sign in, edit notes</text><text x="46" y="172" class="body">and inspect outcomes</text>
+  </g>
+  <g id="app">
+    <rect x="307" y="83" width="329" height="110" rx="8" class="box core"/>
+    <text x="325" y="119" class="head">One app · Web + Core</text><text x="325" y="148" class="body">Check membership and grants</text><text x="325" y="172" class="body">Adopt builds; mint scoped warrants</text>
+  </g>
+  <g id="storage">
+    <rect x="687" y="83" width="245" height="110" rx="8" class="box"/>
+    <text x="705" y="119" class="head">App PostgreSQL</text><text x="705" y="148" class="body">Identity, projects, notes</text><text x="705" y="172" class="body">Run state and history</text>
+  </g>
+  <text x="28" y="235" class="body">Sign-in identifies the user. Connecting a provider is a separate grant.</text>
+</svg>

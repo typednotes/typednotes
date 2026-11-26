@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="790" viewBox="0 0 1200 790" role="img" aria-labelledby="title desc">
-  <title id="title">Full, Lite and Local deployment shapes</title>
-  <desc id="desc">Full separates service containers and provides a classic compute database. Lite supervises the same six application processes in one warm container using external Serverless SQL, with compute role provisioning disabled and ephemeral worker disks. Local adds PostgreSQL in the combined image and persists a dedicated host directory. Native paired messaging additionally requires adapter packaging, persistent encrypted device storage and worker ownership.</desc>
+  <title id="title">Full, Lite and Local deployment shapes with Full from Lite promotion</title>
+  <desc id="desc">Full separates service containers and provides a classic compute database. Lite supervises the same six application processes in one warm container with separate external application and vault SQL databases and without a compute database. Full from Lite splits the services while retaining Lite's databases and public endpoint. Local bundles PostgreSQL and persists a dedicated host directory. Native paired messaging requires adapter packaging, persistent encrypted device storage and worker ownership.</desc>
   <defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 9 4.5 0 9Z" fill="#426380"/></marker></defs>
   <style>text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}.title{font-size:28px;font-weight:700}.head{font-size:22px;font-weight:700}.sub{font-size:18px;font-weight:700}.body{font-size:16px}.small{font-size:14px;fill:#526575}.outer{fill:#f5f8fb;stroke:#acbfce;stroke-width:1.5}.box{fill:white;stroke:#acbfce;stroke-width:1.5}.flow{fill:none;stroke:#426380;stroke-width:2;marker-end:url(#arrow)}</style>
   <rect width="1200" height="790" fill="white"/>
@@ -30,21 +30,21 @@
   <path class="flow" d="M600 315V355"/>
   <path class="flow" d="M990 315V355"/>
   <g data-box="full-data"><rect x="60" y="355" width="300" height="125" rx="7" fill="#edf4ff" stroke="#6488b8"/>
-    <text x="78" y="388" class="sub">Separated data roles</text><text x="78" y="418" class="body">Core / vault PostgreSQL</text><text x="78" y="446" class="body">Classic compute PostgreSQL</text><text x="78" y="469" class="small">Actor roles + schema confinement</text>
+    <text x="78" y="388" class="sub">Separated data roles</text><text x="78" y="418" class="body">Separate app and vault databases</text><text x="78" y="446" class="body">Classic compute PostgreSQL</text><text x="78" y="469" class="small">Actor roles + schema confinement</text>
   </g>
   <g data-box="lite-data"><rect x="450" y="355" width="300" height="125" rx="7" fill="#edf4ff" stroke="#6488b8"/>
-    <text x="468" y="388" class="sub">External Serverless SQL</text><text x="468" y="418" class="body">Shared logical migration histories</text><text x="468" y="446" class="body">Compute role setup disabled</text><text x="468" y="469" class="small">Worker disks remain ephemeral</text>
+    <text x="468" y="388" class="sub">External Serverless SQL</text><text x="468" y="418" class="body">Separate app and vault databases</text><text x="468" y="446" class="body">Compute role setup disabled</text><text x="468" y="469" class="small">Worker disks remain ephemeral</text>
   </g>
   <g data-box="local-data"><rect x="840" y="355" width="300" height="125" rx="7" fill="#edf4ff" stroke="#6488b8"/>
     <text x="858" y="388" class="sub">Dedicated host directory</text><text x="858" y="418" class="body">Database + service keys + state</text><text x="858" y="446" class="body">Separate logical compute DB</text><text x="858" y="469" class="small">Supervisor applies packaged migrations</text>
   </g>
-  <text x="60" y="523" class="body">Private access and operator tooling</text><text x="60" y="553" class="small">Check the concrete fleet declaration.</text>
+  <text x="60" y="523" class="body">Full from Lite uses this split</text><text x="60" y="553" class="small">Retains Lite’s databases and public endpoint.</text>
   <text x="450" y="523" class="body">Six processes, one container</text><text x="450" y="553" class="small">Co-location is not tenant isolation.</text>
   <text x="840" y="523" class="body">Human OAuth login still required</text><text x="840" y="553" class="small">Backups must preserve keys and data.</text>
 
   <g data-box="paired-requirement"><rect x="40" y="640" width="1120" height="115" rx="9" fill="#fff3d7" stroke="#b48a4d" stroke-width="1.5"/>
     <text x="60" y="675" class="sub">Native paired messaging is an explicit deployment capability</text>
     <text x="60" y="706" class="body">Device keys need persistent encrypted storage, native adapter libraries and stable worker ownership.</text>
-    <text x="60" y="733" class="small">Reviewed combined-image extraction copies the Liaison binary only; packaging and device-storage wiring need explicit integration.</text>
+    <text x="60" y="733" class="small">Typednotes Lite’s artifact extractor copies the Liaison executable only; adapters and storage require explicit wiring.</text>
   </g>
 </svg>

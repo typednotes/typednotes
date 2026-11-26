@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="374" viewBox="0 0 960 374" role="img" aria-labelledby="title desc">
+  <title id="title">Ledger separates shared SQL from housekeeping</title>
+  <desc id="desc">The app grants credits through SQL, Liaison reserves and settles or releases holds through SQL, and the Ledger process sweeps expired holds. All three use the ledger tables; provider operations do not synchronously call a billing service.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#42637a"/></marker></defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}.title{font-size:28px;font-weight:700}.head{font-size:21px;font-weight:700}.body{font-size:18px}
+    .canvas{fill:#fff;stroke:#a7b9c8;stroke-width:2}.box{fill:#f5f8fb;stroke:#a7b9c8;stroke-width:1.5}.shared{fill:#edf4ff;stroke:#7291ba}
+    .flow{fill:none;stroke:#42637a;stroke-width:2;marker-end:url(#arrow)}
+  </style>
+  <rect x="1" y="1" width="958" height="372" rx="14" class="canvas"/>
+  <text x="28" y="48" class="title">Ledger separates shared SQL from housekeeping</text>
+  <path class="flow" d="M162 179V204H325V230"/><path class="flow" d="M480 179V230"/><path class="flow" d="M798 179V204H635V230"/>
+  <g id="app">
+    <rect x="28" y="83" width="268" height="96" rx="8" class="box"/>
+    <text x="46" y="117" class="head">App</text><text x="46" y="150" class="body">Grant credits</text>
+  </g>
+  <g id="broker">
+    <rect x="346" y="83" width="268" height="96" rx="8" class="box"/>
+    <text x="364" y="117" class="head">Liaison</text><text x="364" y="150" class="body">Reserve, settle, release</text>
+  </g>
+  <g id="sweeper">
+    <rect x="664" y="83" width="268" height="96" rx="8" class="box"/>
+    <text x="682" y="117" class="head">Ledger process</text><text x="682" y="150" class="body">Sweep expired holds</text>
+  </g>
+  <g id="tables">
+    <rect x="225" y="231" width="510" height="86" rx="8" class="box shared"/>
+    <text x="244" y="264" class="head">Shared PostgreSQL tables</text><text x="244" y="294" class="body">Credits, reservations and usage entries</text>
+  </g>
+  <text x="28" y="349" class="body">The request path uses SQL, not a synchronous billing API.</text>
+</svg>

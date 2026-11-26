@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="381" viewBox="0 0 960 381" role="img" aria-labelledby="title desc">
+  <title id="title">Linen is linked into Lean programs</title>
+  <desc id="desc">Linen supplies typed effects, reactive graphs and systems primitives. Lean services and generated drivers link the relevant library modules. Lun still decides which graph operators and effect handlers to admit.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#42637a"/></marker></defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}.title{font-size:28px;font-weight:700}.head{font-size:21px;font-weight:700}.body{font-size:18px}
+    .canvas{fill:#fff;stroke:#a7b9c8;stroke-width:2}.box{fill:#f5f8fb;stroke:#a7b9c8;stroke-width:1.5}.host{fill:#edf4ff;stroke:#7291ba}
+    .flow{fill:none;stroke:#42637a;stroke-width:2;marker-end:url(#arrow)}
+  </style>
+  <rect x="1" y="1" width="958" height="379" rx="14" class="canvas"/>
+  <text x="28" y="48" class="title">Linen is linked into Lean programs</text>
+  <path class="flow" d="M164 178V204H339V229"/><path class="flow" d="M480 178V229"/><path class="flow" d="M796 178V204H621V229"/>
+  <g id="effects">
+    <rect x="28" y="83" width="272" height="95" rx="8" class="box"/>
+    <text x="46" y="117" class="head">Typed effects</text><text x="46" y="149" class="body">Operations and scoped rights</text>
+  </g>
+  <g id="graphs">
+    <rect x="344" y="83" width="272" height="95" rx="8" class="box"/>
+    <text x="362" y="117" class="head">Reactive graphs</text><text x="362" y="149" class="body">Typed links and propagation</text>
+  </g>
+  <g id="systems">
+    <rect x="660" y="83" width="272" height="95" rx="8" class="box"/>
+    <text x="678" y="117" class="head">Systems code</text><text x="678" y="149" class="body">HTTP, SQL, processes, FFI</text>
+  </g>
+  <g id="host">
+    <rect x="243" y="230" width="474" height="88" rx="8" class="box host"/>
+    <text x="262" y="262" class="head">Lean services and generated drivers</text>
+    <text x="262" y="291" class="body">Import and link the relevant modules</text>
+  </g>
+  <text x="28" y="352" class="body">Linen has no request endpoint. Lun selects the supported operators and handlers.</text>
+</svg>

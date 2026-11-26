@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="848" viewBox="0 0 1120 848" role="img" aria-labelledby="title desc">
+  <title id="title">Typednotes: from notes to bounded actions</title>
+  <desc id="desc">Users specify notes in the app, which persists product data and execution state. Lode writes and publishes both the Lean type signatures and their implementations in Git. Lun checks the pinned source and runs graph steps. Lode and Lun use Liaison for delegated provider operations. Liaison reads policies and credentials from Secrets and uses Ledger's shared credit tables. Linen is linked code, while deployment tooling runs separately from requests.</desc>
+  <defs><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0 9 4.5 0 9Z" fill="#42637a"/></marker></defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}
+    .title{font-size:32px;font-weight:700}.head{font-size:23px;font-weight:700}
+    .body{font-size:18px}.label{font-size:17px;fill:#405769}.lane{font-size:17px;font-weight:700;fill:#405769}
+    .canvas{fill:#fff;stroke:#a7b9c8;stroke-width:2}.box{stroke-width:1.5}
+    .plain{fill:#f5f8fb;stroke:#a7b9c8}.blue{fill:#edf4ff;stroke:#7291ba}.green{fill:#eaf6f2;stroke:#6c9c8e}
+    .flow{fill:none;stroke:#42637a;stroke-width:2;marker-end:url(#arrow)}
+  </style>
+  <rect x="1" y="1" width="1118" height="846" rx="15" class="canvas"/>
+  <text x="36" y="50" class="title">Typednotes: from notes to bounded actions</text>
+  <text x="36" y="79" class="body">The app owns intent and state. The runtime checks code. The broker uses provider credentials.</text>
+
+  <path class="flow" d="M252 163H342"/><text x="297" y="149" text-anchor="middle" class="label">edit / use</text>
+  <path class="flow" d="M704 163H829"/><text x="766" y="149" text-anchor="middle" class="label">persist</text>
+  <path class="flow" d="M409 224V260H182V309"/><text x="263" y="249" class="label">generate</text>
+  <path class="flow" d="M634 224V260H934V309"/><text x="698" y="249" class="label">check build / run steps</text>
+  <text x="36" y="291" class="lane">CHECKED CODE</text>
+  <path class="flow" d="M328 363H411"/><text x="369" y="348" text-anchor="middle" class="label">publish</text>
+  <path class="flow" d="M672 363H783"/><text x="727" y="348" text-anchor="middle" class="label">pinned source</text>
+  <path class="flow" d="M303 418V458H478V504"/><text x="329" y="447" class="label">model / Git</text>
+  <path class="flow" d="M807 418V473H642V504"/><text x="796" y="461" text-anchor="end" class="label">connector effects</text>
+  <text x="36" y="485" class="lane">DELEGATED ACCESS</text>
+  <path class="flow" d="M285 572H387"/><text x="336" y="558" text-anchor="middle" class="label">policy + keys</text>
+  <path class="flow" d="M728 572H830"/><text x="779" y="558" text-anchor="middle" class="label">native calls</text>
+  <path class="flow" d="M555 634V693"/><text x="572" y="669" class="label">shared SQL</text>
+
+  <g id="browser">
+    <rect x="36" y="110" width="216" height="106" rx="9" class="box plain"/>
+    <text x="54" y="151" class="head">User / browser</text>
+    <text x="54" y="182" class="body">Notes, inputs, results</text>
+  </g>
+  <g id="app">
+    <rect x="344" y="103" width="360" height="121" rx="9" class="box blue"/>
+    <text x="364" y="142" class="head">Typednotes app · Web + Core</text>
+    <text x="364" y="173" class="body">Identity, projects, grants and adoption</text>
+    <text x="364" y="199" class="body">Scheduler and delivery relay</text>
+  </g>
+  <g id="postgres">
+    <rect x="830" y="110" width="254" height="106" rx="9" class="box plain"/>
+    <text x="848" y="150" class="head">App PostgreSQL</text>
+    <text x="848" y="181" class="body">Product data + run state</text>
+  </g>
+  <g id="lode">
+    <rect x="36" y="310" width="292" height="108" rx="9" class="box blue"/>
+    <text x="54" y="351" class="head">Lode · code writer</text>
+    <text x="54" y="382" class="body">Write Lean signatures and code</text>
+  </g>
+  <g id="git">
+    <rect x="412" y="318" width="260" height="92" rx="9" class="box plain"/>
+    <text x="430" y="355" class="head">Project Git</text>
+    <text x="430" y="384" class="body">Lean modules + lun.json</text>
+  </g>
+  <g id="lun">
+    <rect x="784" y="310" width="300" height="108" rx="9" class="box blue"/>
+    <text x="802" y="351" class="head">Lun · runtime</text>
+    <text x="802" y="382" class="body">Check, compile, run DAG steps</text>
+  </g>
+  <g id="secrets">
+    <rect x="36" y="516" width="249" height="110" rx="9" class="box green"/>
+    <text x="54" y="556" class="head">Secrets · vault</text>
+    <text x="54" y="587" class="body">Encrypted values</text>
+    <text x="54" y="610" class="body">Service-specific path policy</text>
+  </g>
+  <g id="liaison">
+    <rect x="388" y="505" width="340" height="129" rx="9" class="box green"/>
+    <text x="408" y="547" class="head">Liaison · broker</text>
+    <text x="408" y="579" class="body">Verify warrants and live permissions</text>
+    <text x="408" y="605" class="body">Use provider credentials; audit</text>
+  </g>
+  <g id="providers">
+    <rect x="831" y="516" width="253" height="110" rx="9" class="box plain"/>
+    <text x="849" y="556" class="head">External providers</text>
+    <text x="849" y="587" class="body">Git hosts, models, storage,</text>
+    <text x="849" y="610" class="body">mail and messaging</text>
+  </g>
+  <g id="linen">
+    <rect x="36" y="694" width="315" height="106" rx="9" class="box plain"/>
+    <text x="54" y="731" class="head">Linen · linked library</text>
+    <text x="54" y="761" class="body">Effects, graphs and systems code</text>
+    <text x="54" y="784" class="label">Not an HTTP service</text>
+  </g>
+  <g id="ledger">
+    <rect x="388" y="694" width="340" height="106" rx="9" class="box plain"/>
+    <text x="408" y="731" class="head">Ledger · credits and holds</text>
+    <text x="408" y="761" class="body">Shared tables + expiry sweeper</text>
+    <text x="408" y="784" class="label">No per-operation billing HTTP hop</text>
+  </g>
+  <g id="deployment">
+    <rect x="765" y="694" width="319" height="106" rx="9" class="box plain"/>
+    <text x="783" y="731" class="head">Infra · deployment</text>
+    <text x="783" y="761" class="body">Images, fleet and migrations</text>
+    <text x="783" y="784" class="label">Outside the request path</text>
+  </g>
+  <text x="36" y="828" class="label">Arrows show selected logical flows, not direct network routes. Response and bootstrap paths are omitted.</text>
+</svg>

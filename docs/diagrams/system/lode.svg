@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="269" viewBox="0 0 960 269" role="img" aria-labelledby="title desc">
+  <title id="title">Lode writes the Lean spec and its implementation</title>
+  <desc id="desc">The app gives Lode intent, a repository, a selected model, and caller-owned type, wiring and tool bounds. Lode writes both a Lean type signature and the function body. It iterates with Lean LSP and bounded Lun trial feedback before authorized publication. The app chooses whether to adopt the checked build.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 8 4 0 8Z" fill="#42637a"/></marker></defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}.title{font-size:28px;font-weight:700}.head{font-size:21px;font-weight:700}.body{font-size:18px}
+    .canvas{fill:#fff;stroke:#a7b9c8;stroke-width:2}.box{fill:#f5f8fb;stroke:#a7b9c8;stroke-width:1.5}.work{fill:#edf4ff;stroke:#7291ba}
+    .flow{fill:none;stroke:#42637a;stroke-width:2;marker-end:url(#arrow)}
+  </style>
+  <rect x="1" y="1" width="958" height="267" rx="14" class="canvas"/>
+  <text x="28" y="49" class="title">Lode writes the Lean spec and its implementation</text>
+  <path class="flow" d="M272 136H318"/><path class="flow" d="M646 136H692"/>
+  <g id="request">
+    <rect x="28" y="83" width="244" height="110" rx="8" class="box"/>
+    <text x="46" y="119" class="head">App request</text><text x="46" y="148" class="body">Note and selected model</text><text x="46" y="172" class="body">Types, wiring and bounds</text>
+  </g>
+  <g id="lode">
+    <rect x="319" y="83" width="327" height="110" rx="8" class="box work"/>
+    <text x="337" y="119" class="head">Lode coding session</text><text x="337" y="148" class="body">Write type signature + body</text><text x="337" y="172" class="body">Iterate with LSP and Lun trials</text>
+  </g>
+  <g id="publication">
+    <rect x="693" y="83" width="239" height="110" rx="8" class="box"/>
+    <text x="711" y="119" class="head">Git commit</text><text x="711" y="148" class="body">Lean implementation</text><text x="711" y="172" class="body">Signature in lun.json</text>
+  </g>
+  <text x="28" y="235" class="body">Liaison mediates model and credentialed Git calls. The app controls build adoption.</text>
+</svg>

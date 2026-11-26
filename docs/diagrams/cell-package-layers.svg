@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="646" viewBox="0 0 960 646" role="img" aria-labelledby="title desc">
+  <title id="title">The five layers of a cell package</title>
+  <desc id="desc">Lode uses user intent and platform constraints to write both the Lean signature and its implementation. Lun checks the pinned Git implementation against the contract and audits it before compilation. The first four records identify the cell revision; the build produces native variants for specific targets and runtime ABIs.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0 0 9 4.5 0 9Z" fill="#456078"/>
+    </marker>
+  </defs>
+  <style>
+    text{font-family:Arial,Helvetica,sans-serif;fill:#172b3a}
+    .title{font-size:30px;font-weight:700}.head{font-size:22px;font-weight:700}
+    .body{font-size:18px}.note{font-size:17px;fill:#405769}
+    .canvas{fill:#fff;stroke:#a7b9c8;stroke-width:2}
+    .plain{fill:#f5f8fb;stroke:#a7b9c8}.contract{fill:#edf4ff;stroke:#7291ba}
+    .policy{fill:#eaf6f2;stroke:#6c9c8e}.box{stroke-width:1.5}
+    .line,.arrow{fill:none;stroke:#456078;stroke-width:2}
+    .arrow{marker-end:url(#arrow)}
+  </style>
+  <rect x="1" y="1" width="958" height="644" rx="15" class="canvas"/>
+  <text x="32" y="50" class="title">The five layers of a cell package</text>
+  <text x="32" y="79" class="note">Proposed design · four revision records, many native variants</text>
+
+  <path class="arrow" d="M231 218V276"/>
+  <path class="arrow" d="M729 218V248H359V276"/>
+  <path class="line" d="M231 384V422H729V384"/>
+  <path class="arrow" d="M480 422V465"/>
+  <text x="500" y="450" class="note">Check, audit, compile</text>
+
+  <g id="intent">
+    <rect x="32" y="112" width="398" height="106" rx="10" class="box plain"/>
+    <text x="52" y="148" class="head">1 · User intent</text>
+    <text x="52" y="177" class="body">Natural language and acceptance examples</text>
+    <text x="52" y="202" class="note">App · immutable intent revision</text>
+  </g>
+  <g id="policy">
+    <rect x="530" y="112" width="398" height="106" rx="10" class="box policy"/>
+    <text x="550" y="148" class="head">2 · Platform constraints</text>
+    <text x="550" y="177" class="body">Named effects and scoped resources</text>
+    <text x="550" y="202" class="note">App · approved policy revision</text>
+  </g>
+  <g id="contract">
+    <rect x="32" y="278" width="398" height="106" rx="10" class="box contract"/>
+    <text x="52" y="314" class="head">3 · Lean contract</text>
+    <text x="52" y="343" class="body">Input-indexed results, Eff row, codecs</text>
+    <text x="52" y="368" class="note">Lode writes the signature · stored in Git</text>
+  </g>
+  <g id="implementation">
+    <rect x="530" y="278" width="398" height="106" rx="10" class="box plain"/>
+    <text x="550" y="314" class="head">4 · Lean implementation</text>
+    <text x="550" y="343" class="body">Function checked against the contract</text>
+    <text x="550" y="368" class="note">Lode writes the body · pinned Git revision</text>
+  </g>
+  <g id="variant">
+    <rect x="216" y="466" width="528" height="115" rx="10" class="box contract"/>
+    <text x="236" y="503" class="head">5 · Native variants</text>
+    <text x="236" y="532" class="body">Machine code for a specific target and runtime ABI</text>
+    <text x="236" y="559" class="note">Artifact store · byte digest and trusted build record</text>
+  </g>
+
+  <text x="480" y="620" text-anchor="middle" class="body">A package carries code and its contract, not permission to run it.</text>
+</svg>
