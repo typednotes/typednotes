@@ -235,8 +235,12 @@ the checker separate and try a generic DAG worker with separately linked,
 long-lived cell workers behind a versioned protocol. Avoid a process launch
 per cell execution or loading project-native code into the Lun service process.
 Linen's [`System.GitFn`](https://github.com/typednotes/linen/blob/main/Linen/System/GitFn.lean)
-is a precedent for reactive nodes backed by compiled workers, not a replacement
-for Lun's producer protocol or runtime authority.
+provides commit-pinned source descriptors and worker calls. A shared Linen cell
+format would use those foundations for versioned manifests, verified packages
+opened from a local path or HTTPS URL, and typed calls to local or HTTP workers.
+Lode would write the source and contract. Lun would attest builds, admit variants
+using configured trust, and apply its producer protocol and runtime authority.
+Typednotes would store immutable variants and pin the selected identity in each placement.
 
 Use a diamond DAG to measure the first stage: a body-only edit to a cell on one
 branch should rebuild that cell and its actual Lean import dependents; a
