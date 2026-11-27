@@ -33,6 +33,43 @@ repositories fit together and where to file follow-up work.
   publishes the combined Lite and Local images with matching service versions
   and migrations. Image publication is separate from deployment.
 
+## Lode authorization and reusable cells
+
+- [ ] Surface browser authorization for Lode sessions. Attach the authorization
+  attempt to an authorized workspace and session, open the configured issuer
+  in the browser, and resume the writer after the connection is ready.
+  Use the existing warrant refresh path for app-managed connections.
+- [ ] Store and adopt compiler-attested native cell variants by immutable cell
+  revision, target and ABI. Coordinate content-addressed storage and retention
+  with Lun. Use Linen’s shared cell manifest and pin the target variant when
+  creating a placement. Preserve the user's specification, approved platform constraints,
+  and frozen Lean contract and implementation records. See the
+  [cell package design](docs/cell-packages.md).
+
+## Lun graph editor
+
+- [ ] Show the checked Lun graph on an interactive canvas. Use Lun's build
+  description for topology, with named input and output ports, visible Lean
+  types, pan and zoom, and a fit-to-view action. Let users select a node to
+  inspect its note, dependencies, and latest outcome. Use
+  [BUI's node editor](https://bui.preetham.top/docs/python/components-reference/#node-editor-and-areas)
+  as an interaction reference.
+- [ ] Let users connect and reconnect ports to draft changes to named note
+  dependencies. Route edits through the app's declaration validation and
+  surface Lun's Lean wiring diagnostics on the affected ports before adopting
+  a new build.
+
+### Additional design references
+
+- Preview compatible destinations while dragging a wire. Use checked Lean
+  port types for compatibility and show the expected type at the destination.
+  [Flume port interactions](https://flume.dev/docs/node-editor/#ports)
+- Explore collapsing a selection into a reusable subgraph with named inputs
+  and outputs once individual wiring edits are in place.
+  [BaklavaJS subgraphs](https://baklava.tech/editor/subgraphs.html)
+
+Both examples are listed in [Awesome Node Editors](https://github.com/flowrails/awesome-node-editors).
+
 ## App checklist
 
 The completed items below record local implementation or verification, not
